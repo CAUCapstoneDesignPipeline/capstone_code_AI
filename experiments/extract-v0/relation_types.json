@@ -1,0 +1,12 @@
+{
+  "_comment": "관계 유형 정의서 초안의 7개 유형으로 교체할 것. 아래는 자리표시용 초안이다. 추출 실행 후에는 바꾸지 않는다.",
+  "types": [
+    {"name": "is_a", "description": "주어가 목적어의 한 종류다 (예: TCP는 전송 프로토콜이다)"},
+    {"name": "part_of", "description": "주어가 목적어의 구성 요소다"},
+    {"name": "causes", "description": "주어가 목적어를 일으키거나 결과로 낳는다"},
+    {"name": "requires", "description": "주어가 성립하거나 동작하려면 목적어가 필요하다"},
+    {"name": "used_for", "description": "주어가 목적어를 위해 쓰인다"},
+    {"name": "contrasts_with", "description": "노트가 주어와 목적어를 대비하거나 비교한다"},
+    {"name": "example_of", "description": "주어가 목적어의 구체적 사례다"}
+  ]
+}
