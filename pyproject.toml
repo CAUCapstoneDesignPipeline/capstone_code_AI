@@ -1,0 +1,23 @@
+[project]
+name = "ai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "이건", email = "lkeon9@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=1.9.0",
+    "fastapi>=0.142.1",
+    "google-genai>=2.25.0",
+    "tqdm>=4.70.1",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+ai = "ai:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
