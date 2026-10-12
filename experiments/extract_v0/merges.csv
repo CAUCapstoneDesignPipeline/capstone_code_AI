@@ -1,0 +1,125 @@
+﻿group_id,run,concept_id,concept,members,n_docs,judge_1,judge_2,judge_3,merge_label,decided_by
+g01,1,g01-1-c01,Classification,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Classification;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: classification,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c02,Linear Classification,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Linear Classification;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Linear classification,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c03,Perceptron,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Perceptron;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Perceptron,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c04,Logistic Regression,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Logistic Regression;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Logistic Regression,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c05,Linear Regression,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Linear regression;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Linear Regression,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c06,Sigmoid function,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: sigmoid function;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: sigmoid function,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c07,Hinge Loss,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Hinge Loss;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: hinge loss,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c08,Cross Entropy Loss,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Cross Entropy Loss;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Binary Cross-Entropy (BCE) Loss,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c09,Gradient Descent,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Gradient Descent (GD);Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Gradient descent,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c10,Learning rate,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: learning rate;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: learning rate,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c11,Decision boundary,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: decision boundary;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: decision boundary,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c12,Weight vector,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: weight vector;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: weight vector,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c13,Feature vector,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: feature vector;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: feature vector,2,맞음,맞음,맞음,맞음,vote
+g01,1,g01-1-c14,Redo,DB-WAL: redo;OS-페이지-캐시-저널링: redo,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c01,Perceptron,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Perceptron;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Perceptron,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c02,Logistic Regression,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Logistic Regression;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Logistic Regression,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c03,Hinge Loss,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Hinge Loss;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Hinge Loss,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c04,Gradient Descent,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Gradient Descent (GD);Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Gradient descent,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c05,Sigmoid function,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: sigmoid function;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: sigmoid function,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c06,Decision boundary,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: decision boundary;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: decision boundary,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c07,Cross Entropy Loss,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Cross Entropy Loss;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Binary Cross-Entropy (BCE) Loss,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c08,Classification,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Classification;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: classification,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c09,Linear Classification,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Linear Classification;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Linear classification,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c10,Linear Regression,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: Linear Regression;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: Regression,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c11,Learning rate,Lecture 5-1 Linear Classifiers & SVM 334d0523765981c9ac86f4558ba59d03: learning rate;Machine Learning (Part 2) — Linear Classification  373d0523765981afb875e203d5805437: learning rate,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c12,커밋,DB-WAL: 커밋;OS-페이지-캐시-저널링: 커밋,2,맞음,맞음,맞음,맞음,vote
+g01,2,g01-2-c13,redo,DB-WAL: redo;OS-페이지-캐시-저널링: redo,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c01,Paging,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Paging;OS-가상메모리: 페이징,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c02,Page,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Page;OS-가상메모리: Page,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c03,Frame,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Frame;OS-가상메모리: Frame,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c04,Page Table,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Page Table;OS-가상메모리: Page Table,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c05,Segmentation,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Segmentation;OS-가상메모리: Segmentation,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c06,Logical address,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Logical address;OS-가상메모리: 논리 주소,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c07,Physical address,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Physical/Absolute address;OS-가상메모리: 물리 주소,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c08,Internal fragmentation,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Internal fragmentation;OS-가상메모리: 내부 단편화,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c09,External fragmentation,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: External fragmentation;OS-가상메모리: 외부 단편화,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c10,Virtual Memory,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Virtual Memory;OS-가상메모리: 가상 메모리,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c11,Main memory,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Main memory;OS-가상메모리: 물리 메모리,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c12,Secondary memory,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Secondary memory;OS-가상메모리: 보조기억장치,2,맞음,맞음,맞음,맞음,vote
+g02,1,g02-1-c13,캐싱,Dynamic Programming (동적 계획법) 34ad0523765981219055c6574023e2df: 캐싱;Lecture 5 Markov Decision Processes (MDPs) 33ad0523765981d9ba57df6b422be6ca: 캐싱,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c01,Paging,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Paging;OS-가상메모리: 페이징,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c02,Segmentation,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Segmentation;OS-가상메모리: Segmentation,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c03,Page Table,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Page Table;OS-가상메모리: Page Table,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c04,Page,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Page;OS-가상메모리: Page,2,잘못 합침,맞음,맞음,맞음,vote
+g02,2,g02-2-c05,Frame,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Frame;OS-가상메모리: Frame,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c06,Logical address,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Logical address;OS-가상메모리: 논리 주소,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c07,Physical address,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Physical/Absolute address;OS-가상메모리: 물리 주소,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c08,Virtual Memory,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Virtual Memory;OS-가상메모리: 가상 메모리,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c09,Internal fragmentation,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: Internal fragmentation;OS-가상메모리: 내부 단편화,2,맞음,맞음,맞음,맞음,vote
+g02,2,g02-2-c10,External fragmentation,Ch 7 Memory Management 350d0523765981fdac8fee61e5b47ab4: External fragmentation;OS-가상메모리: 외부 단편화,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c01,스케줄링,OS-스케쥴링: 스케쥴링;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: processor scheduling,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c02,FCFS,OS-스케쥴링: FCFS 스케줄링;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: FCFS (First-Come-First-Served),2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c03,SJF/SPN,OS-스케쥴링: SJF 스케줄링;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: SPN (Shortest Process Next),2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c04,SRT,OS-스케쥴링: SRT 스케줄링;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: SRT (Shortest Remaining Time),2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c05,Round Robin,OS-스케쥴링: Round-Robin 스케줄링;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Round Robin (RR),2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c06,다단계 피드백 큐 스케줄링,OS-스케쥴링: 다단계 피드백 큐 스케줄링;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Feedback (다단계 피드백 큐),2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c07,타임 슬라이싱,OS-스케쥴링: 타임 슬라이싱;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: time slicing,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c08,Context Switching,OS-스케쥴링: Context Switching;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: context switching,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c09,Convoy Effect,OS-스케쥴링: 호위 효과 (Convoy Effect);Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: convoy effect,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c10,Starvation,OS-스케쥴링: Starvation;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Starvation,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c11,Aging,OS-스케쥴링: Aging;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Aging,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c12,비선점 스케줄링,OS-스케쥴링: 비선점형 알고리즘;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Nonpreemptive (비선점),2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c13,선점 스케줄링,OS-스케쥴링: 선점형 알고리즘;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Preemptive (선점),2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c14,준비 큐,OS-스케쥴링: 준비 큐;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Ready queue,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c15,I/O-bound,OS-스케쥴링: I/O-Bound;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: I/O-bound process,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c16,CPU-bound,OS-스케쥴링: CPU-Bound;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Processor-bound process,2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c17,Admissibility,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: Admissible heuristic;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: Admissibility (허용성)",2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c18,A*,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: A* Search;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: A* (A-star)",2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c19,Relaxation,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: relaxed problem;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: Relaxation",2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c20,Priority Queue,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: priority queue;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: Priority Queue",2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c21,DFS,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: DFS;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: DFS",2,맞음,맞음,맞음,맞음,vote
+g03,1,g03-1-c22,BFS,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: BFS;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: BFS",2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c01,스케줄링,OS-스케쥴링: 스케쥴링;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: processor scheduling,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c02,FCFS,OS-스케쥴링: FCFS;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: FCFS,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c03,SJF/SPN,OS-스케쥴링: SJF;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: SPN,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c04,SRT,OS-스케쥴링: SRT;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: SRT,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c05,Round Robin,OS-스케쥴링: Round-Robin;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Round Robin,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c06,다단계 피드백 큐 스케줄링,OS-스케쥴링: 다단계 피드백 큐 스케줄링;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Feedback,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c07,비선점형 스케줄링,OS-스케쥴링: 비선점형 알고리즘;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Nonpreemptive,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c08,선점형 스케줄링,OS-스케쥴링: 선점형 알고리즘;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Preemptive,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c09,Starvation,OS-스케쥴링: Starvation;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: starvation,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c10,Aging,OS-스케쥴링: Aging;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Aging,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c11,Context Switching,OS-스케쥴링: Context Switching;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: context switching,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c12,호위 효과,OS-스케쥴링: 호위 효과 (Convoy Effect);Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: convoy effect,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c13,타임 슬라이스,OS-스케쥴링: 타임 슬라이싱;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: time quantum,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c14,준비 큐,OS-스케쥴링: 준비 큐;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Ready queue,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c15,CPU-Bound,OS-스케쥴링: CPU-Bound;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: Processor-bound,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c16,I/O-Bound,OS-스케쥴링: I/O-Bound;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: I/O-bound,2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c17,A*,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: A* Search;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: A* (A-star)",2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c18,Admissibility,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: Admissibility;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: Admissibility (허용성)",2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c19,Relaxation,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: relaxed problem;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: Relaxation",2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c20,Priority Queue,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: priority queue;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: Priority Queue",2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c21,DFS,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: DFS;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: DFS",2,맞음,맞음,맞음,맞음,vote
+g03,2,g03-2-c22,BFS,"Search (Part 2) — Heuristics, Informed Search, A , 343d0523765981acb47dd4ef68ed4bb8: BFS;Branch and Bound (분기 한정법) 373d0523765981f1bf2ff0eddfd1c779: BFS",2,맞음,맞음,맞음,맞음,vote
+g04,1,g04-1-c01,Race Condition,OS-Deadlock-Race-Condition: Race Condition;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: Race Condition;DB-Isolation: race condition;OS-유저-레벨-스레드-커널-레벨-스레드: race condition,4,맞음,맞음,,맞음,vote
+g04,1,g04-1-c02,상호 배제 (Mutual Exclusion),OS-Deadlock-Race-Condition: Mutex;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: Mutual Exclusion,2,맞음,맞음,,맞음,vote
+g04,1,g04-1-c03,Lock,OS-Deadlock-Race-Condition: Lock;DB-Isolation: Lock;OS-유저-레벨-스레드-커널-레벨-스레드: Lock,3,잘못 합침,맞음,,,
+g04,1,g04-1-c04,Semaphore,OS-Deadlock-Race-Condition: Semaphore;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: semaphore,2,맞음,못 합침,,,
+g04,1,g04-1-c05,동기화,OS-Deadlock-Race-Condition: 동기화;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: synchronization,2,맞음,맞음,,맞음,vote
+g04,1,g04-1-c06,유저 레벨 스레드,Ch 4 Threads 334d0523765981c084b6fc7db3f35264: ULT;OS-유저-레벨-스레드-커널-레벨-스레드: 유저 레벨 스레드,2,맞음,맞음,,맞음,vote
+g04,1,g04-1-c07,커널 레벨 스레드,Ch 4 Threads 334d0523765981c084b6fc7db3f35264: KLT;OS-유저-레벨-스레드-커널-레벨-스레드: 커널 레벨 스레드,2,맞음,맞음,,맞음,vote
+g04,1,g04-1-c08,스레드 라이브러리,Ch 4 Threads 334d0523765981c084b6fc7db3f35264: Thread library;OS-유저-레벨-스레드-커널-레벨-스레드: 스레드 라이브러리,2,맞음,맞음,,맞음,vote
+g04,1,g04-1-c09,블로킹 시스템 콜,Ch 4 Threads 334d0523765981c084b6fc7db3f35264: blocking system call;OS-유저-레벨-스레드-커널-레벨-스레드: 블로킹 시스템 콜,2,맞음,맞음,,맞음,vote
+g04,1,g04-1-c10,스레드,OS-Deadlock-Race-Condition: 스레드;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: thread;OS-유저-레벨-스레드-커널-레벨-스레드: 스레드,3,맞음,맞음,,맞음,vote
+g04,1,g04-1-c11,프로세스,OS-Deadlock-Race-Condition: 프로세스;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: process;OS-유저-레벨-스레드-커널-레벨-스레드: 프로세스,3,맞음,맞음,,맞음,vote
+g04,2,g04-2-c01,Race Condition,OS-Deadlock-Race-Condition: Race Condition;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: Race Condition;DB-Isolation: race condition;OS-유저-레벨-스레드-커널-레벨-스레드: race condition,4,맞음,맞음,,맞음,vote
+g04,2,g04-2-c02,유저 레벨 스레드 (ULT),Ch 4 Threads 334d0523765981c084b6fc7db3f35264: User-Level Threads (ULT);OS-유저-레벨-스레드-커널-레벨-스레드: 유저 레벨 스레드,2,맞음,맞음,,맞음,vote
+g04,2,g04-2-c03,커널 레벨 스레드 (KLT),Ch 4 Threads 334d0523765981c084b6fc7db3f35264: Kernel-Level Threads (KLT);OS-유저-레벨-스레드-커널-레벨-스레드: 커널 레벨 스레드,2,맞음,맞음,,맞음,vote
+g04,2,g04-2-c04,상호 배제 (Mutual Exclusion),OS-Deadlock-Race-Condition: 상호 배제;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: Mutual Exclusion,2,맞음,맞음,,맞음,vote
+g04,2,g04-2-c05,Lock,OS-Deadlock-Race-Condition: Lock;DB-Isolation: Lock,2,맞음,맞음,,맞음,vote
+g04,2,g04-2-c06,Semaphore,OS-Deadlock-Race-Condition: Semaphore;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: semaphore,2,맞음,맞음,,맞음,vote
+g04,2,g04-2-c07,스레드,OS-Deadlock-Race-Condition: 스레드;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: thread;OS-유저-레벨-스레드-커널-레벨-스레드: 스레드,3,맞음,맞음,,맞음,vote
+g04,2,g04-2-c08,프로세스,OS-Deadlock-Race-Condition: 프로세스;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: process;OS-유저-레벨-스레드-커널-레벨-스레드: 프로세스,3,맞음,맞음,,맞음,vote
+g04,2,g04-2-c09,블로킹 시스템 콜,Ch 4 Threads 334d0523765981c084b6fc7db3f35264: blocking system call;OS-유저-레벨-스레드-커널-레벨-스레드: 블로킹 시스템 콜,2,맞음,맞음,,맞음,vote
+g04,2,g04-2-c10,커널 모드 전환,Ch 4 Threads 334d0523765981c084b6fc7db3f35264: kernel mode switch;OS-유저-레벨-스레드-커널-레벨-스레드: 모드 전환,2,맞음,맞음,,맞음,vote
+g04,2,g04-2-c11,동기화,OS-Deadlock-Race-Condition: 동기화;Ch 4 Threads 334d0523765981c084b6fc7db3f35264: 동기화(synchronization),2,맞음,맞음,,맞음,vote
+g05,1,g05-1-c01,공개키,네트워크-비대칭키-암호화: 공개키;OverTheWire-Bandit-Level-13-Level-14: 공개키,2,맞음,맞음,,맞음,vote
+g05,1,g05-1-c02,개인키,네트워크-비대칭키-암호화: 개인키;OverTheWire-Bandit-Level-13-Level-14: 개인키,2,맞음,맞음,,맞음,vote
+g05,1,g05-1-c03,대칭키,네트워크-비대칭키-암호화: 대칭키;OverTheWire-Bandit-Level-13-Level-14: 대칭키,2,맞음,맞음,,맞음,vote
+g05,1,g05-1-c04,디스크,OS-페이지-캐시-저널링: 디스크;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: 디스크,2,맞음,잘못 합침,,,
+g05,1,g05-1-c05,메모리,OS-페이지-캐시-저널링: 메모리;Ch 9 Uniprocessor Scheduling 365d05237659811aad6ad7ecd2f6647d: 메모리,2,맞음,잘못 합침,,,
+g05,2,g05-2-c01,공개키,네트워크-비대칭키-암호화: 공개키;OverTheWire-Bandit-Level-13-Level-14: 공개키,2,맞음,맞음,,맞음,vote
+g05,2,g05-2-c02,개인키,네트워크-비대칭키-암호화: 개인키;OverTheWire-Bandit-Level-13-Level-14: 개인키,2,맞음,맞음,,맞음,vote
+g05,2,g05-2-c03,대칭키,네트워크-비대칭키-암호화: 대칭키;OverTheWire-Bandit-Level-13-Level-14: 대칭키,2,맞음,맞음,,맞음,vote
