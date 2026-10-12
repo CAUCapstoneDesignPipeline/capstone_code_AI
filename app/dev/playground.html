@@ -73,6 +73,7 @@ button:disabled { cursor: default; }
 .i-loader { --icon: url("/dev/static/icons/loader.svg"); }
 .i-topic { --icon: url("/dev/static/icons/topic.svg"); }
 .i-chevron { --icon: url("/dev/static/icons/chevron-down.svg"); }
+.i-pencil { --icon: url("/dev/static/icons/pencil.svg"); }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -180,6 +181,8 @@ button:disabled { cursor: default; }
 .editor { width: 100%; min-height: 60vh; padding: var(--space-12); border: 1px solid var(--color-border-ghost);
           border-radius: var(--radius-card); background: var(--color-canvas); font: var(--text-code-block); resize: vertical; }
 .editor:focus { outline: 2px solid var(--color-ink); outline-offset: -1px; }
+.editor::placeholder { color: var(--color-ink-muted); }
+.editorMeta { display: flex; gap: var(--space-8); align-items: center; color: var(--color-ink-muted); font: var(--text-ui-label); }
 /* 개념 언급: 검색어 mark 와 같은 surface-selected. 선택하면 ink 반전. 근거 문장: drop-target 처럼 ink 1px 테두리 */
 .c { border-radius: 2px; background: var(--color-surface-selected); cursor: pointer; }
 .c:hover { background: var(--color-surface-muted); }
@@ -264,6 +267,8 @@ summary:hover { background: var(--color-surface-emphasis); }
         <p class="sectionLabel">노트 <span id="noteCount"></span></p>
         <label class="field"><span class="icon i-search muted"></span>
           <input id="noteSearch" class="input" type="search" placeholder="노트 검색" autocomplete="off"></label>
+        <ul class="list"><li><button class="item" id="freeItem" aria-current="false">
+          <span class="icon i-pencil"></span><span class="label">직접 입력</span></button></li></ul>
         <ul class="list" id="noteList"></ul>
       </div>
 
@@ -347,6 +352,10 @@ Bellman 방정식: 가치 함수의 재귀식
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 let CFG = null, NOTES = [], VIEW = "extract", NOTE_ID = null, ORIGINAL = "", EDITING = false, LAST = null;
+// 직접 입력: 노트 파일 없이 붙여넣은 글. 서버·브라우저 저장소에 남기지 않고 이 탭의 메모리에만 둔다
+const FREE = "\u0000free", MAX_BODY = 50000;
+let FREE_TEXT = "";
+const displayName = (id) => (id === FREE ? "직접 입력" : id || "—");
 
 // ---------- 계약 헤더를 계산해 내부 API 호출 (BE 와 같은 요청) ----------
 async function sha256Hex(bytes) {
@@ -408,10 +417,24 @@ function renderNotes() {
     <span class="icon i-note"></span><span class="label">${esc(n)}</span></button></li>`).join("")
     || `<li><p class="hint">일치하는 노트가 없다</p></li>`;
   document.querySelectorAll("[data-note]").forEach((b) => b.addEventListener("click", () => selectNote(b.dataset.note)));
+  $("#freeItem").setAttribute("aria-current", NOTE_ID === FREE);
+}
+$("#freeItem").addEventListener("click", selectFree);
+
+function rememberFree() {               // 직접 입력에서 다른 곳으로 갈 때 쓰던 글을 남긴다
+  if (NOTE_ID === FREE) FREE_TEXT = EDITING && $("#noteEditor") ? $("#noteEditor").value : ORIGINAL;
+}
+function selectFree() {
+  rememberFree();
+  NOTE_ID = FREE; ORIGINAL = FREE_TEXT; LAST = null; EDITING = true;
+  renderNotes(); renderExtractMain(); $("#extractResult").innerHTML = "";
+  $("#crumbTitle").textContent = displayName(FREE);
+  $("#noteEditor")?.focus();
 }
 $("#noteSearch").addEventListener("input", renderNotes);
 
 async function selectNote(id) {
+  rememberFree();
   const r = await (await fetch("/dev/notes/" + encodeURIComponent(id))).json();
   NOTE_ID = id; ORIGINAL = r.body; LAST = null; EDITING = false;
   renderNotes(); renderExtractMain(); $("#extractResult").innerHTML = "";
@@ -426,7 +449,7 @@ function setView(v) {
   $("#notesSection").hidden = v !== "extract";
   $("#editBtn").hidden = v !== "extract";
   $("#crumbApi").textContent = v === "extract" ? "개념 추출" : "임베딩";
-  $("#crumbTitle").textContent = v === "extract" ? (NOTE_ID || "—") : "/embeddings";
+  $("#crumbTitle").textContent = v === "extract" ? displayName(NOTE_ID) : "/embeddings";
   const opts = v === "extract"
     ? CFG.extractProfiles.map((p) => `<option value="${p.id}" ${p.default ? "selected" : ""}>${p.id}</option>`)
     : CFG.embeddingProfiles.map((p) => `<option value="${p.id}" data-dims="${p.dims}" ${p.loaded ? "" : "disabled"}>${p.id}${p.loaded ? "" : " (꺼짐)"}</option>`);
@@ -436,7 +459,7 @@ function setView(v) {
 document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
 
 $("#editBtn").addEventListener("click", () => {
-  if (EDITING) ORIGINAL = $("#noteEditor").value;
+  if (EDITING) { ORIGINAL = $("#noteEditor").value; if (NOTE_ID === FREE) FREE_TEXT = ORIGINAL; }
   EDITING = !EDITING; LAST = null; $("#extractResult").innerHTML = "";
   renderExtractMain();
 });
@@ -533,10 +556,13 @@ async function runExtract() {
   if ($("#addAnalog").checked && !types.some((t) => t.code === "analogous_to"))
     types.push({ code: "analogous_to", label: "유사", description: "두 개념이 비슷한 원리로 동작한다" });
   const text = currentText();                               // 계약: 원문은 NFC
+  if (!text.trim()) { $("#extractResult").innerHTML = banner("글이 비어 있다", "개념을 뽑을 글을 입력하거나 붙여넣는다."); return; }
+  if (text.length > MAX_BODY) { $("#extractResult").innerHTML = banner("글이 너무 길다", `노트 본문은 ${MAX_BODY.toLocaleString()}자까지다 (지금 ${text.length.toLocaleString()}자).`); return; }
   if (EDITING) { ORIGINAL = text; EDITING = false; }
+  if (NOTE_ID === FREE) FREE_TEXT = text;
   const noteId = crypto.randomUUID();
   const req = { context: context(noteId), profileVersion: $("#profile").value,
-    note: { noteId, noteVersion: 1, inputRevision: 1, title: (NOTE_ID || "playground").slice(0, 200), body: text,
+    note: { noteId, noteVersion: 1, inputRevision: 1, title: displayName(NOTE_ID).slice(0, 200), body: text,
             bodySha256: await sha256Hex(new TextEncoder().encode(text)), topic: { id: null, name: "미분류" } },
     policy: { version: "playground-1", relationTypes: types, compositionRules: [] } };
   setRunning(true);
@@ -550,11 +576,22 @@ async function runExtract() {
 }
 
 function renderExtractMain() {
-  $("#editBtn").textContent = EDITING ? "편집 끝" : "원문 편집";
+  const free = NOTE_ID === FREE;
+  $("#editBtn").textContent = EDITING ? "편집 끝" : free ? "글 편집" : "원문 편집";
   if (!NOTE_ID) return;
-  const head = `<h1 class="title">${esc(NOTE_ID)}</h1>`;
+  const head = `<h1 class="title">${esc(displayName(NOTE_ID))}</h1>`;
   if (EDITING) {
-    $("#extractMain").innerHTML = head + `<textarea class="editor" id="noteEditor" spellcheck="false">${esc(ORIGINAL)}</textarea>`;
+    const ph = free ? "개념을 뽑을 글을 쓰거나 붙여넣는다. 마크다운도 된다." : "";
+    $("#extractMain").innerHTML = head + `<textarea class="editor" id="noteEditor" spellcheck="false" placeholder="${ph}">${esc(ORIGINAL)}</textarea>
+      <div class="editorMeta"><span class="badge" id="charCount"></span><span>⌘/Ctrl + Enter 로 실행</span></div>`;
+    const ed = $("#noteEditor");
+    const count = () => {
+      const n = ed.value.length;
+      $("#charCount").textContent = `${n.toLocaleString()}자` + (n > MAX_BODY ? ` · ${MAX_BODY.toLocaleString()}자 초과` : "");
+    };
+    ed.addEventListener("input", count);
+    ed.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runExtract(); } });
+    count();
     return;
   }
   if (!LAST) {
