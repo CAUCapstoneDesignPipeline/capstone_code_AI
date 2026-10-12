@@ -84,7 +84,11 @@ def test_extract_ok(client):
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["context"] == REQUEST["context"]
-    assert data["evidence"] == [] and data["relations"] == []
+    # 계약 문서의 예시 응답과 같은 근거·관계 (api/ai-api.md extractKnowledge)
+    assert data["evidence"] == [{"ref": "e-1", "startOffset": 8, "endOffset": 25, "quote": "**재시도**는 중복을 만든다."}]
+    refs = {c["label"]: c["ref"] for c in data["concepts"]}
+    assert [(r["sourceRef"], r["typeCode"], r["targetRef"], r["evidenceRefs"]) for r in data["relations"]] == [
+        (refs["재시도"], "cause", refs["중복"], ["e-1"])]
     assert data["meta"]["schemaVersion"] == "1.0" and data["meta"]["profileVersion"] == EXTRACT_PROFILE
     by_label = {c["label"]: c for c in data["concepts"]}
     assert by_label["재시도"]["mentions"] == [{"startOffset": 10, "endOffset": 13, "quote": "재시도"}]
@@ -189,3 +193,44 @@ def test_missing_token_config_is_503():
     with TestClient(create_app(settings(token=""), extractor=ConceptExtractor(ExtractConfig()))) as c:
         r = c.get("/internal/v1/health/live", headers={"Authorization": "Bearer x", "X-Request-Id": str(uuid.uuid4())})
     assert r.status_code == 503 and code(r) == "SERVICE_UNAVAILABLE"
+
+
+def test_concepts_only_profile(client):
+    r = post(client, mutate(lambda b: b.update(profileVersion="extract-concepts-det-1")))
+    assert r.status_code == 200 and r.json()["evidence"] == [] and r.json()["relations"] == []
+
+
+def test_relation_needs_matching_policy_code(client):
+    # policy 에 cause 계열 code 가 없으면 규칙이 찾은 관계도 내보내지 않는다
+    body = mutate(lambda b: b["policy"].update(relationTypes=[{"code": "is_a", "label": "종류", "description": "x"}]))
+    r = post(client, body)
+    assert r.status_code == 200 and r.json()["relations"] == [] and r.json()["evidence"] == []
+
+
+def test_hybrid_profile_unavailable_without_llm(client):
+    r = post(client, mutate(lambda b: b.update(profileVersion="extract-hybrid-1")))
+    assert r.status_code == 503 and code(r) == "SERVICE_UNAVAILABLE"
+
+
+class FakeTyper:
+    provider, model = "fake", "fake-model"
+    calls = 0
+
+    def type_pairs(self, items, policy_types):
+        from app.services.relations import Typed
+        FakeTyper.calls += 1
+        return {it.item_id: Typed("cause", True, 0.55) for it in items}
+
+
+def test_hybrid_profile_uses_typer_for_unresolved_pairs():
+    body_text = "# 메모\n지수 백오프 그리고 재시도 정책.\n"
+    body = mutate(lambda b: b["note"].update(body=body_text, bodySha256=hashlib.sha256(body_text.encode()).hexdigest()))
+    body["profileVersion"] = "extract-hybrid-1"
+    app = create_app(settings(), extractor=ConceptExtractor(ExtractConfig()), typer=FakeTyper())
+    with TestClient(app) as c:
+        r = post(c, body)
+    data = r.json()
+    assert r.status_code == 200, r.text
+    assert data["meta"]["provider"] == "local+fake" and "fake-model" in data["meta"]["model"]
+    assert data["relations"] and all(rel["typeCode"] == "cause" for rel in data["relations"])
+    assert FakeTyper.calls == 1

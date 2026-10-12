@@ -13,12 +13,18 @@ dependencies = [
     "google-genai>=2.25.0",
     "kiwipiepy==0.24.0",
     "kiwipiepy-model==0.24.0",
+    "openai>=3.29.0",
     "tqdm>=4.70.1",
     "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
 ai = "app.cli:main"
+
+[project.optional-dependencies]
+embeddings = [
+    "sentence-transformers>=3",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]

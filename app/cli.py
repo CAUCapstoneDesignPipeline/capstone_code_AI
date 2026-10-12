@@ -1,6 +1,6 @@
 """`uv run ai ...` 명령. ai/ 에서 실행한다.
 
-  uv run ai serve [--host 127.0.0.1] [--port 8000] [--reload]   # 내부 API 서버 (app.main:app)
+  uv run ai serve [--host 127.0.0.1] [--port 8000] [--reload] [--dev]   # 내부 API 서버. --dev 면 /dev/ playground
   uv run ai concepts build-idf              # 기준 말뭉치(노트 전체)로 IDF 를 만든다
   uv run ai concepts extract                # 노트마다 개념 언급을 뽑아 mentions.jsonl 에 쓴다
   uv run ai concepts show <note_id>         # 노트 하나의 개념 요약
@@ -15,7 +15,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from app.services.concepts import ConceptExtractor, ExtractConfig, Idf, Mention, build_idf, concept_key, summarize
+from app.services.concepts import (ConceptExtractor, ExtractConfig, Idf, Mention, StaleIdfError, build_idf,
+                                  concept_key, summarize)
 from app.services.concepts.markdown import nfc
 
 NOTES_DIR = Path("data/private/notes")
@@ -53,7 +54,10 @@ def cmd_build_idf(args):
 def load_extractor(args) -> ConceptExtractor:
     if not args.idf.exists():
         sys.exit(f"IDF 가 없다: {args.idf}\n먼저 `ai concepts build-idf` 를 실행한다.")
-    return ConceptExtractor(ExtractConfig(), Idf.load(args.idf), cache_dir=args.cache)
+    try:
+        return ConceptExtractor(ExtractConfig(), Idf.load(args.idf), cache_dir=args.cache)
+    except StaleIdfError as e:
+        sys.exit(f"🛑 {e}")
 
 
 def cmd_extract(args):
@@ -162,7 +166,13 @@ def serve_main(argv=None):
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--reload", action="store_true")
+    ap.add_argument("--dev", action="store_true", help="개발용 playground (/dev/) 를 켠다. 로컬에서만")
     args = ap.parse_args(argv)
+    if args.dev:
+        import os
+        os.environ["AI_DEV_UI"] = "1"
+        os.environ.setdefault("AI_EMBEDDING_PROFILES", "embeddings-hash-dev-1")
+        print(f"🧪 playground: http://{args.host}:{args.port}/dev/")
     uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
 
 
