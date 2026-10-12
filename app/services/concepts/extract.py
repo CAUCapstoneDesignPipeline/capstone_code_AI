@@ -33,6 +33,10 @@ def concept_key(surface: str) -> str:
     return s.lower()
 
 
+class StaleIdfError(RuntimeError):
+    """IDF 파일이 지금 추출 설정과 다른 설정으로 만들어졌다."""
+
+
 @dataclass(frozen=True)
 class Candidate:
     start: int       # Python 문자 위치 (출력할 때 UTF-16 으로 바꾼다)
@@ -45,8 +49,8 @@ class Candidate:
 class Idf:
     """고정 기준 말뭉치의 IDF. 노트가 늘 때마다 다시 계산하지 않고 버전을 붙여 관리한다."""
 
-    def __init__(self, df: dict[str, int], n_docs: int, version: str):
-        self.df, self.n_docs, self.version = df, n_docs, version
+    def __init__(self, df: dict[str, int], n_docs: int, version: str, config_version: str | None = None):
+        self.df, self.n_docs, self.version, self.config_version = df, n_docs, version, config_version
 
     def __call__(self, key: str) -> float:
         return math.log((self.n_docs + 1) / (self.df.get(key, 0) + 1)) + 1.0
@@ -59,7 +63,7 @@ class Idf:
     @classmethod
     def load(cls, path: Path) -> "Idf":
         data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(data["df"], data["n_docs"], data["version"])
+        return cls(data["df"], data["n_docs"], data["version"], data.get("config_version"))
 
     @classmethod
     def empty(cls) -> "Idf":
@@ -76,6 +80,10 @@ class ConceptExtractor:
         self.cache_dir = cache_dir
         self.kiwi = Kiwi()
         self.config_version = self.config.version()
+        # IDF 의 후보 목록은 추출 설정에 따라 다르다. 다른 설정으로 만든 IDF 를 쓰면 점수가 조용히 어긋난다.
+        if self.idf.config_version and self.idf.config_version != self.config_version:
+            raise StaleIdfError(f"IDF {self.idf.version} 는 설정 {self.idf.config_version} 로 만들어졌다 "
+                                f"(지금 {self.config_version}). `ai concepts build-idf` 로 다시 만든다.")
 
     @property
     def method_version(self) -> str:
@@ -164,6 +172,9 @@ class ConceptExtractor:
             return False
         if key in c.stopwords or re.sub(r"\s*\d+$", "", key) in c.stopwords:   # 참고1, 예시 2
             return False
+        words = [w for w in re.split(r"[\s\-_/]+", key) if w and not w.isdigit()]
+        if words and all(w in c.stopwords for w in words):                  # 핵심 아이디어, 문제 정의, step 1
+            return False
         if not re.search(r"[A-Za-z가-힣一-鿿]", key):          # 글자 없는 숫자·기호
             return False
         if re.fullmatch(r"[a-z]", key) or re.fullmatch(r"[\d\s.\-]+", key):
@@ -240,7 +251,7 @@ def build_idf(extractor: ConceptExtractor, texts: dict[str, str]) -> Idf:
         for key in sorted({c.key for c in extractor.candidates(text)}):
             df[key] += 1
     version = hashlib.sha256("\n".join(sorted(hashes) + [extractor.config_version]).encode()).hexdigest()[:12]
-    return Idf(dict(df), len(texts), version)
+    return Idf(dict(df), len(texts), version, extractor.config_version)
 
 
 def summarize(mentions: list[Mention]) -> list[dict]:

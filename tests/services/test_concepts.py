@@ -112,3 +112,33 @@ def test_cache_roundtrip(tmp_path):
 def test_concept_key_normalizes():
     assert concept_key("  WAL ") == concept_key("wal")
     assert concept_key("(Write  Ahead Logging)") == "write ahead logging"
+
+
+def test_frontmatter_is_masked(ex):
+    text = "---\ntitle: [DB] WAL\ntags: ['db']\ndate: 2026-07-23\n---\n\n# WAL\n\nWAL은 로그를 먼저 쓴다.\n"
+    masked = mask(text)
+    assert len(masked) == len(text) and "title" not in masked and "tags" not in masked
+    keys = {m.key for m in ex.extract("n", text)}
+    assert "wal" in keys and "title" not in keys and "tags" not in keys
+
+
+def test_frontmatter_only_at_start():
+    text = "본문\n---\n구분선 아래 내용\n---\n"
+    assert mask(text) == text            # 본문 중간의 --- 는 가로줄이지 frontmatter 가 아니다
+
+
+@pytest.mark.parametrize("key", ["핵심 아이디어", "문제 정의", "step 1", "part 2", "핵심 요약", "the", "for"])
+def test_template_phrases_dropped(ex, key):
+    assert not ex._keep(key)
+
+
+@pytest.mark.parametrize("key", ["결정 문제", "race condition", "buffer pool", "wal"])
+def test_real_concepts_kept(ex, key):
+    assert ex._keep(key)
+
+
+def test_stale_idf_rejected(ex):
+    from app.services.concepts import StaleIdfError
+    stale = Idf({"wal": 1}, 1, "old", config_version="0000deadbeef")
+    with pytest.raises(StaleIdfError):
+        ConceptExtractor(ExtractConfig(), stale)

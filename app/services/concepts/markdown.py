@@ -10,6 +10,7 @@ from bisect import bisect_right
 HEADING, BOLD, TABLE = "heading", "bold", "table"
 
 _MASK_PATTERNS = [
+    re.compile(r"\A---[ \t]*\n.*?\n(?:---|\.\.\.)[ \t]*(?=\n|\Z)", re.S),   # 맨 앞 YAML frontmatter (title·tags·date)
     re.compile(r"^(```|~~~).*?^\1[^\n]*$", re.S | re.M),   # 코드 블록
     re.compile(r"\$\$.*?\$\$", re.S),                       # 블록 수식
     re.compile(r"(?<!\\)\$[^$\n]+?\$"),                     # 인라인 수식

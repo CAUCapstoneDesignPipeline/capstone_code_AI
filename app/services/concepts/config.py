@@ -13,7 +13,12 @@ STOPWORDS = frozenset("""
 예 예시 예제 정리 요약 참고 출처 정의 질문 답 답변 풀이 해설 목차 목표 개요 소개 배경 결론 메모 링크 주의 팁
 것 수 등 때 중 후 전 위 아래 이상 이하 각 모든 여러 다른 같은 자체 기본 일반 실제 관련 대한 통해 위해
 상태 과정 단계 구조 기능 역할 처리 작업 정보 데이터 값 시간 경우 의미 형태 대상 기준 범위 요소 단위
+아이디어 관찰 계산 해결 해결책 문제점 직관 목적 구분 유형 조건 한계 증명 요구 정의 개요 복습 퀴즈 연습 실습 과제
+step part chapter ch lecture section level page note notes summary example examples overview intro introduction
+the a an of to for is are was were be in on at by as and or not with from this that these those it its into
 """.split())
+# 노트 여러 개에서 제목 틀로 반복된 말 (1주차 노트에서 노트 5개 이상에 개념으로 뽑힌 것 중 개념이 아닌 것).
+# 구(phrase)의 모든 낱말이 불용어여도 버린다 ("핵심 아이디어", "문제 정의", "step 1").
 
 
 def _pkg_version(name):
