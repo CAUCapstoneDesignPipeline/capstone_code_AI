@@ -14,11 +14,14 @@ STOPWORDS = frozenset("""
 것 수 등 때 중 후 전 위 아래 이상 이하 각 모든 여러 다른 같은 자체 기본 일반 실제 관련 대한 통해 위해
 상태 과정 단계 구조 기능 역할 처리 작업 정보 데이터 값 시간 경우 의미 형태 대상 기준 범위 요소 단위
 아이디어 관찰 계산 해결 해결책 문제점 직관 목적 구분 유형 조건 한계 증명 요구 정의 개요 복습 퀴즈 연습 실습 과제
+구성 일종 일부 사례 하위 상위
 step part chapter ch lecture section level page note notes summary example examples overview intro introduction
 the a an of to for is are was were be in on at by as and or not with from this that these those it its into
 """.split())
 # 노트 여러 개에서 제목 틀로 반복된 말 (1주차 노트에서 노트 5개 이상에 개념으로 뽑힌 것 중 개념이 아닌 것).
 # 구(phrase)의 모든 낱말이 불용어여도 버린다 ("핵심 아이디어", "문제 정의", "step 1").
+# 관계를 나타내는 말(구성 요소·일종·하위 …)도 그것만으로는 개념이 아니다. "X는 Y의 구성 요소다" 에서 '구성 요소' 를
+# 개념으로 뽑으면 'X is_a 구성 요소' 같은 틀린 관계가 생긴다.
 
 
 def _pkg_version(name):

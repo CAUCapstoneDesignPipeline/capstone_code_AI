@@ -8,17 +8,18 @@ import hashlib
 import json
 import math
 import re
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ExtractConfig
-from .markdown import BOLD, HEADING, TABLE, Utf16Index, mask, nfc, region_parts, regions
+from .markdown import BOLD, HEADING, TABLE, Utf16Index, mask, nfc, region_parts, regions, strip_inline_marks
 from .schema import Mention, Method, Span
 
 NOUN_TAGS = {"NNG", "NNP", "SL", "SH"}          # 명사구의 몸통이 될 수 있는 품사
 INNER_TAGS = NOUN_TAGS | {"SN", "XSN", "XPN", "W_SERIAL"}  # 명사구 안에만 올 수 있는 품사
 CONNECTORS = {"-", "_", "/", "+"}                # 명사 사이를 잇는 기호 (Bellman-Ford, TCP/IP)
+SEPARATOR_WORDS = {"vs", "versus"}               # 영어 명사로 읽히지만 두 개념을 가르는 말
 PREDICATE_SUFFIX = {"XSV", "XSA"}                # 명사를 동사·형용사로 만드는 접미사 (-하다, -되다)
 STRUCT_COVER = 0.6                               # 후보가 구조 조각의 이만큼 이상을 덮어야 구조 가중치를 받는다
 # 구조 구간 조각이 통째로 개념이 되려면 이 품사로만 이뤄져야 한다 (조사·어미·동사가 있으면 문장이다)
@@ -31,6 +32,20 @@ def concept_key(surface: str) -> str:
     """정규화 키: NFC, 소문자, 공백 하나로, 양 끝 기호 제거. 'WAL' 과 'wal' 은 같은 key."""
     s = re.sub(r"\s+", " ", nfc(surface)).strip().strip(_EDGE_PUNCT).strip()
     return s.lower()
+
+
+DETACHED_PARTICLES = {"은", "는", "이", "가", "을", "를", "의", "에", "도", "와", "과", "로", "으로", "에서", "만"}
+
+
+def _after_symbol(text: str, i: int) -> bool:
+    """i 앞 (같은 줄의 공백은 건너뜀) 이 글자·숫자가 아닌 기호다: ), `, $, * 등."""
+    j = i - 1
+    while j >= 0 and text[j] in " \t":
+        j -= 1
+    return j >= 0 and text[j] != "\n" and not text[j].isalnum()
+
+
+_Tok = namedtuple("_Tok", "form tag start len")
 
 
 class StaleIdfError(RuntimeError):
@@ -115,7 +130,25 @@ class ConceptExtractor:
             run.clear()
 
         prev_end = None
-        for t in self.kiwi.tokenize(masked):
+        # 가린 구간(코드·수식·주소)을 공백 대신 같은 길이의 'X' 로 분석기에 넘긴다. 공백이면 "$V$ 가 다항" 의
+        # '가 다' 를 동사 '가다' 로 읽는다. 가린 구간에 걸친 토큰은 개념이 아니라 명사구 경계로 쓴다.
+        hidden = [m == " " and c not in " \t\n" for m, c in zip(masked, text)]
+        clean, pos = strip_inline_marks("".join("X" if h else m for h, m in zip(hidden, masked)))
+        for t in self._tokens(clean, pos):
+            if any(hidden[t.start:t.start + t.len]):
+                flush()
+                prev_end = None
+                continue
+            # `x`가, $n$을 처럼 가린 코드·수식 바로 뒤의 조사는 분석기가 명사로 읽는다. 명사구를 끊는다
+            if (t.tag.startswith(("NN", "XPN")) and t.form in DETACHED_PARTICLES
+                    and _after_symbol(text, t.start)):
+                flush()
+                prev_end = None
+                continue
+            if t.form.lower().rstrip(".") in SEPARATOR_WORDS:   # "Static Scope vs. Dynamic Scope" 의 vs 는 명사가 아니다
+                flush()
+                prev_end = None
+                continue
             is_conn = t.tag == "SO" and t.form in CONNECTORS
             if t.tag in INNER_TAGS or (is_conn and run):
                 gap = masked[prev_end:t.start] if prev_end is not None else ""
@@ -141,6 +174,8 @@ class ConceptExtractor:
                 if len(piece) > self.config.max_surface_chars or re.search(r"[*`_\[\]]", piece):
                     continue  # 너무 길거나 마크다운 기호가 남은 조각은 명사구 쪽에 맡긴다
                 toks = self.kiwi.tokenize(piece)
+                if toks and toks[0].form in DETACHED_PARTICLES and _after_symbol(text, ps):
+                    continue  # "(PFR)가 증가" 를 나눈 조각 "가 증가" 의 '가' 는 조사다
                 if toks and all(t.tag in REGION_TAGS for t in toks) and any(t.tag in NOUN_TAGS for t in toks):
                     spans[(ps, pe)] = "region"
 
@@ -165,6 +200,13 @@ class ConceptExtractor:
                           if ps <= s and e <= pe and (e - s) >= STRUCT_COVER * (pe - ps)), default=0.0)
             out.append(Candidate(s, e, surface, key, struct))
         return out
+
+    def _tokens(self, clean: str, pos: list[int]):
+        """기호를 뺀 글의 토큰을 원문 위치로 돌려 낸다 (start, len 만 원문 기준으로 바꾼다)."""
+        for t in self.kiwi.tokenize(clean):
+            start = pos[t.start]
+            end = pos[t.start + t.len - 1] + 1 if t.len else start
+            yield _Tok(t.form, t.tag, start, end - start)
 
     def _keep(self, key: str) -> bool:
         c = self.config

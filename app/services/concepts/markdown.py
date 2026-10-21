@@ -37,6 +37,21 @@ def mask(text: str) -> str:
     return "".join(chars)
 
 
+_INLINE_MARKS = re.compile(r"\*\*|__|~~")
+
+
+def strip_inline_marks(masked: str) -> tuple[str, list[int]]:
+    """굵게·밑줄·취소선 기호(**, __, ~~)를 빼고 형태소 분석기에 넘길 글과, 그 글의 위치 → 원문 위치 표.
+    기호를 공백으로 덮으면 "**WAL**은" 의 '은' 이 조사가 아니라 명사로 분석된다 (실제 노트에서 '은 Write Ahead Logging').
+    표의 마지막 칸은 글 끝 위치다."""
+    keep = [True] * len(masked)
+    for m in _INLINE_MARKS.finditer(masked):
+        for i in range(m.start(), m.end()):
+            keep[i] = False
+    pos = [i for i, k in enumerate(keep) if k]
+    return "".join(masked[i] for i in pos), pos + [len(masked)]
+
+
 _HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t#]*$", re.M)
 _BOLD = re.compile(r"\*\*([^*\n]+?)\*\*|__([^_\n]+?)__")
 _TABLE_ROW = re.compile(r"^[ \t]*\|([^|\n]*)\|", re.M)
@@ -61,7 +76,7 @@ def regions(masked: str) -> list[tuple[int, int, str]]:
 # 구조 구간 안의 틀 문구: "참고1: 트랜잭션", "1. WAL", "Q. ..." → 앞부분 제거
 _PREFIX = re.compile(r"^\s*(?:(?:참고|예시|예|Q|A|Step|단계)\s*\d*\s*[:.)]\s*|\d+(?:\.\d+)*[.)]?\s+|[-*•]\s+)")
 # 한 구간 안에서 여러 용어를 나누는 기호: "Deadlock: 교착 상태", "A — B", "A / B", "WAL (Write Ahead Logging)"
-_SPLIT = re.compile(r"\s*(?::|—|–|\s-\s|\s/\s|,|\(|\))\s*")
+_SPLIT = re.compile(r"\s*(?::|—|–|\s-\s|\s/\s|,|\(|\)|\s(?:vs\.?|versus)\s)\s*", re.I)
 
 
 def region_parts(text: str, start: int, end: int) -> list[tuple[int, int]]:
