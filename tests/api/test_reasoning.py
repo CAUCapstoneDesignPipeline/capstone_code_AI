@@ -146,16 +146,16 @@ def test_template_generation_is_gone(client):
 def test_input_errors(client):
     ev = copy.deepcopy(EVIDENCE)
     ev[0]["quote"] = "재시도는 중복을 만든다."                                  # 마크다운을 걷어 낸 인용
-    r = post(client, "/explanations", dict(base("explain-llm-6", path=PATH, policy=POLICY), evidence=ev))
+    r = post(client, "/explanations", dict(base("explain-llm-8", path=PATH, policy=POLICY), evidence=ev))
     assert r.status_code == 422 and code(r) == "INVALID_SPAN"
 
-    r = post(client, "/explanations", base("explain-llm-6", path=dict(PATH, proposedTypeCode="cause"),
+    r = post(client, "/explanations", base("explain-llm-8", path=dict(PATH, proposedTypeCode="cause"),
                                            policy=POLICY))
     assert r.status_code == 422 and code(r) == "INVALID_REFERENCE"           # 합성 규칙 결과와 다르다
 
     same_note = copy.deepcopy(PATH)
     same_note["steps"][1]["evidenceIds"] = [E1]
-    r = post(client, "/explanations", base("explain-llm-6", path=same_note, policy=POLICY))
+    r = post(client, "/explanations", base("explain-llm-8", path=same_note, policy=POLICY))
     assert r.status_code == 422                                              # 한 노트 안 경로
 
     ex = copy.deepcopy(EXPLANATION)
@@ -238,7 +238,7 @@ def llm_client(out):
 def test_llm_explanation_is_grounded_and_verified():
     c, fake = llm_client(GOOD)
     with c:
-        r = post(c, "/explanations", base("explain-llm-6", path=PATH, policy=POLICY))
+        r = post(c, "/explanations", base("explain-llm-8", path=PATH, policy=POLICY))
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["meta"]["provider"] == "anthropic" and body["meta"]["model"] == "claude-opus-5-5"
@@ -246,7 +246,7 @@ def test_llm_explanation_is_grounded_and_verified():
         assert set(concl["evidenceIds"]) == {E1, E2}                         # E1/E2 표지가 요청의 evidenceId 로 돌아온다
         system, user, schema = fake.calls[0]
         assert "**재시도**는 중복을 만든다." in user and "indirect_cause" in user  # 근거 원문·합성 결과를 준다
-        assert "말투" in system and "보고서·번역투" in system                # 노트 말투를 따르게 한다
+        assert "해요체" in system and "보고서·번역투" in system              # 해요체, 번역투 금지
         assert schema["properties"]["claims"]["items"]["properties"]["evidence"]["items"]["enum"] == ["E1", "E2"]
         v = post(c, "/verifications/explanations", base("explanation-det-2", path=PATH, policy=POLICY,
                                                          explanation=body["explanation"],
@@ -256,17 +256,112 @@ def test_llm_explanation_is_grounded_and_verified():
         assert v.json()["overall"] == "pass", v.text
 
 
+B2X = B2 + "오류는 장애 보고서에 남는다.\n"
+E3 = "0b6c0c55-6a43-5b8e-9b7e-3c1f1d8f0a11"
+
+
+def with_context(profile, **extra):
+    """노트 2 에 문맥 문장 하나를 더하고 그 구간을 단계 근거가 아닌 요청 근거(E3)로 보낸다."""
+    body = base(profile, **extra)
+    body["documents"][1].update(body=B2X, bodySha256=sha(B2X))
+    body["evidence"][1]["bodySha256"] = sha(B2X)
+    body["evidence"].append({"evidenceId": E3, "noteId": N2, "noteVersion": 3, "bodySha256": sha(B2X),
+                             "startOffset": 18, "endOffset": 34, "quote": "오류는 장애 보고서에 남는다."})
+    return body
+
+
+WITH_CONTEXT = {"summary": "재시도 때문에 생긴 오류도 장애 보고서에 남아요.",
+                "claims": [*GOOD["claims"][:2],
+                           {"kind": "premise", "text": "오류는 장애 보고서에 남아요.", "evidence": ["E3"]},
+                           GOOD["claims"][2],
+                           {"kind": "conclusion", "text": "재시도는 중복을 거쳐 오류의 간접 원인이라서, 재시도 때문에 생긴 오류도 "
+                                                          "장애 보고서에 남아요.", "evidence": ["E1", "E2", "E3"]}]}
+
+
+def provenance(meta):
+    return [dict(STAMP, **{k: meta[k] for k in ("profileVersion", "provider", "model", "modelRevision", "promptVersion",
+                                                 "preprocessingVersion")})]
+
+
+def test_context_evidence_is_cited_as_supporting_premise():
+    c, fake = llm_client(WITH_CONTEXT)
+    with c:
+        r = post(c, "/explanations", with_context("explain-llm-8", path=PATH, policy=POLICY))
+        assert r.status_code == 200, r.text
+        _, user, schema = fake.calls[0]
+        assert "문맥 근거" in user and "[E3] 오류는 장애 보고서에 남는다." in user
+        assert schema["properties"]["claims"]["items"]["properties"]["evidence"]["items"]["enum"] == ["E1", "E2", "E3"]
+        ex = r.json()["explanation"]
+        assert next(x for x in ex["claims"] if x["claimRef"] == "premise-3")["evidenceIds"] == [E3]
+        verify = lambda prof: post(c, "/verifications/explanations", with_context(
+            prof, path=PATH, policy=POLICY, explanation=ex, generationProvenance=provenance(r.json()["meta"]))).json()
+        det3 = verify("explanation-det-3")
+        assert det3["overall"] == "pass", det3
+        det2 = verify("explanation-det-2")                                  # det-2 는 문맥 근거만 인용한 전제를 받지 않는다
+        assert det2["overall"] == "fail"
+
+
+def judge_client(gen_out, judge_out):
+    from app.services.reasoning.explain_llm import ExplainLLM
+    from app.services.reasoning.explanation_llm import ExplanationJudge
+    gen, judge = FakeLLM(gen_out), FakeLLM(judge_out)
+    app = create_app(Settings(service_token=TOKEN, concept_idf=Path("does-not-exist.json")),
+                     extractor=ConceptExtractor(ExtractConfig()), explainer=ExplainLLM(gen, None),
+                     explanation_judge=ExplanationJudge(judge, None))
+    return TestClient(app), judge
+
+
+def judged(support="supported", specific=True, novel=True, n=5):
+    return {"claims": [{"claim": f"C{i}", "support": support if i == 3 else "supported", "reason": "근거에 있습니다."}
+                       for i in range(1, n + 1)],
+            "conclusion": {"specific": specific, "novel": novel, "reason": "두 노트의 근거를 합쳐야 나옵니다."}}
+
+
+@pytest.mark.parametrize("out, overall, conclusion", [
+    (judged(), "pass", "pass"),
+    (judged(support="partial"), "uncertain", "pass"),           # 보조 전제에 근거 없는 내용이 섞임
+    (judged(novel=False), "fail", "fail"),                      # 한 노트에 이미 적힌 내용
+    (judged(specific=False), "fail", "fail"),                   # 관계를 말하지 않는 결론
+])
+def test_hybrid_explanation_check(out, overall, conclusion):
+    c, judge = judge_client(WITH_CONTEXT, out)
+    with c:
+        r = post(c, "/explanations", with_context("explain-llm-8", path=PATH, policy=POLICY))
+        v = post(c, "/verifications/explanations", with_context(
+            "explanation-hybrid-1", path=PATH, policy=POLICY, explanation=r.json()["explanation"],
+            generationProvenance=provenance(r.json()["meta"])))
+        assert v.status_code == 200, v.text
+        body = v.json()
+        assert body["overall"] == overall and body["meta"]["model"] == "claude-opus-5-5"
+        assert next(x for x in body["claimVerdicts"] if x["claimRef"] == "conclusion-1")["outcome"] == conclusion
+        assert "오류는 장애 보고서에 남는다." in judge.calls[0][1] and "explanation-llm" not in judge.calls[0][1]
+        same = provenance(dict(r.json()["meta"], promptVersion="explanation-llm-1"))  # 같은 모델+같은 prompt
+        bad = post(c, "/verifications/explanations", with_context(
+            "explanation-hybrid-1", path=PATH, policy=POLICY, explanation=r.json()["explanation"], generationProvenance=same))
+        assert bad.status_code == 422 and code(bad) == "UNSUPPORTED_PROFILE"
+
+
+def test_hybrid_explanation_missing_claim_is_502():
+    c, _ = judge_client(WITH_CONTEXT, judged(n=4))
+    with c:
+        r = post(c, "/explanations", with_context("explain-llm-8", path=PATH, policy=POLICY))
+        v = post(c, "/verifications/explanations", with_context(
+            "explanation-hybrid-1", path=PATH, policy=POLICY, explanation=r.json()["explanation"],
+            generationProvenance=provenance(r.json()["meta"])))
+        assert v.status_code == 502 and code(v) == "INVALID_MODEL_OUTPUT"
+
+
 def test_llm_explanation_breaking_contract_is_502():
     bad = copy.deepcopy(GOOD)
     bad["claims"][3]["evidence"] = ["E1"]                                    # 결론이 단계 2 근거를 인용하지 않음
     c, _ = llm_client(bad)
     with c:
-        r = post(c, "/explanations", base("explain-llm-6", path=PATH, policy=POLICY))
+        r = post(c, "/explanations", base("explain-llm-8", path=PATH, policy=POLICY))
         assert r.status_code == 502 and code(r) == "INVALID_MODEL_OUTPUT"
 
 
 def test_llm_profile_unavailable_without_llm(client):
-    r = post(client, "/explanations", base("explain-llm-6", path=PATH, policy=POLICY))
+    r = post(client, "/explanations", base("explain-llm-8", path=PATH, policy=POLICY))
     assert r.status_code == 503 and code(r) == "SERVICE_UNAVAILABLE"
 
 

@@ -6,7 +6,7 @@
   POST /explanations               generateExplanation     A-B-C 경로 → 근거가 달린 새 지식 제안 (A–C). 항상 LLM
   POST /verifications/explanations verifyExplanation       설명의 주장별 판정·빈 단계
 
-설명 생성(explain-llm-6)과 LLM 간선 검증(edges-llm-1)은 LLM, 나머지는 결정적 profile 이다 (app.services.reasoning). 순서: 공통 헤더·본문 검사 → 스키마(400/413) → 교차 필드(409/422)
+설명 생성(explain-llm-8)과 LLM 간선 검증(edges-llm-1)은 LLM, 나머지는 결정적 profile 이다 (app.services.reasoning). 순서: 공통 헤더·본문 검사 → 스키마(400/413) → 교차 필드(409/422)
 → 실행 → 응답 자체 검증(502) → 응답. 저장·병합·후보 확정은 하지 않는다 (BE 책임).
 """
 
@@ -30,6 +30,7 @@ from app.services.reasoning import REASONING_PROFILES, ReasoningProfile
 from app.services.reasoning.entailment import check_edge
 from app.services.reasoning.entailment_llm import EdgeIn
 from app.services.reasoning.explain import ClaimOut, Step, verify
+from app.services.reasoning.explanation_llm import combine
 from app.services.reasoning.identity import Side, judge
 
 from .deps import common_checks, parse_model, read_json_body, require_uuid_header
@@ -204,6 +205,13 @@ def _path_parts(req, ev):
     return a, b, c, step(s1), step(s2), rules, quote
 
 
+def _context_ids(req, ev, s1, s2) -> list[str]:
+    """문맥 근거: 단계 근거가 아니고 단계 노트에 있는 요청 근거 (요청에 적힌 id 그대로, 요청 순서)."""
+    step_ids = {x.lower() for x in (*s1.evidence_ids, *s2.evidence_ids)}
+    notes = {ev[x].noteId.lower() for x in step_ids}
+    return [e.evidenceId for e in req.evidence if e.evidenceId.lower() not in step_ids and e.noteId.lower() in notes]
+
+
 @router.post("/explanations", response_model=ExplainResponse, operation_id="generateExplanation")
 async def explanations(request: Request):
     t0, data, req, profile = await prepare(request, ExplainRequest, "explain")
@@ -213,9 +221,11 @@ async def explanations(request: Request):
     note_of = {e.evidenceId: e.noteId.lower() for e in ev.values()}
     types = {t.code: (t.label, t.description) for t in req.policy.relationTypes}
     titles = {d.noteId.lower(): d.title for d in req.documents}
+    context_ids = _context_ids(req, ev, s1, s2)
     g = await run(request, profile, lambda: request.app.state.explainer.generate(       # 설명은 항상 LLM 이 쓴다
         a, b, c, s1, s2, req.path.proposedTypeCode, types, quote, note_of, titles,
-        {d.noteId.lower(): d.body for d in req.documents}, req.context.noteId.lower()))   # 트리거 노트의 말투
+        {d.noteId.lower(): d.body for d in req.documents}, req.context.noteId.lower(),  # 트리거 노트의 용어
+        tuple(context_ids)))
     summary, claims, provider, model = g.summary, g.claims, g.provider, g.model
     explanation = build(Explanation, summary=summary, claims=[
         build(Claim, claimRef=cl.ref, kind=cl.kind, text=cl.text, evidenceIds=list(cl.evidence_ids)) for cl in claims])
@@ -240,17 +250,34 @@ async def verify_explanations(request: Request):
     check_ids([cl.claimRef for cl in req.explanation.claims], "explanation.claims.claimRef")
     for i, cl in enumerate(req.explanation.claims):
         check_ids(cl.evidenceIds, f"explanation.claims.{i}.evidenceIds", ev)
-    check_independence(profile.model, profile.prompt, req.generationProvenance)
     orig = {k: e.evidenceId for k, e in ev.items()}
     claims = [ClaimOut(cl.claimRef, cl.kind, cl.text, tuple(orig[x.lower()] for x in cl.evidenceIds))
               for cl in req.explanation.claims]
 
     bodies = [d.body for d in req.documents]
-    res = await run(request, profile, lambda: verify(a, b, c, s1, s2, req.path.proposedTypeCode,
-                                                     rules.get((s1.code, s2.code)), claims, quote, bodies))
+    det2 = profile.id == "explanation-det-2"             # det-2 는 단계 근거가 아닌 인용을 모두 경로 밖으로 본다
+    context_ids = None if det2 else frozenset(_context_ids(req, ev, s1, s2))
+    judge = request.app.state.explanation_judge if "explanation_judge" in profile.requires else None
+    if judge is None and profile.requires:
+        raise AiError("SERVICE_UNAVAILABLE", retry_after=30)
+    # 독립성은 실제로 부를 모델 id 로 본다 (LLM profile 의 model 은 'llm' 이라는 자리표시)
+    check_independence(judge.model if judge else profile.model, profile.prompt, req.generationProvenance)
+    provider, model = "local", None
+
+    def check():
+        det = verify(a, b, c, s1, s2, req.path.proposedTypeCode, rules.get((s1.code, s2.code)), claims, quote, bodies,
+                     context_ids)
+        if judge is None:
+            return det, "local", None
+        note_of = {e.evidenceId: e.noteId.lower() for e in ev.values()}
+        j = judge.judge(a, b, c, claims, quote, note_of)
+        return combine(det, j, claims, a, c), j.provider, j.model
+
+    res, provider, model = await run(request, profile, check)
     verdicts = [build(ClaimVerdict, claimRef=ref, outcome=o, reason=r, evidenceIds=list(ids))
                 for ref, o, r, ids in res.verdicts]
     _check_one_each([cl.ref for cl in claims], [v.claimRef for v in verdicts])
     gaps = [build(Gap, stepOrder=s, reason=r) for s, r in res.gaps]
-    return build(VerifyExplanationResponse, context=data["context"], meta=meta(profile, t0), overall=res.overall,
+    return build(VerifyExplanationResponse, context=data["context"], meta=meta(profile, t0, provider, model),
+                 overall=res.overall,
                  claimVerdicts=verdicts, gaps=gaps)

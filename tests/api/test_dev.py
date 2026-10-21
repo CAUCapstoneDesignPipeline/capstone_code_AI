@@ -114,7 +114,7 @@ def test_suggest_new_knowledge_end_to_end(tmp_path, monkeypatch):
         assert [v["outcome"] for v in s["edgeVerdicts"]] == ["entailed", "entailed"]
         assert s["explanationVerdict"]["overall"] == "pass"
         assert s["knowledge"] == "TCP는 네트워크 프로토콜의 한 종류입니다."
-        assert s["explainedBy"] == {"profile": "explain-llm-6", "provider": "anthropic", "model": "claude-opus-5-5"}
+        assert s["explainedBy"] == {"profile": "explain-llm-8", "provider": "anthropic", "model": "claude-opus-5-5"}
 
 
 def test_graph_shows_notes_and_their_connections(tmp_path, monkeypatch):

@@ -17,15 +17,21 @@ AI 쪽 구현이 정한 것(profile·판정 기준)을 적는다. 실행되는 �
               · POST /note-links 로 AI 쪽 구현을 쓴다 (제안 operation, 아래 3장)
            ⑤ POST /verifications/bridges    B 가 두 노트에서 정말 같은 개념인가
            ⑥ POST /verifications/edges      A→B, B→C 가 근거에 정말 쓰여 있는가
-           ⑦ POST /explanations             근거가 달린 설명 = 새 지식 제안 (A —합성 유형→ C)
-           ⑧ POST /verifications/explanations 설명의 주장별 판정
-           ⑨ BE 가 판정을 결합해 후보 / 가설 / 제외 (2장 표)
+           ⑦ POST /explanations             근거가 달린 설명 = 새 지식 제안 (A —합성 유형→ C).
+                                            단계 근거 + 문맥 근거를 보낸다 (아래 "문맥 근거")
+           ⑧ POST /verifications/explanations 설명의 주장별 판정 (근거 뒷받침·구체성·새로움)
+           ⑨ BE 가 판정을 결합해 후보 / 가설 / 제외 (2장 표). 제외는 사용자에게 보이지 않는다
 ```
 
 **권장 순서 (속도·비용·품질):** 경로 후보를 넉넉히(예: 12개) 모은 뒤 ⑤⑥ 을 먼저 묶어서 동시에 부른다
 (⑤ 는 쌍 20개, ⑥ 은 간선 6개 정도씩 나눠 동시에. 같은 간선은 한 번만). 매개가 `different` 이거나 간선이 `contradicted` 인 경로는
-여기서 버리고, 남은 경로를 "합성 규칙 있음 → 확인된 간선 수 → 매개 같음 → 연결 점수" 순으로 골라 ⑦⑧ 을 동시에 부른다.
-LLM 설명(⑦)은 가장 비싸므로 살아남은 경로에만 쓴다. `app/client.py` `suggest_knowledge` 가 이 순서다.
+여기서 버린다. 남은 경로는 `app/client.py` `pick_paths` 처럼 고른다:
+1. **같은 A–C 는 하나로.** 표기(대소문자·띄어쓰기)를 무시하고 시작·끝 개념이 같은 경로는 같은 지식이다. 가장 나은 경로를 남기고
+   다른 경로의 같은 단계 근거를 그 단계 근거에 보탠다 (기능 명세 1.4 "기존 결과와의 중복"; 저장된 관계와의 중복 확인은 BE 몫이다).
+2. **가치 순:** 합성 규칙 있음 → 분류 계층만 올라가는 경로(`is_a`·`example_of` 만)가 아님 → 확인된 간선 수 → 매개 같음 → 연결 점수.
+3. **고르게:** 이미 고른 경로와 첫 단계(A→B)나 끝 단계(B→C)가 같은 경로는 다른 경로를 먼저 고른 뒤 남는 자리에 넣는다.
+
+고른 경로만 ⑦⑧ 을 동시에 부른다. LLM 설명(⑦)은 가장 비싸므로 살아남은 경로에만 쓴다. `suggest_knowledge` 가 이 순서다.
 측정 (노트 2개, 캐시 없음): 차례대로 부르던 때 59초 → 이 순서로 약 9초, 후보 0개 → 6개.
 경로 고르기는 합성 규칙이 있는 경로를 먼저, 연결 노트마다 돌아가며 고른다 (한 노트의 경로로 다 채우지 않게).
 
@@ -36,6 +42,23 @@ LLM 설명(⑦)은 가장 비싸므로 살아남은 경로에만 쓴다. `app/cl
 | 매개 `different` · 간선 `contradicted` · 설명 검증 `fail` 중 하나라도 | **제외** |
 | 그 밖에 매개 `uncertain` · 간선 `unknown` · 설명 `uncertain`/gap · `proposedTypeCode = null` 중 하나라도 | **가설** |
 | 모두 통과 | **후보** (사용자 검토 대상) |
+
+**문맥 근거.** 두 관계만 주면 설명은 "A 는 C 다" 에서 끝난다. ⑦⑧ 의 `evidence` 에 단계 근거 말고도 **단계 노트의 다른 구간**을
+넣으면 AI 는 그것을 문맥 근거로 본다: 설명은 결론에 쓰는 사실(C 의 성질·규칙)을 그 구간을 인용한 보조 전제로 적고, 결론은
+그것을 A 에 적용한 결과를 쓴다. 모든 문장이 인용 근거를 가지므로 ⑧ 이 확인할 수 있다. `/note-links` 경로 단계의 `context`
+(같은 절에서 그 단계의 개념을 말하는 문장, 최대 6개)를 그대로 넣으면 된다. 요청 근거 한도(40개) 안에서 단계마다 4개 정도면 충분하다.
+문맥 근거는 단계 노트에 있어야 한다 (다른 노트의 구간은 경로 밖 근거다).
+
+**새 지식의 조건 (기능 명세 1.4) 과 확인하는 곳**
+
+| 조건 | 어디서 |
+| --- | --- |
+| 기존 내용의 요약·바꿔쓰기가 아님 | ⑦ 프롬프트 + ⑧ `explanation-hybrid-1` 의 novel 판정 (아니면 결론 fail → 제외) |
+| 둘 이상 문서의 실질적 기여 | 경로 (두 단계가 다른 노트, `/explanations` 가 같은 노트 경로를 422 로 거절) |
+| 명확한 관계 또는 결론 | ⑧ `explanation-hybrid-1` 의 specific 판정 (아니면 결론 fail → 제외) |
+| 원문 근거 | 모든 주장이 요청 근거를 인용 (enum), ⑧ 이 주장마다 근거가 뒷받침하는지 판정 |
+| 추론 과정 명시 | 전제·보조 전제·조건·가정·결론으로 나눈 claims, ⑧ 의 gaps |
+| 기존 결과와의 중복 | 한 번의 제안 안: 같은 A–C 합치기 (위). 저장된 관계와의 중복: BE (F-CAN-02) |
 
 ## 3. 연결·경로 후보: `POST /internal/v1/note-links` (`findNoteLinks`)
 
@@ -53,7 +76,8 @@ LLM 설명(⑦)은 가장 비싸므로 살아남은 경로에만 쓴다. `app/cl
 | `k` (1~30, 기본 10), `minConfidence` (0~1, 기본 0) | 돌려줄 노트 수, 연결에 쓸 개념의 최소 신뢰도 (`/extract` 의 concept confidence 와 같은 값, 양쪽 노트 모두에 적용) |
 
 응답 `links[]`: `noteId`, `score`, `bridges[]` (공유 개념, 양쪽 신뢰도, 양쪽 근거 문장 span),
-`paths[]` (`source`, `bridge`, `target`, `steps[2]`, `proposedTypeCode`). 모든 span 은 원문 UTF-16 위치이고
+`paths[]` (`source`, `bridge`, `target`, `steps[2]`, `proposedTypeCode`). 단계마다 `evidence` (관계 근거) 와 `context`
+(같은 절에서 그 단계의 두 개념 중 하나 이상을 말하는 다른 문장, ⑦⑧ 의 문맥 근거). 모든 span 은 원문 UTF-16 위치이고
 quote 는 원문 slice 와 같다. **경로 단계의 근거 span 은 그 노트의 `/extract` 응답 evidence 와 같은 위치**이므로
 BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·relation UUID 를 찾아 ⑤~⑧ 에 넣는다.
 
@@ -70,12 +94,15 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 | verifyBridgeIdentity | `bridges-det-1` | 아래 동일성 규칙 (매개 검증용, 엄격) |
 | verifyEdgeEntailment | **`edges-llm-1`** (권장) | LLM 이 근거 원문만 읽고 entailed / contradicted / unknown. 관계 판정과 다른 프롬프트 (독립 검증). 간선마다 정확히 하나 아니면 502. 캐시 |
 | verifyEdgeEntailment | `edges-det-1` | 두 개념이 근거에 나오는가 + 유형별 단서 말 + 부정 표현. 단서 말 없이 쓰인 관계(LLM 이 찾은 관계)는 대부분 unknown |
-| generateExplanation | `explain-llm-6` | 항상 LLM(기본 `claude-opus-5-5`, effort medium)이 전제·조건·결론(새 지식)을 쓴다. 문체는 트리거 노트(context.noteId)의 문장 몇 개를 예시로 줘서 그 사람의 말투를 따른다. 경로·근거·합성 규칙은 입력으로 고정. 인용은 요청 근거 중에서만 고르게 구조화 출력 enum 으로 묶고, 응답은 코드가 §3.9 로 다시 검사한다 (어기면 502, 자동 재시도·모델 fallback 없음). 같은 입력은 캐시 |
-| verifyExplanation | `explanation-det-2` | 주장마다 인용이 어느 단계 근거인지, 두 개념이 원문에 나오는지, 결론이 두 전제를 잇는지, 합성 규칙이 있는지 |
+| generateExplanation | `explain-llm-8` | 항상 LLM(기본 `claude-opus-5-5`, effort medium)이 전제·보조 전제(문맥 근거)·조건·결론(새 지식)을 쓴다. 결론은 A–C 관계와 그것을 A 에 적용한 결과 2~4 문장, 근거보다 넓게 말하지 않는다. 문체는 해요체(~에요/~예요), 용어 쓰는 방식은 트리거 노트(context.noteId)를 따른다. 경로·근거·합성 규칙은 입력으로 고정. 인용은 요청 근거 중에서만 고르게 구조화 출력 enum 으로 묶고, 응답은 코드가 §3.9 로 다시 검사한다 (어기면 502, 자동 재시도·모델 fallback 없음). 같은 입력은 캐시 |
+| verifyExplanation | **`explanation-hybrid-1`** (권장) | `explanation-det-3` + LLM(검증 LLM, effort low)이 주장마다 인용 근거가 뒷받침하는지(supported → pass, partial → uncertain, unsupported·contradicted → fail), 결론이 구체적인지·새로운지 본다. 구체적이지 않거나 한 노트 내용의 바꿔쓰기면 결론 fail. 생성기와 prompt 가 달라 독립. 주장마다 정확히 하나 아니면 502. 캐시 |
+| verifyExplanation | `explanation-det-3` | `explanation-det-2` + 문맥 근거만 인용하는 보조 전제를 받는다 (주장과 인용 원문이 같은 경로 개념을 말하면 통과) |
+| verifyExplanation | `explanation-det-2` | 주장마다 인용이 어느 단계 근거인지, 두 개념이 원문에 나오는지, 결론이 두 전제를 잇는지, 합성 규칙이 있는지. 단계 근거가 아닌 인용은 경로 밖 근거로 본다 |
 | findNoteLinks (제안) | **`links-hybrid-1`** (권장) | 3장 + 관계를 LLM 으로 보탠다 (`extract-hybrid-2` 의 관계와 같다) |
 | findNoteLinks (제안) | `links-det-1` | 3장. 규칙·구조 관계만 써서 경로가 거의 없다 |
 
-`explain-llm-6`, `edges-llm-1`, `links-hybrid-1`·`extract-hybrid-*` 의 관계 판정이 LLM 이고 나머지는 결정적이다. 판정 이유(reason)는 ~습니다체다. 검증 profile 은 모두 결정적이라 LLM 생성과 모델이 다르다 (계약 §5 독립성).
+`explain-llm-8`, `edges-llm-1`, `explanation-hybrid-1`, `links-hybrid-1`·`extract-hybrid-*` 의 관계 판정이 LLM 이고 나머지는 결정적이다.
+새 지식(설명)은 해요체, 판정 이유(reason)는 ~습니다체다. LLM 검증 profile 은 생성 profile 과 prompt 가 달라 계약 §5 독립성을 지킨다.
 
 `meta.modelRevision` 은 그 방법 코드의 hash 다 (LLM profile 은 `모델 id@코드 hash`, `meta.model` 은 실제 호출한 모델 id). 코드가 바뀌면 값이 바뀌므로 BE 는 결과를 구분할 수 있다.
 검증 profile 은 `generationProvenance` 의 각 항목과 모델 또는 prompt 가 달라야 한다 (같으면 422 `UNSUPPORTED_PROFILE`).
@@ -100,7 +127,8 @@ async def main():
               "compositionRules": [{"firstType": "is_a", "secondType": "is_a", "resultType": "is_a"}]}
     res = await suggest_knowledge(client, a, [b], policy)
     for s in res["suggestions"]:
-        print(s["status"], s["knowledge"])   # candidate 합성 규칙(is_a + is_a → is_a)에 따라 TCP는 네트워크 프로토콜의 한 종류다.
+        print(s["status"], s["knowledge"])   # candidate TCP는 전송 계층 프로토콜이고 … 그래서 TCP도 … 해요.
+    print(res["screened"])                   # 경로 수, 합친 수, 검증에서 뺀 제안(rejected)과 이유
 
 asyncio.run(main())
 ```

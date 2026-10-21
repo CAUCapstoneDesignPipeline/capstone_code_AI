@@ -332,7 +332,9 @@ async def suggest(q: SuggestQuery, request: Request):
             res = await suggest_knowledge(client, note, candidates, playground_policy(), k=max(1, min(q.k, 30)),
                                           min_confidence=max(0.0, min(q.minConfidence, 1.0)), embedding_profile=emb,
                                           links_profile="links-hybrid-1" if state.typer else "links-det-1",
-                                          edges_profile="edges-llm-1" if state.edge_judge else "edges-det-1")
+                                          edges_profile="edges-llm-1" if state.edge_judge else "edges-det-1",
+                                          verify_profile="explanation-hybrid-1" if state.explanation_judge
+                                          else "explanation-det-3")
         except AiCallError as e:
             raise HTTPException(502, f"{e.path}: {e.status} {e.error.get('code', '')} {e.error.get('message', '')}")
 

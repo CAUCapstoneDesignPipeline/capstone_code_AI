@@ -4,6 +4,7 @@
   entailment   간선 근거가 그 관계를 말하는가          → /verifications/edges
   explain_llm  A-B-C 경로 설명 = 새 지식 제안 (LLM)   → /explanations
   explain      설명 검증 (결정적)                       → /verifications/explanations
+  explanation_llm 설명 검증의 LLM 판정 (근거 뒷받침·구체성·새로움) → /verifications/explanations (hybrid)
 """
 
 import hashlib
@@ -29,7 +30,7 @@ class ReasoningProfile:
     model: str
     prompt: str
     files: tuple[str, ...]
-    requires: tuple[str, ...] = ()   # 이 profile 이 쓰는 서버 구성 요소 (app.state 속성): extractor, typer, explainer, edge_judge
+    requires: tuple[str, ...] = ()   # 이 profile 이 쓰는 서버 구성 요소 (app.state 속성): extractor, typer, explainer, edge_judge, explanation_judge
 
     @property
     def revision(self) -> str:
@@ -51,10 +52,15 @@ REASONING_PROFILES = {p.id: p for p in (
                      ("reasoning/entailment.py", "reasoning/text.py")),
     # LLM 이 근거를 읽고 간선을 판정한다. 관계 판정(relation-typing)과 prompt 가 달라 계약 §5 독립성을 지킨다
     ReasoningProfile("edges-llm-1", "edges", "llm", "edges-llm-1", ("reasoning/entailment_llm.py",), ("edge_judge",)),
-    # 새 지식 제안은 항상 LLM 이 쓴다 (트리거 노트의 말투를 따른다). 경로·근거·합성 규칙은 입력으로 고정, 응답은 §3.9 로 코드가 다시 검사한다
-    ReasoningProfile("explain-llm-6", "explain", "llm", "explain-llm-6",
+    # 새 지식 제안은 항상 LLM 이 쓴다 (해요체, 모든 사실은 근거 인용). 경로·근거·합성 규칙은 입력으로 고정, 응답은 §3.9 로 코드가 다시 검사한다
+    ReasoningProfile("explain-llm-8", "explain", "llm", "explain-llm-8",
                      ("reasoning/explain_llm.py", "reasoning/explain.py", "reasoning/text.py"), ("explainer",)),
     ReasoningProfile("explanation-det-2", "explanation", "rules-explanation-check", "explanation-rules-1", _EX),
+    # det-2 + 문맥 근거만 인용하는 보조 전제를 받는다
+    ReasoningProfile("explanation-det-3", "explanation", "rules-explanation-check", "explanation-rules-2", _EX),
+    # det-3 + LLM 이 주장의 근거 뒷받침과 결론의 구체성·새로움을 본다. 구체적이지 않거나 새롭지 않은 결론은 fail
+    ReasoningProfile("explanation-hybrid-1", "explanation", "llm", "explanation-llm-1",
+                     (*_EX, "reasoning/explanation_llm.py"), ("explanation_judge",)),
     # 노트 사이 연결·경로 후보. 계약 v0.1.0 에는 없는 AI 쪽 제안 operation (경로·순위는 계약상 BE 책임)
     ReasoningProfile("links-det-1", "links", "kiwi-tfidf-adamic-adar", "links-det-1", _LINKS, ("extractor",)),
     # 같은 방법에 관계를 LLM 으로 보탠다 (extract-hybrid-2 의 관계와 같다). 규칙만으로는 관계가 적어 경로가 거의 없다

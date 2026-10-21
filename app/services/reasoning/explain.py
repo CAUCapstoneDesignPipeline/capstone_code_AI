@@ -1,10 +1,13 @@
-"""A-B-C 경로 설명의 검증 (verifyExplanation, profile explanation-det-2). 결정적.
+"""A-B-C 경로 설명의 검증 (verifyExplanation, profile explanation-det-2 / explanation-det-3). 결정적.
 
 설명(새 지식 제안)은 항상 LLM 이 쓴다 (explain_llm.py, generateExplanation). 여기서는 생성기와 다른 기준으로
 주장마다 본다: 인용이 경로의 어느 단계 근거인가, 주장이 그 단계의 두 개념을 말하는가, 인용 원문에 두 개념이
 실제로 나오는가, 결론이 두 전제의 근거를 모두 잇는가, 합성 규칙이 있는가.
 개념은 경로의 대표 표기 하나뿐이지만 두 노트가 다른 표기(번역어·약어)를 쓸 수 있으므로, 문서가 괄호로 같은 것이라
 적은 표기도 받는다 (explanation-det-2).
+explanation-det-3 은 문맥 근거(단계 근거가 아닌, 단계 노트의 요청 근거)만 인용하는 보조 전제도 받는다: 주장과 인용 원문이
+경로의 개념(A·B·C)을 같이 말하면 통과, 아니면 애매. 결정적 검사는 내용이 근거에서 따라 나오는지까지는 보지 못한다
+(explanation-hybrid-1 이 LLM 으로 본다).
 하나라도 fail 이면 overall fail, uncertain·빈 단계(gap)가 있으면 uncertain, 아니면 pass.
 합성 규칙의 최종 적용과 후보/가설 결정은 BE 가 다시 확인한다 (계약 §5).
 """
@@ -39,9 +42,11 @@ class CheckResult:
 
 
 def verify(a: str, b: str, c: str, s1: Step, s2: Step, proposed: str | None, rule_result: str | None,
-           claims: list[ClaimOut], evidence_quote: dict[str, str], documents: list[str] = ()) -> CheckResult:
+           claims: list[ClaimOut], evidence_quote: dict[str, str], documents: list[str] = (),
+           context_ids: frozenset[str] | None = None) -> CheckResult:
     """claims 의 evidenceId 는 요청 evidence 안에 있다고 이미 확인했다 (없으면 422).
-    documents: 요청 문서 원문. 문서가 괄호로 같은 것이라 적은 표기(스레드(thread))도 그 개념을 말한 것으로 본다."""
+    documents: 요청 문서 원문. 문서가 괄호로 같은 것이라 적은 표기(스레드(thread))도 그 개념을 말한 것으로 본다.
+    context_ids: 문맥 근거 (det-3). None 이면 det-2 그대로: 단계 근거가 아닌 인용은 경로 밖 근거다."""
     memo: dict = {}
 
     def mentions(text, label):
@@ -54,13 +59,21 @@ def verify(a: str, b: str, c: str, s1: Step, s2: Step, proposed: str | None, rul
     for cl in claims:
         ids = set(cl.evidence_ids)
         step_hits = [s for s in (s1, s2) if ids & set(s.evidence_ids)]
-        outside = ids - set(s1.evidence_ids) - set(s2.evidence_ids)
+        outside = ids - set(s1.evidence_ids) - set(s2.evidence_ids) - (context_ids or frozenset())
 
         if cl.kind == "assumption":
             res.verdicts.append((cl.ref, "uncertain", "원문 근거가 없는 가정입니다.", cl.evidence_ids))
             continue
 
         if cl.kind == "premise":
+            if not step_hits and context_ids is not None and ids and not outside:     # 보조 전제 (문맥 근거만)
+                named = [x for x in (a, b, c) if mentions(cl.text, x)]
+                if any(mentions(evidence_quote[q], x) for q in cl.evidence_ids for x in named):
+                    res.verdicts.append((cl.ref, "pass", "문맥 근거에 나오는 경로 개념을 말하는 보조 전제입니다.", cl.evidence_ids))
+                else:
+                    res.verdicts.append((cl.ref, "uncertain", "보조 전제가 인용한 문맥 근거와 같은 경로 개념을 말하지 않습니다.",
+                                         cl.evidence_ids))
+                continue
             if not step_hits:
                 res.verdicts.append((cl.ref, "fail", "경로의 어느 단계 근거도 인용하지 않습니다.", cl.evidence_ids))
                 continue

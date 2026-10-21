@@ -6,9 +6,11 @@
                                     links-hybrid-1 은 관계를 LLM 으로 보탠다 (규칙만으로는 경로가 거의 없다)
       2. /verifications/bridges     매개 개념 B 가 두 노트에서 같은 개념인가
       3. /verifications/edges       A→B, B→C 간선이 근거에 정말 쓰여 있는가 (edges-llm-1: LLM 이 근거를 읽고 판정)
-      4. /explanations              근거 기반 설명 = 새 지식 제안 (A —합성 유형→ C). 항상 LLM 이 쓴다 (explain-llm-6)
-      5. /verifications/explanations 설명의 주장별 판정
-      6. 판정 결합 (계약 §5 표): 하나라도 탈락이면 제외, 애매·가정·규칙 없음이면 가설, 아니면 후보
+      4. /explanations              근거 기반 설명 = 새 지식 제안 (A —합성 유형→ C). 항상 LLM 이 쓴다 (explain-llm-8).
+                                    단계 근거와 함께 문맥 근거(/note-links 단계의 context)를 보내 결론이 인용해 풀어 쓴다
+      5. /verifications/explanations 설명의 주장별 판정 (explanation-hybrid-1: 근거 뒷받침·구체성·새로움을 LLM 이 본다)
+      6. 판정 결합 (계약 §5 표): 하나라도 탈락이면 제외, 애매·가정·규칙 없음이면 가설, 아니면 후보.
+         제외된 제안은 보여 주지 않는다 (screened.rejected 에 이유만 남긴다)
 
 여기서 만드는 UUID 는 BE 의 저장 UUID 를 흉내 낸 것이다 (uuid5). 실제 BE 는 자기가 저장한
 concept·relation·evidence UUID 를 쓴다. 경로 단계의 근거 구간은 /extract 응답의 evidence 와 같은 위치라서
@@ -16,6 +18,7 @@ BE 는 (noteId, startOffset, endOffset) 으로 자기 evidence UUID 를 찾으�
 """
 
 import asyncio
+import copy
 import hashlib
 import json
 import re
@@ -105,18 +108,23 @@ def decide(bridge: str | None, edges: list[str], overall: str, proposed: str | N
     return ("hypothesis", why) if why else ("candidate", ["모든 검증을 통과했습니다"])
 
 
+# 분류 계층만 올라가는 경로(A 는 B 의 한 종류, B 는 C 의 한 종류)는 결론이 뻔하기 쉬워 같은 조건이면 뒤로 민다
+TAXONOMY_CODES = frozenset({"is_a", "example_of"})
+
+
 async def suggest_knowledge(client: AiClient, note: dict, candidates: list[dict], policy: dict, k: int = 5,
                             min_confidence: float = 0.0, max_paths: int = 6, pool: int = 12,
                             embedding_profile: tuple[str, int] | None = None,
-                            explain_profile: str = "explain-llm-6", links_profile: str = "links-hybrid-1",
-                            edges_profile: str = "edges-llm-1") -> dict:
+                            explain_profile: str = "explain-llm-8", links_profile: str = "links-hybrid-1",
+                            edges_profile: str = "edges-llm-1", verify_profile: str = "explanation-hybrid-1",
+                            taxonomy_codes: frozenset[str] = TAXONOMY_CODES) -> dict:
     """note 와 연결된 노트·새 지식 제안. 단계를 나눠 싼 검사부터 하고 비싼 LLM 설명은 살아남은 경로에만 쓴다.
 
       1. /note-links 로 경로 후보를 넓게 (pool 개). 합성 규칙이 있는 경로 먼저, 연결 노트마다 돌아가며 고른다
       2. 매개 개념(/verifications/bridges)·간선(/verifications/edges) 검사를 묶어서 한꺼번에, 동시에
-      3. 제외된 경로(매개가 다른 개념, 간선이 부정됨)는 버리고 남은 경로를 가치 순으로: 규칙 있음 → 확인된 간선 수 →
-         매개 같음 → 연결 순위
-      4. 위에서 max_paths 개만 설명(/explanations)과 설명 검증을 동시에
+      3. 제외된 경로(매개가 다른 개념, 간선이 부정됨)는 버리고, 같은 A–C 경로는 하나로 합치고(근거는 모은다),
+         남은 경로를 가치 순으로 고른다 (pick_paths)
+      4. 고른 max_paths 개만 설명(/explanations)과 설명 검증을 동시에. 검증에서 제외된 제안은 버린다
     embedding_profile=(id, 차원) 이면 매개 개념 쌍의 cosine 을 /embeddings 로 구한다."""
     by_id = {n["noteId"]: n for n in (note, *candidates)}
     links = await client.call("/note-links", {"context": client.context(note), "profileVersion": links_profile,
@@ -130,19 +138,75 @@ async def suggest_knowledge(client: AiClient, note: dict, candidates: list[dict]
     await asyncio.gather(_check_bridges(client, note, preps, links_stamp, embedding_profile),
                          _check_edges(client, note, preps, policy, links_stamp, edges_profile))
 
-    def excluded(p):
-        return (p.bridge or {}).get("decision") == "different" or any(v["outcome"] == "contradicted" for v in p.edge_verdicts)
-
-    def value(p):
-        return (p.path["proposedTypeCode"] is not None, sum(v["outcome"] == "entailed" for v in p.edge_verdicts),
-                (p.bridge or {}).get("decision") == "same", -p.rank)
-
-    alive = sorted((p for p in preps if not excluded(p)), key=value, reverse=True)[:max_paths]
-    suggestions = await asyncio.gather(*(_explain(client, note, p, policy, explain_profile) for p in alive))
-    order = {"candidate": 0, "hypothesis": 1, "excluded": 2}
-    suggestions = sorted(suggestions, key=lambda s: order[s["status"]])
+    excluded = [p for p in preps if _excluded(p)]
+    chosen, merged = pick_paths([p for p in preps if not _excluded(p)], max_paths, taxonomy_codes)
+    done = await asyncio.gather(*(_explain(client, note, p, policy, explain_profile, verify_profile) for p in chosen))
+    order = {"candidate": 0, "hypothesis": 1}
+    suggestions = sorted((s for s in done if s["status"] != "excluded"), key=lambda s: order[s["status"]])
+    rejected = [{"source": s["source"], "bridge": s["bridge"], "target": s["target"], "reasons": s["statusReasons"],
+                 "explanationVerdict": s["explanationVerdict"]} for s in done if s["status"] == "excluded"]
     return {"links": links["links"], "linksMeta": links["meta"], "suggestions": suggestions,
-            "screened": {"paths": len(preps), "excluded": sum(excluded(p) for p in preps), "explained": len(alive)}}
+            "screened": {"paths": len(preps), "excluded": len(excluded), "merged": merged, "explained": len(chosen),
+                         "rejected": rejected}}
+
+
+def _excluded(p) -> bool:
+    return (p.bridge or {}).get("decision") == "different" or any(v["outcome"] == "contradicted" for v in p.edge_verdicts)
+
+
+def pick_paths(preps: list, max_paths: int, taxonomy_codes: frozenset[str] = TAXONOMY_CODES) -> tuple[list, int]:
+    """설명할 경로 고르기. (고른 경로, 합친 경로 수)
+
+      1. 같은 A–C (표기 대소문자·띄어쓰기 무시) 경로는 하나로: 가치가 가장 높은 것을 남기고, 다른 경로의 단계 근거 중
+         같은 두 개념을 잇는 것을 그 단계 근거에 보탠다 (같은 지식을 두 번 제안하지 않는다, 기능 명세 1.4)
+      2. 가치 순: 합성 규칙 있음 → 분류 계층만 올라가는 경로가 아님 → 근거가 확인된 간선 수 → 매개 같음 → 연결 순위
+      3. 이미 고른 경로와 첫 단계(A→B)나 끝 단계(B→C)가 같은 경로(Add→EI→트랜잭션 기능 뒤의 Change→EI→트랜잭션 기능)는
+         다른 경로를 먼저 고른 뒤에 채운다"""
+    def value(p):
+        codes = {s["typeCode"] for s in p.path["steps"]}
+        return (p.path["proposedTypeCode"] is not None, not codes <= taxonomy_codes,
+                sum(v["outcome"] == "entailed" for v in p.edge_verdicts), (p.bridge or {}).get("decision") == "same",
+                -p.rank)
+
+    groups: dict = {}
+    for p in sorted(preps, key=value, reverse=True):
+        s1, s2 = p.path["steps"]
+        key = (loose_key(s1["fromLabel"]), loose_key(s2["toLabel"]))
+        if key in groups:
+            _absorb(groups[key], p)
+        else:
+            groups[key] = p
+    ranked = list(groups.values())                         # 이미 가치 순
+    out, used = [], set()
+    for p in ranked:
+        s1, s2 = p.path["steps"]
+        ends = {("head", loose_key(s1["fromLabel"]), loose_key(s1["toLabel"])),
+                ("tail", loose_key(s2["fromLabel"]), loose_key(s2["toLabel"]))}
+        if not ends & used and len(out) < max_paths:
+            out.append(p)
+            used |= ends
+    out += [p for p in ranked if all(p is not q for q in out)][:max_paths - len(out)]
+    return sorted(out, key=value, reverse=True), len(preps) - len(ranked)
+
+
+def _absorb(keep: "_Prep", dup: "_Prep", per_step: int = 8):
+    """dup 의 단계 근거 중 keep 의 같은 단계와 같은 두 개념(표기 무시)을 잇는 것을 keep 의 그 단계 근거에 보탠다."""
+    known = {e["evidenceId"] for e in keep.evidence}
+    for i, (ks, ds) in enumerate(zip(keep.path["steps"], dup.path["steps"])):
+        if (loose_key(ks["fromLabel"]), loose_key(ks["toLabel"])) != (loose_key(ds["fromLabel"]), loose_key(ds["toLabel"])):
+            continue
+        ids = keep.path_body["steps"][i]["evidenceIds"]
+        for eid, span in zip(dup.path_body["steps"][i]["evidenceIds"], ds["evidence"]):
+            if eid in ids or len(ids) >= per_step:
+                continue
+            ids.append(eid)
+            ks.setdefault("evidence", []).append(span)
+            if eid not in known:
+                keep.evidence.append(next(e for e in dup.evidence if e["evidenceId"] == eid))
+                known.add(eid)
+            if span["noteId"] not in {d["noteId"] for d in keep.documents}:
+                keep.documents.append(next(d for d in dup.documents if d["noteId"] == span["noteId"]))
+    keep.context += [e for e in dup.context if e["evidenceId"] not in {x["evidenceId"] for x in keep.context}]
 
 
 def select_paths(links: list[dict], pool: int) -> list[tuple[str, dict]]:
@@ -174,12 +238,14 @@ class _Prep:
     edges: list
     pair: dict | None
     labels: dict
+    context: list = field(default_factory=list)      # 문맥 근거 (설명에만 보낸다)
     bridge: dict | None = None
     edge_verdicts: list = field(default_factory=list)
 
 
 def _prepare(note, by_id, path, labels, linked_note, rank) -> _Prep:
     """한 경로의 요청 재료 (호출 없음). UUID 는 BE 의 저장 UUID 를 흉내 낸 것이다 (uuid5)."""
+    path = copy.deepcopy(path)                         # 같은 A–C 경로를 합칠 때 단계 근거를 보탠다
     s1, s2 = path["steps"]
     n1, n2 = by_id[s1["noteId"]], by_id[s2["noteId"]]
     evidence, step_ev = [], []
@@ -224,7 +290,16 @@ def _prepare(note, by_id, path, labels, linked_note, rank) -> _Prep:
                          "surface": lsurf},
                 "right": {"conceptId": uid("concept", n2["noteId"], s2["fromLabel"]), "label": s2["fromLabel"],
                           "topicId": n2["topic"]["id"], "evidenceId": right, "surface": rsurf}}
-    return _Prep(path, linked_note, rank, [n1, n2], evidence, path_body, edges, pair, labels)
+    step_ids = {e["evidenceId"] for e in evidence}
+    context = []
+    for s in (s1, s2):
+        for e in s.get("context", []):
+            eid = uid("evidence", e["noteId"], e["startOffset"], e["endOffset"])
+            if eid not in step_ids and eid not in {x["evidenceId"] for x in context}:
+                context.append({"evidenceId": eid, "noteId": e["noteId"], "noteVersion": by_id[e["noteId"]]["noteVersion"],
+                                "bodySha256": by_id[e["noteId"]]["bodySha256"], "startOffset": e["startOffset"],
+                                "endOffset": e["endOffset"], "quote": e["quote"]})
+    return _Prep(path, linked_note, rank, [n1, n2], evidence, path_body, edges, pair, labels, context=context)
 
 
 # 계약의 요청 상한 (ai-api.md 필드 사전)
@@ -317,18 +392,21 @@ async def _check_edges(client, note, preps, policy, links_stamp, edges_profile):
         p.edge_verdicts = [verdicts[e["edgeId"]] for e in p.edges]
 
 
-async def _explain(client, note, p: _Prep, policy, explain_profile) -> dict:
+async def _explain(client, note, p: _Prep, policy, explain_profile, verify_profile) -> dict:
+    known = {e["evidenceId"] for e in p.evidence}
+    context = [e for e in p.context if e["evidenceId"] not in known][:MAX_EVIDENCE - len(p.evidence)]
     base = lambda profile: {"context": client.context(note), "profileVersion": profile, "documents": p.documents,
-                            "evidence": p.evidence}
+                            "evidence": p.evidence + context}                # 문맥 근거도 같이: 설명이 인용해 풀어 쓴다
     s1, s2 = p.path["steps"]
     ex = await client.call("/explanations", {**base(explain_profile), "path": p.path_body, "policy": policy})
     ver = await client.call("/verifications/explanations", {
-        **base("explanation-det-2"), "path": p.path_body, "policy": policy, "explanation": ex["explanation"],
+        **base(verify_profile), "path": p.path_body, "policy": policy, "explanation": ex["explanation"],
         "generationProvenance": [stamp(ex["meta"])]})
     status, why = decide(p.bridge["decision"] if p.bridge else None, [v["outcome"] for v in p.edge_verdicts],
                          ver["overall"], p.path["proposedTypeCode"])
     result = {"noteId": p.linked_note, "source": s1["fromLabel"], "bridge": p.path["bridge"], "target": s2["toLabel"],
-              "steps": [s1, s2], "proposedTypeCode": p.path["proposedTypeCode"],
+              "steps": [s1, s2], "stepEvidenceIds": [st["evidenceIds"] for st in p.path_body["steps"]],
+              "proposedTypeCode": p.path["proposedTypeCode"],
               "proposedLabel": p.labels.get(p.path["proposedTypeCode"]), "edgeVerdicts": p.edge_verdicts,
               "explanation": ex["explanation"],
               "explainedBy": {"profile": ex["meta"]["profileVersion"], "provider": ex["meta"]["provider"],

@@ -539,6 +539,14 @@ function bindPanZoom(svg) {
   svg.addEventListener("pointerup", () => { drag = null; });
 }
 
+// 보조 전제: 단계 근거가 아니라 같은 노트의 문맥 근거로 뒷받침한 사실 (결론이 이것을 써서 풀어 쓴다)
+function support(s) {
+  const stepEv = new Set((s.stepEvidenceIds || []).flat());
+  const extra = s.explanation.claims.filter((c) => c.kind === "premise" && !c.evidenceIds.some((x) => stepEv.has(x)));
+  if (!extra.length) return "";
+  return `<ul class="steps">${extra.map((c) => `<li>보조 전제 — ${esc(c.text)}</li>`).join("")}</ul>`;
+}
+
 // ---------- 화면 ----------
 function render() {
   const body = $("#body");
@@ -558,7 +566,9 @@ function render() {
     if (G === "loading") out += `<p class="count"><span class="spin"></span>연결 찾기 → 매개 개념·간선 검증 → 설명 생성 → 설명 검증…</p>`;
     else if (G?.error) out += `<p class="error">${esc(G.error)}</p>`;
     else if (G) {
-      out += `<p class="count">이어진 노트 ${G.links.length}개 · 두 노트의 관계를 이어 만든 제안 ${G.suggestions.length}개 · ${G.ms}ms</p>`;
+      const sc = G.screened || {};
+      out += `<p class="count">이어진 노트 ${G.links.length}개 · 두 노트의 관계를 이어 만든 제안 ${G.suggestions.length}개`
+        + `${sc.merged ? ` · 같은 지식 ${sc.merged}개 합침` : ""}${sc.rejected?.length ? ` · 검증에서 뺀 제안 ${sc.rejected.length}개` : ""} · ${G.ms}ms</p>`;
       out += G.suggestions.map((s) => {
         const [s1, s2] = s.steps;
         const step = (st) => `<li>${esc(st.fromLabel)} —${esc(st.typeCode)}→ ${esc(st.toLabel)} <span class="path">· ${esc(st.note)}</span>
@@ -572,11 +582,15 @@ function render() {
           <div class="checks"><span>매개 개념: ${OUT[bv?.decision] || "검증 못 함"}</span>
             ${ev.map((v, i) => `<span>간선 ${i + 1}: ${OUT[v.outcome]}</span>`).join("")}<span>설명: ${OUT[xv.overall]}</span></div>
           <details><summary>근거와 판정 이유</summary><ul class="steps">${step(s1)}${step(s2)}</ul>
+            ${support(s)}
             <ul class="steps">${bv ? `<li>매개 개념 — ${esc(bv.reason)}</li>` : ""}${ev.map((v, i) => `<li>간선 ${i + 1} — ${esc(v.reason)}</li>`).join("")}
               ${xv.claimVerdicts.map((c) => `<li>${esc(c.claimRef)}: ${OUT[c.outcome]} — ${esc(c.reason)}</li>`).join("")}
               ${xv.gaps.map((g) => `<li>빈 단계${g.stepOrder ? " " + g.stepOrder : ""} — ${esc(g.reason)}</li>`).join("")}</ul></details>
         </div>`;
       }).join("") || `<p class="empty">제안이 없다. 한 노트의 관계(A→B)와 다른 노트의 관계(B→C)가 같은 개념 B 로 이어질 때 제안이 생긴다.</p>`;
+      if (sc.rejected?.length) out += `<details><summary>검증에서 뺀 제안</summary><ul class="steps">${sc.rejected.map((r) =>
+        `<li>${esc(r.source)} → ${esc(r.bridge)} → ${esc(r.target)} — ${esc(r.reasons.join(", "))}
+          ${r.explanationVerdict.claimVerdicts.filter((c) => c.outcome === "fail").map((c) => `<div class="quote">${esc(c.reason)}</div>`).join("")}</li>`).join("")}</ul></details>`;
       out += `<details><summary>합성 규칙 (예시 정책)</summary><p class="path">${G.rules.map(esc).join(" · ")}</p></details>`;
     }
     body.innerHTML = `<div class="col">${head}${out}</div>`;

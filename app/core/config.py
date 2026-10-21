@@ -12,7 +12,7 @@
   AI_RELATION_LLM_PROVIDER / AI_RELATION_LLM_MODEL   관계 판정에만 다른 제공자·모델을 쓸 때
   인증은 각 회사 SDK 표준 변수: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY (또는 GOOGLE_API_KEY)
   AI_RELATION_CACHE       LLM 판정 캐시 폴더 (기본 data/private/cache/relations)
-  AI_EXPLAIN_LLM          1 이면 설명 생성 LLM 을 켠다 (기본 1). 지식 제안(explain-llm-6)은 LLM 으로만 하므로 끄면 /explanations 는 503
+  AI_EXPLAIN_LLM          1 이면 설명 생성 LLM 을 켠다 (기본 1). 지식 제안(explain-llm-8)은 LLM 으로만 하므로 끄면 /explanations 는 503
   AI_EXPLAIN_LLM_PROVIDER / AI_EXPLAIN_LLM_MODEL / AI_EXPLAIN_LLM_EFFORT
                           설명 생성에만 다른 제공자·모델·effort. 제공자가 정해지지 않았고 ANTHROPIC_API_KEY 가 있으면
                           anthropic · claude-opus-5-5 · effort medium
