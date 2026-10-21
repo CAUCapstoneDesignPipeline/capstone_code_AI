@@ -202,7 +202,8 @@ def test_note_links(client):
     assert (path["bridge"], path["target"], path["proposedTypeCode"]) == ("WAL", "복구", "used_for")
     s1, s2 = path["steps"]
     assert (s1["noteId"], s1["typeCode"], s2["noteId"], s2["typeCode"]) == (ids["a"], "part_of", ids["b"], "used_for")
-    for e in s1["evidence"] + s2["evidence"]:
+    assert "로그 버퍼는 메모리에 있다." in [e["quote"] for e in s1["context"]]      # 같은 절에서 단계 개념을 말하는 문장
+    for e in s1["evidence"] + s2["evidence"] + s1["context"] + s2["context"]:
         u = text[e["noteId"]].encode("utf-16-le")
         assert u[2 * e["startOffset"]:2 * e["endOffset"]].decode("utf-16-le") == e["quote"]
 

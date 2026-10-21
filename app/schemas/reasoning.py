@@ -259,6 +259,8 @@ class LinkStep(Closed):
     toLabel: Label
     typeCode: TypeCode
     evidence: Annotated[list[LinkSpan], Field(min_length=1, max_length=8)]
+    # 같은 절에서 이 단계의 개념을 말하는 다른 문장. /explanations 에 근거로 같이 보내면 설명이 인용해 풀어 쓴다
+    context: Annotated[list[LinkSpan], Field(max_length=6)] = []
 
 
 class LinkPath(Closed):

@@ -42,7 +42,7 @@ class ReasoningProfile:
 _ID = ("reasoning/identity.py", "reasoning/text.py",       # 문맥은 추출기의 명사구 후보라 그 코드도 넣는다
        "concepts/extract.py", "concepts/markdown.py", "concepts/config.py")
 _EX = ("reasoning/explain.py", "reasoning/text.py")
-_LINKS = ("links/corpus.py", "links/linker.py")
+_LINKS = ("links/corpus.py", "links/linker.py", "links/context.py")
 
 REASONING_PROFILES = {p.id: p for p in (
     ReasoningProfile("merge-det-1", "merge", "rules-identity", "merge-rules-1", _ID, ("extractor",)),

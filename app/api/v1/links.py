@@ -6,7 +6,8 @@ BE 가 그대로 쓸지, 자기 그래프에서 같은 방법을 구현할지, �
 무상태: BE 가 트리거 노트와 후보 노트(같은 사용자의 노트)를 보내면, 각 노트에서 개념·관계를 뽑아
   1. 노트 쌍 점수 (공유 개념의 드묾 가중 합, Adamic-Adar). minConfidence 이상인 개념만 쓴다 (양쪽 모두)
   2. 공유 개념(매개 B)마다 양쪽 노트의 근거 문장 (UTF-16 위치)
-  3. A —(한 노트 관계)→ B —(다른 노트 관계)→ C 경로 후보와 합성 규칙 결과 (proposedTypeCode)
+  3. A —(한 노트 관계)→ B —(다른 노트 관계)→ C 경로 후보와 합성 규칙 결과 (proposedTypeCode).
+     단계마다 근거 문장(evidence)과, 같은 절에서 그 단계의 개념을 말하는 문맥 문장(context)
 를 돌려준다. 경로의 각 단계 근거는 /extract 응답의 evidence 와 같은 구간이라 BE 가 저장한 relation·evidence UUID 로
 대응시킨 뒤 /verifications/* 와 /explanations 를 부를 수 있다.
 """
@@ -19,6 +20,7 @@ from app.core.errors import AiError
 from app.schemas.reasoning import LinkBridge, LinkPath, LinkSpan, LinkStep, LinksRequest, LinksResponse, NoteLink
 from app.services.concepts.markdown import Utf16Index
 from app.services.links import build_corpus, related_notes
+from app.services.links.context import context_spans
 from app.services.links.corpus import EntryMemo
 from app.services.links.linker import directed_paths
 
@@ -69,7 +71,8 @@ async def note_links(request: Request):
             x, code, y = e.relations[i]
             return LinkStep(stepOrder=order, noteId=nid, fromLabel=e.labels.get(x, x), toLabel=e.labels.get(y, y),
                             typeCode=code, evidence=[LinkSpan(noteId=nid, startOffset=s, endOffset=t, quote=q)
-                                                     for s, t, q in e.relation_evidence[i]])
+                                                     for s, t, q in e.relation_evidence[i]],
+                            context=[span(nid, sp) for sp in context_spans(e, i)])
 
         out = []
         for l in links:
