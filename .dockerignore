@@ -1,0 +1,15 @@
+# 허용 목록 방식: 이미지에 필요한 것만 보낸다. 노트(data/)·.env·실험 결과는 빌드 context 에도 들어가지 않는다
+*
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!README.md
+!app/
+!app/**
+!deploy/
+!deploy/healthcheck.py
+# 개발용 playground 는 로컬 노트를 읽으므로 배포 이미지에 넣지 않는다
+app/dev
+**/__pycache__
+**/*.pyc
