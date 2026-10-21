@@ -4,684 +4,666 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Playground</title>
-<!-- FE 와 같은 글꼴. FE 는 npm 패키지로 묶지만 여기서는 CDN 으로 읽는다 (오프라인이면 시스템 글꼴) -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap">
 <style>
-/*
- * 디자인 토큰: FE 저장소 src/index.css (Figma CAPSTONE "01 Foundations") 와 같은 값.
- * FE 토큰이 바뀌면 여기도 맞춘다.
- */
 :root {
-  --color-canvas: #f7f7f4;
-  --color-ink: #26251e;
-  --color-ink-muted: rgb(38 37 30 / 0.6);
-  --color-surface-card: #f2f1ed;
-  --color-surface-muted: #e6e5e0;
-  --color-surface-emphasis: #ebeae5;
-  --color-surface-selected: #e1e0db;
-  --color-accent-link: #f54e00;
-  --color-border-ghost: rgb(38 37 30 / 0.2);
-  --color-border-subtle: rgb(38 37 30 / 0.1);
-
-  --radius-card: 4px;
-  --radius-pill: 9999px;
-  --space-2: 2px; --space-4: 4px; --space-8: 8px; --space-12: 12px; --space-16: 16px;
-  --space-24: 24px; --space-32: 32px; --space-48: 48px; --space-64: 64px;
-
-  --layout-sidebar-width: 260px;
-  --layout-topbar-height: 44px;
-  --layout-editor-width: 700px;
-  --layout-panel-width: 300px;
-  --layout-row-height: 28px;
-  --layout-icon: 16px;
-
-  --font-ui: 'Pretendard Variable', Pretendard, 'Noto Sans KR', system-ui, sans-serif;
-  --font-code: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --text-content-h2: 700 22px/30px var(--font-ui);
-  --text-ui-button-compact: 400 14px/14px var(--font-ui);
-  --text-ui-body-sm: 400 14px/20px var(--font-ui);
-  --text-ui-body-sm-strong: 500 14px/20px var(--font-ui);
-  --text-ui-title-sm: 700 18px/26px var(--font-ui);
-  --text-ui-label: 400 13px/17px var(--font-ui);
-  --text-ui-label-strong: 500 13px/17px var(--font-ui);
-  --text-ui-caption: 400 12px/16px var(--font-ui);
-  --text-code-inline: 400 14px/20px var(--font-code);
-  --text-code-block: 400 14px/22px var(--font-code);
-
-  font: var(--text-ui-body-sm);
-  color: var(--color-ink);
-  background: var(--color-canvas);
-  -webkit-font-smoothing: antialiased;
+  --bg: #f6f6f3; --panel: #fff; --ink: #1d1d1b; --muted: #77766f; --line: #e3e2dc; --soft: #efeee9;
+  --accent: #3b5bdb; --accent-soft: #e7ecff; --mark: #fff1b8; --mark-on: #ffd43b; --err: #c92a2a;
 }
-*, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; }
-button, input, textarea, select { font: inherit; color: inherit; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9b9a93; --line: #34332f; --soft: #2a2a27;
+    --accent: #8ea4ff; --accent-soft: #263055; --mark: #4a4220; --mark-on: #8a6d00; --err: #ff8787;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", sans-serif; }
+button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
-button:disabled { cursor: default; }
 [hidden] { display: none !important; }
 
-/* Icon: FE components/Icon — SVG 를 mask 로 입혀 글자색을 따른다 */
-.icon { display: inline-block; flex: none; width: var(--layout-icon); height: var(--layout-icon);
-        background-color: currentColor; mask: var(--icon) center / var(--layout-icon) var(--layout-icon) no-repeat; }
-.i-note { --icon: url("/dev/static/icons/note.svg"); }
-.i-search { --icon: url("/dev/static/icons/search.svg"); }
-.i-check { --icon: url("/dev/static/icons/check.svg"); }
-.i-alert { --icon: url("/dev/static/icons/alert.svg"); }
-.i-info { --icon: url("/dev/static/icons/info.svg"); }
-.i-loader { --icon: url("/dev/static/icons/loader.svg"); }
-.i-topic { --icon: url("/dev/static/icons/topic.svg"); }
-.i-chevron { --icon: url("/dev/static/icons/chevron-down.svg"); }
-.i-pencil { --icon: url("/dev/static/icons/pencil.svg"); }
-.spin { animation: spin 1s linear infinite; }
+.app { display: grid; grid-template-columns: 260px minmax(0, 1fr); height: 100vh; }
+aside { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-right: 1px solid var(--line); }
+.search { margin: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--bg); }
+.notes { list-style: none; margin: 0; padding: 0 6px 12px; overflow: auto; flex: 1; }
+.notes button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 5px 8px; border-radius: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.notes button:hover { background: var(--soft); }
+.notes button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.api { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; padding: 3px; background: var(--bg); }
+.api button { border: 0; background: none; padding: 7px 16px; border-radius: 7px; font-weight: 600; color: var(--muted); }
+.api button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.thr { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); font-size: 13px; }
+.thr input { width: 160px; accent-color: var(--accent); }
+.thr b { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 34px; }
+
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; padding: 16px 20px; min-height: 0; flex: 1; overflow: hidden; }
+.body.single { grid-template-columns: minmax(0, 1fr); }
+.col { min-height: 0; overflow: auto; }
+h1 { font-size: 18px; margin: 0 0 10px; overflow-wrap: anywhere; }
+pre.text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.75;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+textarea { width: 100%; min-height: 60vh; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--panel); line-height: 1.7; }
+.m { background: var(--mark); border-radius: 3px; cursor: pointer; }
+.m.on { background: var(--mark-on); }
+
+.list { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.list li + li { border-top: 1px solid var(--line); }
+.row { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; text-align: left; padding: 7px 12px; }
+.row:hover { background: var(--soft); }
+.row[aria-current="true"] { background: var(--accent-soft); }
+.row .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conf { font-variant-numeric: tabular-nums; font-size: 13px; }
+.meter { width: 60px; height: 5px; border-radius: 3px; background: var(--soft); overflow: hidden; flex: none; }
+.meter i { display: block; height: 100%; background: var(--accent); }
+.invalid { opacity: .45; }
+.cut { padding: 6px 12px; font-size: 12px; color: var(--muted); background: var(--bg); }
+.count { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.cardHead { display: flex; align-items: center; gap: 10px; }
+.cardHead button { flex: 1; min-width: 0; border: 0; background: none; padding: 0; text-align: left; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cardHead button:hover { color: var(--accent); }
+.score { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip { border: 1px solid var(--line); border-radius: 99px; padding: 1px 10px; font-size: 13px; background: var(--bg); }
+.chip small { color: var(--muted); margin-left: 4px; font-variant-numeric: tabular-nums; }
+.status { flex: none; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 99px; }
+.status.candidate { background: #d3f9d8; color: #2b8a3e; }
+.status.hypothesis { background: #fff3bf; color: #946200; }
+.status.excluded { background: #ffe3e3; color: #c92a2a; }
+.know { font-size: 15px; font-weight: 600; margin: 8px 0 4px; }
+.path { font-size: 13px; color: var(--muted); }
+.path b { color: var(--ink); font-weight: 600; }
+.steps { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.steps li { font-size: 13px; }
+.quote { margin: 2px 0 0 10px; padding-left: 8px; border-left: 3px solid var(--accent); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.checks span { border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
+.graphWrap { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.graphWrap svg { display: block; width: 100%; height: auto; }
+.gEdge { stroke: var(--line); cursor: pointer; }
+.gEdge.center { stroke: var(--muted); }
+.gEdge.on { stroke: var(--accent); }
+.gHit { stroke: transparent; stroke-width: 16; cursor: pointer; }
+.gNode rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+.gNode.center rect { fill: var(--accent-soft); stroke: var(--accent); }
+.gNode.end rect { stroke: var(--accent); }
+.gNode { cursor: pointer; }
+.gNode text { fill: var(--ink); font-size: 13px; }
+.gLabel { fill: var(--muted); font-size: 11px; pointer-events: none; }
+.scope { display: inline-flex; gap: 4px; margin: 0 0 10px; }
+.scope button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 12px; font-size: 13px; color: var(--muted); }
+.scope button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.allWrap svg { cursor: grab; touch-action: none; }
+.aNode { cursor: pointer; }
+.aNode circle { fill: var(--muted); stroke: var(--panel); stroke-width: 1.5; }
+.aNode.cur circle { fill: var(--accent); }
+.aNode.sel circle { fill: var(--accent); stroke: var(--ink); stroke-width: 2; }
+.aNode.dim { opacity: .25; }
+.aNode text { fill: var(--ink); font-size: 11px; pointer-events: none; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
+.aEdge { stroke: var(--line); }
+.aEdge.hl { stroke: var(--muted); }
+.aEdge.on { stroke: var(--accent); }
+.aEdge.dim { opacity: .2; }
+.list2 { list-style: none; margin: 0; padding: 0; }
+.list2 button { display: flex; gap: 8px; width: 100%; text-align: left; border: 0; background: none; padding: 5px 2px; font-size: 13px; color: var(--ink); }
+.list2 button:hover { color: var(--accent); }
+.list2 small { color: var(--muted); margin-left: auto; }
+.linkBtn { border: 0; background: none; color: var(--accent); padding: 0; font-size: 12px; }
+.side h3 { font-size: 15px; margin: 0 0 4px; overflow-wrap: anywhere; }
+.side h4 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); }
+.side .note { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
+.side .chain { font-size: 13px; margin: 6px 0; }
+.side .rule { font-size: 11px; padding: 0 6px; border-radius: 99px; background: var(--soft); color: var(--muted); }
+.side .rule.yes { background: var(--accent-soft); color: var(--accent); }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+.error { color: var(--err); white-space: pre-wrap; }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%;
+  animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* App: 사이드바 260 + 본문 */
-.app { display: grid; grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr); height: 100vh; }
-.sidebarWrap { min-width: 0; min-height: 0; border-right: 1px solid var(--color-border-subtle); background: var(--color-surface-card); }
-.main { min-width: 0; min-height: 0; overflow: hidden; background: var(--color-canvas); display: flex; flex-direction: column; }
-
-/* Sidebar: FE features/sidebar */
-.sidebar { display: flex; flex-direction: column; gap: var(--space-4); height: 100%; padding: 0 var(--space-8) var(--space-12); }
-.header { display: flex; flex: none; align-items: center; gap: var(--space-8); height: var(--layout-topbar-height);
-          padding: 0 var(--space-8); font: var(--text-ui-body-sm-strong); }
-.sectionLabel { margin: 0; padding: var(--space-12) var(--space-8) var(--space-4); color: var(--color-ink-muted);
-                font: var(--text-ui-label-strong); }
-.list { margin: 0; padding: 0; list-style: none; }
-.scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.item { display: flex; align-items: center; gap: var(--space-4); width: 100%; height: var(--layout-row-height);
-        padding: 0 var(--space-8) 0 var(--space-4); border: 1px solid transparent; border-radius: var(--radius-card);
-        background: none; color: var(--color-ink); text-align: left; }
-.item:hover { background: var(--color-surface-emphasis); }
-.item[aria-current='true'] { background: var(--color-surface-selected); }
-.item:focus-visible { outline: 2px solid var(--color-ink); outline-offset: -2px; }
-.label { flex: 1; min-width: 0; overflow: hidden; font: var(--text-ui-body-sm); text-overflow: ellipsis; white-space: nowrap; }
-.hint { margin: 0; padding: var(--space-4) var(--space-8); color: var(--color-ink-muted); font: var(--text-ui-label); }
-.code { font: var(--text-ui-caption); color: var(--color-ink-muted); font-family: var(--font-code); }
-
-/* TextInput compact */
-.field { display: flex; flex: none; align-items: center; gap: var(--space-8); min-height: calc(var(--layout-row-height) + 2px);
-         padding: var(--space-4) var(--space-8); border: 1px solid var(--color-border-ghost); border-radius: var(--radius-card);
-         background: var(--color-canvas); color: var(--color-ink); }
-.field:focus-within { outline: 2px solid var(--color-ink); outline-offset: -1px; }
-.input { flex: 1; min-width: 0; padding: 0; border: none; background: none; font: var(--text-ui-body-sm); }
-.input:focus { outline: none; }
-.input::placeholder { color: var(--color-ink-muted); }
-.footer { flex: none; display: flex; flex-direction: column; gap: var(--space-4); padding-top: var(--space-8);
-          border-top: 1px solid var(--color-border-subtle); }
-
-/* Button: FE components/Button */
-.button { display: inline-flex; flex: none; align-items: center; border: 1px solid transparent; border-radius: var(--radius-pill);
-          background: none; color: var(--color-ink); white-space: nowrap; }
-.compact { gap: var(--space-4); padding: 6px calc(var(--space-12) - 1px); font: var(--text-ui-button-compact); }
-.primary { border-color: var(--color-ink); background: var(--color-ink); color: var(--color-canvas); }
-.secondary { background: var(--color-surface-muted); }
-.ghost { border-color: var(--color-border-ghost); }
-.button:disabled { border-color: transparent; background: var(--color-surface-selected); color: var(--color-ink-muted); }
-.button:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; }
-
-/* Dropdown: FE NoteEditor.module.css (dropdown / option / divider). 사이드바 아래라 위로 연다 */
-.dropdownRoot { position: relative; flex: none; }
-.trigger { display: flex; align-items: center; gap: var(--space-8); width: 100%; min-height: calc(var(--layout-row-height) + 2px);
-           padding: var(--space-4) var(--space-8); border: 1px solid var(--color-border-ghost); border-radius: var(--radius-card);
-           background: var(--color-canvas); color: var(--color-ink); text-align: left; }
-.trigger:hover { background: var(--color-surface-emphasis); }
-.trigger[aria-expanded='true'] { outline: 2px solid var(--color-ink); outline-offset: -1px; }
-.trigger:focus-visible { outline: 2px solid var(--color-ink); outline-offset: -1px; }
-.dropdown { position: absolute; bottom: calc(100% + var(--space-2)); left: 0; right: 0; z-index: 10; padding: var(--space-4);
-            border: 1px solid var(--color-border-ghost); border-radius: var(--radius-card); background: var(--color-surface-card); }
-.dropdownHeader { margin: 0; padding: var(--space-4) var(--space-8); color: var(--color-ink-muted); font: var(--text-ui-caption); }
-.optionList { margin: 0; padding: 0; list-style: none; }
-.option { display: flex; align-items: center; gap: var(--space-8); width: 100%; height: var(--layout-row-height); padding: 0 var(--space-8);
-          border: none; border-radius: var(--radius-card); background: none; color: var(--color-ink); font: var(--text-ui-body-sm); text-align: left; }
-.option:hover, .option:focus-visible, .option[aria-selected='true'] { background: var(--color-surface-selected); outline: none; }
-.optionLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.optionCheck { visibility: hidden; }
-.option[aria-selected='true'] .optionCheck { visibility: visible; }
-.dropdownDivider { padding: var(--space-4) 0; }
-.dropdownDivider::before { content: ''; display: block; height: 1px; background: var(--color-border-subtle); }
-.llmForm { display: flex; flex-direction: column; gap: var(--space-4); }
-.formRow { display: flex; gap: var(--space-8); align-items: center; justify-content: flex-end; }
-.status { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-2) var(--space-8); font: var(--text-ui-caption); color: var(--color-ink-muted); }
-.status.err { color: var(--color-ink); }
-
-/* Badge */
-.badge { flex: none; padding: var(--space-2) var(--space-8); border-radius: var(--radius-pill); background: var(--color-surface-muted);
-         color: var(--color-ink-muted); font: var(--text-ui-caption); }
-
-/* Editor/TopBar: 높이 44, 왼쪽 12, 오른쪽 16 */
-.topBar { display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-8);
-          height: var(--layout-topbar-height); padding: 0 var(--space-16) 0 var(--space-12); border-bottom: 1px solid var(--color-border-subtle); }
-.breadcrumb { display: flex; align-items: center; gap: var(--space-4); min-width: 0; }
-.breadcrumbSeparator { color: var(--color-ink-muted); }
-.breadcrumbTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.muted { color: var(--color-ink-muted); }
-.actions { display: flex; flex: none; align-items: center; gap: var(--space-8); }
-/* DropdownTrigger 모양의 select */
-.select { appearance: none; padding: var(--space-4) calc(var(--space-8) + 20px) var(--space-4) var(--space-8); border: none;
-          border-radius: var(--radius-card); color: var(--color-ink-muted); font: var(--text-ui-body-sm);
-          background: no-repeat right 6px center / 16px; cursor: pointer; }
-.selectWrap { position: relative; display: inline-flex; align-items: center; }
-.selectWrap .icon { position: absolute; right: 6px; pointer-events: none; color: var(--color-ink-muted); }
-.select:hover { background-color: var(--color-surface-selected); }
-.select:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; }
-
-/* 본문 + 오른쪽 패널 300 */
-.body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--layout-panel-width); }
-.content { min-width: 0; overflow-y: auto; padding: var(--space-48) var(--space-32) var(--space-64); }
-.contentInner { display: flex; flex-direction: column; gap: var(--space-16); max-width: var(--layout-editor-width); margin: 0 auto; }
-.panel { min-height: 0; overflow-y: auto; border-left: 1px solid var(--color-border-subtle); background: var(--color-surface-card);
-         padding: 0 var(--space-8) var(--space-16); }
-.title { margin: 0; font: var(--text-content-h2); word-break: break-word; }
-.meta { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; }
-
-/* 원문: 코드 글꼴로 마크다운 그대로. 위치(offset) 가 원문 그대로라서 렌더링하지 않는다 */
-.source { margin: 0; white-space: pre-wrap; word-break: break-word; font: var(--text-code-block); }
-.editor { width: 100%; min-height: 60vh; padding: var(--space-12); border: 1px solid var(--color-border-ghost);
-          border-radius: var(--radius-card); background: var(--color-canvas); font: var(--text-code-block); resize: vertical; }
-.editor:focus { outline: 2px solid var(--color-ink); outline-offset: -1px; }
-.editor::placeholder { color: var(--color-ink-muted); }
-.editorMeta { display: flex; gap: var(--space-8); align-items: center; color: var(--color-ink-muted); font: var(--text-ui-label); }
-/* 개념 언급: 검색어 mark 와 같은 surface-selected. 선택하면 ink 반전. 근거 문장: drop-target 처럼 ink 1px 테두리 */
-.c { border-radius: 2px; background: var(--color-surface-selected); cursor: pointer; }
-.c:hover { background: var(--color-surface-muted); }
-.c.sel { background: var(--color-ink); color: var(--color-canvas); }
-.ev { border-radius: 2px; box-shadow: 0 0 0 1px var(--color-ink); background: var(--color-surface-emphasis); }
-
-/* 패널 목록 행 */
-.row { display: flex; align-items: center; gap: var(--space-8); width: 100%; min-height: var(--layout-row-height);
-       padding: var(--space-4) var(--space-8); border: none; border-radius: var(--radius-card); background: none;
-       color: var(--color-ink); text-align: left; }
-.row:hover { background: var(--color-surface-emphasis); }
-.row[aria-current='true'] { background: var(--color-surface-selected); }
-.row:focus-visible { outline: 2px solid var(--color-ink); outline-offset: -2px; }
-.rel { display: flex; flex-direction: column; gap: var(--space-2); flex: 1; min-width: 0; }
-.relLine { font: var(--text-ui-body-sm); word-break: break-word; }
-.type { font: var(--text-ui-caption); font-family: var(--font-code); color: var(--color-ink-muted); }
-.quote { margin: var(--space-4) var(--space-8) var(--space-8); padding-left: var(--space-8); border-left: 2px solid var(--color-ink);
-         color: var(--color-ink-muted); font: var(--text-ui-label); word-break: break-word; }
-
-/* Banner (alert) */
-.banner { display: flex; align-items: flex-start; gap: var(--space-12); padding: var(--space-12) var(--space-16);
-          border: 1px solid var(--color-ink); border-radius: var(--radius-card); background: var(--color-surface-card); }
-.banner .icon { margin-top: var(--space-2); }
-.bannerText { display: flex; flex: 1; flex-direction: column; gap: var(--space-2); min-width: 0; }
-.bannerTitle { margin: 0; font: var(--text-ui-body-sm-strong); }
-.bannerDesc { margin: 0; color: var(--color-ink-muted); font: var(--text-ui-body-sm); white-space: pre-wrap; word-break: break-word; }
-
-/* Empty: NotePane — 가운데, 항목 사이 16 */
-.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-16);
-         min-height: 50vh; text-align: center; }
-.emptyTitle { margin: 0; font: var(--text-ui-title-sm); }
-.emptyText { margin: 0; color: var(--color-ink-muted); }
-
-details { margin-top: var(--space-8); }
-summary { padding: var(--space-4) var(--space-8); border-radius: var(--radius-card); color: var(--color-ink-muted);
-          font: var(--text-ui-label-strong); cursor: pointer; }
-summary:hover { background: var(--color-surface-emphasis); }
-.json { margin: var(--space-4) 0 0; max-height: 50vh; overflow: auto; padding: var(--space-8); border: 1px solid var(--color-border-subtle);
-        border-radius: var(--radius-card); background: var(--color-canvas); font: var(--text-ui-caption); font-family: var(--font-code);
-        white-space: pre-wrap; word-break: break-all; }
-.textarea { width: 100%; padding: var(--space-8); border: 1px solid var(--color-border-ghost); border-radius: var(--radius-card);
-            background: var(--color-canvas); font: var(--text-ui-caption); font-family: var(--font-code); resize: vertical; }
-.textarea:focus { outline: 2px solid var(--color-ink); outline-offset: -1px; }
-.check { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-4) var(--space-8); font: var(--text-ui-label); }
-
-/* 임베딩 유사도 표 */
-.matrix { border-collapse: collapse; font: var(--text-ui-label); }
-.matrix th, .matrix td { padding: var(--space-4) var(--space-8); border-bottom: 1px solid var(--color-border-subtle); }
-.matrix th { color: var(--color-ink-muted); font: var(--text-ui-label-strong); text-align: left; white-space: nowrap; }
-.matrix td { text-align: center; font-family: var(--font-code); }
-.tableWrap { overflow-x: auto; }
-
-@media (max-width: 1000px) {
-  .body { grid-template-columns: minmax(0, 1fr); }
-  .panel { border-left: none; border-top: 1px solid var(--color-border-subtle); }
-}
-@media (max-width: 720px) {
-  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; height: auto; min-height: 100vh; }
-  .sidebarWrap { border-right: none; border-bottom: 1px solid var(--color-border-subtle); max-height: 45vh; }
-  .main { overflow: visible; }
-  .content { padding: var(--space-24) var(--space-16) var(--space-48); }
-  /* 상단바가 넘치면 줄바꿈하고, 사이드바의 경로 표시는 숨긴다 */
-  .topBar { flex-wrap: wrap; height: auto; min-height: var(--layout-topbar-height); padding: var(--space-8) var(--space-16); }
-  .actions { flex-wrap: wrap; }
-  .item .code { display: none; }
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 200px minmax(0, 1fr); }
+  aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  .bar { padding: 10px 16px; }
+  .thr { margin-left: 0; }
+  .body { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; overflow: auto; }
+  .col { overflow: visible; }
 }
 </style>
 </head>
 <body>
 <div class="app">
-  <div class="sidebarWrap">
-    <nav class="sidebar" aria-label="플레이그라운드">
-      <div class="header">AI Playground <span class="badge">dev</span></div>
-
-      <p class="sectionLabel">API</p>
-      <ul class="list">
-        <li><button class="item" data-view="extract" aria-current="true"><span class="icon i-topic"></span><span class="label">개념 추출</span><span class="code">/extract</span></button></li>
-        <li><button class="item" data-view="embed" aria-current="false"><span class="icon i-topic"></span><span class="label">임베딩</span><span class="code">/embeddings</span></button></li>
-      </ul>
-
-      <div id="notesSection" class="scroll" style="display:flex;flex-direction:column;gap:var(--space-4)">
-        <p class="sectionLabel">노트 <span id="noteCount"></span></p>
-        <label class="field"><span class="icon i-search muted"></span>
-          <input id="noteSearch" class="input" type="search" placeholder="노트 검색" autocomplete="off"></label>
-        <ul class="list"><li><button class="item" id="freeItem" aria-current="false">
-          <span class="icon i-pencil"></span><span class="label">직접 입력</span></button></li></ul>
-        <ul class="list" id="noteList"></ul>
+  <aside>
+    <input class="search" id="search" placeholder="노트 검색" autocomplete="off">
+    <ul class="notes" id="notes"></ul>
+  </aside>
+  <main>
+    <div class="bar">
+      <div class="api" role="group" aria-label="API">
+        <button data-mode="concepts" aria-pressed="false">개념 추출</button>
+        <button data-mode="links" aria-pressed="false">관계 연결</button>
+        <button data-mode="suggest" aria-pressed="false">지식 제안</button>
       </div>
-
-      <div class="footer">
-        <p class="sectionLabel" style="padding-top:var(--space-4)">LLM 모델 <span style="font-weight:400">· 관계 판정</span></p>
-        <div class="dropdownRoot" id="llmRoot">
-          <button class="trigger" id="llmTrigger" aria-haspopup="listbox" aria-expanded="false">
-            <span class="icon i-topic muted"></span><span class="label" id="llmLabel">규칙만 (LLM 없음)</span>
-            <span class="icon i-chevron muted"></span></button>
-          <div class="dropdown" id="llmMenu" role="listbox" aria-label="LLM 모델" hidden>
-            <p class="dropdownHeader">관계 판정에 쓸 모델</p>
-            <ul class="optionList" id="llmOptions"></ul>
-          </div>
-        </div>
-        <form class="llmForm" id="llmForm" hidden autocomplete="off">
-          <label class="field"><input id="llmKey" class="input" type="password" placeholder="API 키" autocomplete="off"></label>
-          <label class="field"><input id="llmModel" class="input" type="text" placeholder="모델 id" autocomplete="off" spellcheck="false"></label>
-          <div class="formRow"><button class="button compact primary" id="llmApply" type="submit">적용</button></div>
-        </form>
-        <p class="status" id="llmStatus" hidden></p>
-        <details><summary>서비스 토큰 (BE↔AI 인증)</summary>
-          <p class="hint">BE 가 이 AI 서버를 부를 때 쓰는 비밀값이다. 모델 선택과는 상관없고, 로컬에서는 자동으로 채워진다.</p>
-          <label class="field"><input id="token" class="input" type="password" placeholder="AI_SERVICE_TOKEN" autocomplete="off"></label>
-        </details>
-      </div>
-    </nav>
-  </div>
-
-  <main class="main">
-    <div class="topBar">
-      <div class="breadcrumb">
-        <span class="muted" id="crumbApi">개념 추출</span>
-        <span class="breadcrumbSeparator">/</span>
-        <span class="breadcrumbTitle" id="crumbTitle">—</span>
-      </div>
-      <div class="actions">
-        <span class="selectWrap"><select id="profile" class="select" aria-label="profile"></select><span class="icon i-chevron"></span></span>
-        <button class="button compact ghost" id="editBtn">원문 편집</button>
-        <button class="button compact primary" id="runBtn"><span class="icon i-check" id="runIcon"></span><span id="runText">실행</span></button>
-      </div>
+      <label class="thr">유효 개념 신뢰도 ≥
+        <input type="range" id="thr" min="0.25" max="1" step="0.01" value="0.35"><b id="thrVal">0.35</b></label>
     </div>
-
-    <!-- 개념 추출 -->
-    <div class="body" id="viewExtract">
-      <div class="content"><div class="contentInner" id="extractMain">
-        <div class="empty"><p class="emptyTitle">노트를 고르고 실행한다</p>
-          <p class="emptyText">개념은 회색으로, 관계를 누르면 근거 문장이 테두리로 표시된다.</p></div>
-      </div></div>
-      <aside class="panel" id="extractPanel">
-        <p class="sectionLabel">요청 설정</p>
-        <label class="check"><input type="checkbox" id="addAnalog" checked> analogous_to 추가</label>
-        <details><summary>관계 유형 (policy.relationTypes)</summary>
-          <textarea class="textarea" id="types" rows="12"></textarea></details>
-        <div id="extractResult"></div>
-      </aside>
-    </div>
-
-    <!-- 임베딩 -->
-    <div class="body" id="viewEmbed" hidden>
-      <div class="content"><div class="contentInner">
-        <h1 class="title">임베딩 유사도</h1>
-        <p class="muted" style="margin:0">한 줄에 하나. BE 템플릿처럼 "개념: 문맥" 형식을 권장한다.</p>
-        <textarea class="editor" id="eitems" style="min-height:180px">교착 상태: 서로 자원을 기다리며 멈춤
-Deadlock: 서로 자원을 기다리며 멈춤
-페이지 캐시: 디스크 블록을 메모리에 둠
-Bellman 방정식: 가치 함수의 재귀식
-벨만 방정식: 가치 함수의 재귀식</textarea>
-        <div id="embedMain"></div>
-      </div></div>
-      <aside class="panel" id="embedPanel">
-        <p class="sectionLabel">안내</p>
-        <p class="hint">코사인 유사도 표다. BE 는 이 값과 임계값으로 병합 후보를 고른다.</p>
-        <p class="hint">embeddings-hash-dev-1 은 글자가 겹칠 때만 높게 나온다. 한국어↔영어 표기는 잇지 못한다.</p>
-        <div id="embedMeta"></div>
-      </aside>
-    </div>
+    <div class="body single" id="body"><p class="empty">노트를 고른다</p></div>
   </main>
 </div>
 
 <script>
 const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-let CFG = null, NOTES = [], VIEW = "extract", NOTE_ID = null, ORIGINAL = "", EDITING = false, LAST = null;
-// 직접 입력: 노트 파일 없이 붙여넣은 글. 서버·브라우저 저장소에 남기지 않고 이 탭의 메모리에만 둔다
-const FREE = "\u0000free", MAX_BODY = 50000;
-let FREE_TEXT = "";
-const displayName = (id) => (id === FREE ? "직접 입력" : id || "—");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const FREE = "\u0000free";
+const S = { cfg: null, notes: [], note: null, text: "", free: "", mode: null, thr: 0.35, concepts: null, links: null, sel: null, edge: null, run: 0,
+            scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 } };
+const name = (id) => (id === FREE ? "직접 입력" : id);
+const valid = (c) => c.confidence >= S.thr;
 
-// ---------- 계약 헤더를 계산해 내부 API 호출 (BE 와 같은 요청) ----------
-async function sha256Hex(bytes) {
-  const h = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-function context(noteId) {
-  return { analysisJobId: crypto.randomUUID(), stageExecutionId: crypto.randomUUID(), userId: crypto.randomUUID(),
-           noteId, noteVersion: 1, inputRevision: 1, graphRevision: 1, pipelineVersion: "playground-1" };
-}
-async function callApi(path, body) {
-  const raw = new TextEncoder().encode(JSON.stringify(body));
-  const headers = { "Authorization": "Bearer " + $("#token").value.trim(), "Content-Type": "application/json",
-    "X-Request-Id": crypto.randomUUID(), "X-Attempt-Id": crypto.randomUUID(),
-    "Idempotency-Key": body.context.stageExecutionId, "X-Input-SHA256": await sha256Hex(raw) };
-  const t0 = performance.now();
-  const res = await fetch(CFG.apiPrefix + path, { method: "POST", headers, body: raw });
-  const data = await res.json().catch(() => null);
-  return { ok: res.ok, status: res.status, data, ms: Math.round(performance.now() - t0), requestId: res.headers.get("X-Request-Id") };
-}
-function banner(title, desc) {
-  return `<div class="banner" role="alert"><span class="icon i-alert"></span><div class="bannerText">
-    <p class="bannerTitle">${esc(title)}</p><p class="bannerDesc">${esc(desc)}</p></div></div>`;
-}
-function errorBanner(r) {
-  const e = r.data && r.data.error;
-  if (!e) return banner(`HTTP ${r.status}`, JSON.stringify(r.data));
-  const details = (e.details || []).map((d) => `${d.field} · ${d.reason}`).join("\n");
-  return banner(`${r.status} ${e.code}`, e.message + (details ? "\n" + details : "") + (e.retryable ? "\n(재시도 가능)" : ""));
-}
-function setRunning(on) {
-  $("#runBtn").disabled = on;
-  $("#runIcon").className = on ? "icon i-loader spin" : "icon i-check";
-  $("#runText").textContent = on ? "실행 중" : "실행";
-}
-
-// ---------- 초기화 ----------
+// ---------- 노트 ----------
 async function init() {
-  CFG = await (await fetch("/dev/config")).json();
-  let saved = null;
-  try { saved = localStorage.getItem("ai-playground-token"); } catch (e) {}
-  $("#token").value = CFG.token || saved || "";
-  $("#token").addEventListener("change", () => { try { localStorage.setItem("ai-playground-token", $("#token").value); } catch (e) {} });
-  $("#types").value = JSON.stringify(CFG.relationTypes, null, 1);
-  LLM = CFG.llm; PICK = LLM ? LLM.provider : null;
-  renderLlm();
-  NOTES = await (await fetch("/dev/notes")).json();
+  S.cfg = await (await fetch("/dev/config")).json();
+  S.notes = await (await fetch("/dev/notes")).json();
+  fetch("/dev/index");                                    // 노트 사이 연결 색인을 미리 만든다
   renderNotes();
-  setView("extract");
-  const first = NOTES.find((n) => n === "DB-WAL") || NOTES[0];
-  if (first) await selectNote(first);
+  await openNote(S.notes.find((n) => n === "DB-WAL") || S.notes[0] || FREE);
+  setMode("concepts");
 }
-
 function renderNotes() {
-  const q = $("#noteSearch").value.normalize("NFC").trim().toLowerCase();
-  const shown = NOTES.filter((n) => !q || n.toLowerCase().includes(q));
-  $("#noteCount").textContent = `${shown.length}`;
-  $("#noteList").innerHTML = shown.map((n) => `<li><button class="item" data-note="${esc(n)}" aria-current="${n === NOTE_ID}" title="${esc(n)}">
-    <span class="icon i-note"></span><span class="label">${esc(n)}</span></button></li>`).join("")
-    || `<li><p class="hint">일치하는 노트가 없다</p></li>`;
-  document.querySelectorAll("[data-note]").forEach((b) => b.addEventListener("click", () => selectNote(b.dataset.note)));
-  $("#freeItem").setAttribute("aria-current", NOTE_ID === FREE);
+  const q = $("#search").value.normalize("NFC").trim().toLowerCase();
+  const items = [FREE, ...S.notes.filter((n) => !q || n.toLowerCase().includes(q))];
+  $("#notes").innerHTML = items.map((n) => `<li><button data-note="${n === FREE ? "" : esc(n)}" aria-current="${n === S.note}" title="${esc(name(n))}">
+    ${n === FREE ? "✎ " : ""}${esc(name(n))}</button></li>`).join("");
+  document.querySelectorAll("[data-note]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.note || FREE).then(run)));
 }
-$("#freeItem").addEventListener("click", selectFree);
+$("#search").addEventListener("input", renderNotes);
 
-function rememberFree() {               // 직접 입력에서 다른 곳으로 갈 때 쓰던 글을 남긴다
-  if (NOTE_ID === FREE) FREE_TEXT = EDITING && $("#noteEditor") ? $("#noteEditor").value : ORIGINAL;
+async function openNote(id) {
+  if (S.note === FREE) S.free = $("#free")?.value ?? S.free;
+  S.note = id; S.concepts = null; S.links = null; S.suggest = null; S.sel = null;
+  S.text = id === FREE ? S.free : (await (await fetch("/dev/notes/" + encodeURIComponent(id))).json()).body;
+  renderNotes(); render();
 }
-function selectFree() {
-  rememberFree();
-  NOTE_ID = FREE; ORIGINAL = FREE_TEXT; LAST = null; EDITING = true;
-  renderNotes(); renderExtractMain(); $("#extractResult").innerHTML = "";
-  $("#crumbTitle").textContent = displayName(FREE);
-  $("#noteEditor")?.focus();
-}
-$("#noteSearch").addEventListener("input", renderNotes);
-
-async function selectNote(id) {
-  rememberFree();
-  const r = await (await fetch("/dev/notes/" + encodeURIComponent(id))).json();
-  NOTE_ID = id; ORIGINAL = r.body; LAST = null; EDITING = false;
-  renderNotes(); renderExtractMain(); $("#extractResult").innerHTML = "";
-  $("#crumbTitle").textContent = id;
+function currentText() {
+  if (S.note === FREE) S.free = S.text = ($("#free")?.value ?? S.free).normalize("NFC");
+  return S.text;
 }
 
-function setView(v) {
-  VIEW = v;
-  document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-current", b.dataset.view === v));
-  $("#viewExtract").hidden = v !== "extract";
-  $("#viewEmbed").hidden = v !== "embed";
-  $("#notesSection").hidden = v !== "extract";
-  $("#editBtn").hidden = v !== "extract";
-  $("#crumbApi").textContent = v === "extract" ? "개념 추출" : "임베딩";
-  $("#crumbTitle").textContent = v === "extract" ? displayName(NOTE_ID) : "/embeddings";
-  const opts = v === "extract"
-    ? CFG.extractProfiles.map((p) => `<option value="${p.id}" ${p.default ? "selected" : ""}>${p.id}</option>`)
-    : CFG.embeddingProfiles.map((p) => `<option value="${p.id}" data-dims="${p.dims}" ${p.loaded ? "" : "disabled"}>${p.id}${p.loaded ? "" : " (꺼짐)"}</option>`);
-  $("#profile").innerHTML = opts.join("");
-  if (CFG.llmProviders) renderLlm();
+// ---------- API 버튼: 누르면 바로 실행 ----------
+function setMode(m) {
+  S.mode = m;
+  document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.mode === m));
+  run();
 }
-document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
 
-$("#editBtn").addEventListener("click", () => {
-  if (EDITING) { ORIGINAL = $("#noteEditor").value; if (NOTE_ID === FREE) FREE_TEXT = ORIGINAL; }
-  EDITING = !EDITING; LAST = null; $("#extractResult").innerHTML = "";
-  renderExtractMain();
-});
-$("#runBtn").addEventListener("click", () => (VIEW === "extract" ? runExtract() : runEmbed()));
-
-// ---------- LLM 모델 고르기 (관계 판정, extract-hybrid-1) ----------
-// 키는 서버 메모리에만 보낸다. 브라우저 저장소에 남기지 않고, 적용하면 입력칸을 비운다.
-let LLM = null, PICK = null;
-const providerById = (id) => CFG.llmProviders.find((p) => p.id === id);
-
-function renderLlm() {
-  const pending = PICK && (!LLM || LLM.provider !== PICK);    // 골랐지만 아직 적용하지 않음
-  $("#llmLabel").textContent = pending ? `${providerById(PICK).label} — 적용 전`
-    : LLM ? `${providerById(LLM.provider).label} · ${LLM.model}` : "규칙만 (LLM 없음)";
-  const opts = [{ id: "", label: "규칙만 (LLM 없음)" }, ...CFG.llmProviders];
-  $("#llmOptions").innerHTML = opts.map((o, i) => `${i === 1 ? '<li class="dropdownDivider" role="separator"></li>' : ""}
-    <li><button class="option" role="option" data-provider="${o.id}" aria-selected="${(PICK || "") === o.id}">
-      <span class="icon i-check optionCheck"></span><span class="optionLabel">${esc(o.label)}</span></button></li>`).join("");
-  document.querySelectorAll("[data-provider]").forEach((b) => b.addEventListener("click", () => pickProvider(b.dataset.provider)));
-  const p = PICK && providerById(PICK);
-  $("#llmForm").hidden = !p;
-  if (p) {
-    $("#llmKey").placeholder = `API 키 (비우면 서버의 ${p.keyEnv})`;
-    $("#llmModel").placeholder = p.defaultModel ? `모델 id (기본 ${p.defaultModel})` : "모델 id (필수)";
-    if (LLM && LLM.provider === PICK && !$("#llmModel").value) $("#llmModel").value = LLM.model;
-  }
-  // 추출 profile 목록에 hybrid 가 LLM 을 필요로 함을 표시
-  const hybrid = $("#profile").querySelector('option[value="extract-hybrid-1"]');
-  if (hybrid) hybrid.textContent = "extract-hybrid-1" + (LLM ? "" : " (LLM 필요)");
-}
-
-function setMenu(open) {
-  $("#llmMenu").hidden = !open;
-  $("#llmTrigger").setAttribute("aria-expanded", open);
-  if (open) (document.querySelector('.option[aria-selected="true"]') || document.querySelector(".option"))?.focus();
-}
-$("#llmTrigger").addEventListener("click", () => setMenu($("#llmMenu").hidden));
-document.addEventListener("click", (e) => { if (!$("#llmRoot").contains(e.target)) setMenu(false); });
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("#llmMenu").hidden) { setMenu(false); $("#llmTrigger").focus(); }
-  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !$("#llmMenu").hidden) {
-    const opts = [...document.querySelectorAll(".option")];
-    const i = opts.indexOf(document.activeElement);
-    opts[(i + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length].focus();
-    e.preventDefault();
-  }
+let thrTimer;
+$("#thr").addEventListener("input", (e) => {
+  S.thr = Number(e.target.value);
+  $("#thrVal").textContent = S.thr.toFixed(2);
+  if (S.mode === "concepts") render();                    // 개념은 화면에서 바로 다시 가른다
+  else if (S.mode === "suggest") { clearTimeout(thrTimer); thrTimer = setTimeout(run, 400); }
+  else { clearTimeout(thrTimer); thrTimer = setTimeout(run, 250); }   // 연결은 유효 개념이 바뀌었으니 다시 찾는다
 });
 
-function llmStatus(text, isErr = false) {
-  const el = $("#llmStatus");
-  el.hidden = !text;
-  el.className = "status" + (isErr ? " err" : "");
-  el.innerHTML = text ? `<span class="icon ${isErr ? "i-alert" : "i-check"}"></span><span>${esc(text)}</span>` : "";
-}
+function run() { return ({ links: () => (S.scope === "all" ? runAll() : runLinks()), suggest: runSuggest })[S.mode]?.() ?? runConcepts(); }
 
-async function pickProvider(id) {
-  setMenu(false);
-  if (!id) {                                   // 규칙만: 서버의 LLM 을 끈다
-    const r = await fetch("/dev/llm", { method: "DELETE" });
-    LLM = (await r.json()).llm; PICK = null;
-    if ($("#profile").value === "extract-hybrid-1") $("#profile").value = "extract-det-2";
-    llmStatus("LLM 을 껐다. 규칙만 쓴다.");
-    renderLlm(); return;
-  }
-  if (PICK !== id) { $("#llmModel").value = ""; $("#llmKey").value = ""; }
-  PICK = id; llmStatus("");
-  renderLlm();
-  $("#llmKey").focus();
-}
-
-$("#llmForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const btn = $("#llmApply"); btn.disabled = true; btn.textContent = "적용 중";
+async function runSuggest() {
+  const text = currentText();
+  if (!text.trim()) { S.suggest = null; return render(); }
+  const r = ++S.run;
+  S.suggest = "loading"; render();
+  const body = { k: 5, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
   try {
-    const r = await fetch("/dev/llm", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider: PICK, model: $("#llmModel").value.trim(), apiKey: $("#llmKey").value.trim() }) });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) { llmStatus(data.detail || `HTTP ${r.status}`, true); return; }
-    LLM = data.llm; $("#llmKey").value = "";
-    if (VIEW === "extract") $("#profile").value = "extract-hybrid-1";
-    llmStatus(`연결했다: ${LLM.model}. extract-hybrid-1 로 실행하면 쓴다.`);
-    renderLlm();
-  } catch (err) { llmStatus(String(err), true); }
-  finally { btn.disabled = false; btn.textContent = "적용"; }
-});
+    const res = await fetch("/dev/suggest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (r !== S.run) return;
+    S.suggest = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+  } catch (e) { if (r === S.run) S.suggest = { error: String(e) }; }
+  render();
+}
 
-// ---------- 개념 추출 ----------
-function currentText() { return (EDITING ? $("#noteEditor").value : ORIGINAL).normalize("NFC"); }
+async function sha256Hex(bytes) {
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
-async function runExtract() {
-  let types;
-  try { types = JSON.parse($("#types").value); }
-  catch (e) { $("#extractResult").innerHTML = banner("관계 유형 JSON 오류", e.message); return; }
-  if ($("#addAnalog").checked && !types.some((t) => t.code === "analogous_to"))
-    types.push({ code: "analogous_to", label: "유사", description: "두 개념이 비슷한 원리로 동작한다" });
-  const text = currentText();                               // 계약: 원문은 NFC
-  if (!text.trim()) { $("#extractResult").innerHTML = banner("글이 비어 있다", "개념을 뽑을 글을 입력하거나 붙여넣는다."); return; }
-  if (text.length > MAX_BODY) { $("#extractResult").innerHTML = banner("글이 너무 길다", `노트 본문은 ${MAX_BODY.toLocaleString()}자까지다 (지금 ${text.length.toLocaleString()}자).`); return; }
-  if (EDITING) { ORIGINAL = text; EDITING = false; }
-  if (NOTE_ID === FREE) FREE_TEXT = text;
-  const noteId = crypto.randomUUID();
-  const req = { context: context(noteId), profileVersion: $("#profile").value,
-    note: { noteId, noteVersion: 1, inputRevision: 1, title: displayName(NOTE_ID).slice(0, 200), body: text,
+async function runConcepts() {
+  const text = currentText();
+  if (!text.trim()) { S.concepts = null; return render(); }
+  const r = ++S.run;
+  S.concepts = "loading"; render();
+  const id = crypto.randomUUID();
+  const types = [...S.cfg.relationTypes, { code: "analogous_to", label: "유사", description: "두 개념이 비슷한 원리로 동작한다" }];
+  const ctx = { analysisJobId: crypto.randomUUID(), stageExecutionId: crypto.randomUUID(), userId: crypto.randomUUID(),
+                noteId: id, noteVersion: 1, inputRevision: 1, graphRevision: 1, pipelineVersion: "playground" };
+  const body = { context: ctx, profileVersion: S.cfg.extractProfiles.find((p) => p.default).id,
+    note: { noteId: id, noteVersion: 1, inputRevision: 1, title: name(S.note).slice(0, 200), body: text,
             bodySha256: await sha256Hex(new TextEncoder().encode(text)), topic: { id: null, name: "미분류" } },
-    policy: { version: "playground-1", relationTypes: types, compositionRules: [] } };
-  setRunning(true);
+    policy: { version: "playground", relationTypes: types, compositionRules: [] } };
+  const raw = new TextEncoder().encode(JSON.stringify(body));
   try {
-    const r = await callApi("/extract", req);
-    if (!r.ok) { LAST = null; renderExtractMain(); $("#extractResult").innerHTML = errorBanner(r); return; }
-    LAST = { text, data: r.data, ms: r.ms, requestId: r.requestId, sel: null, rel: null };
-    renderExtractMain(); renderExtractPanel();
-  } catch (e) { $("#extractResult").innerHTML = banner("요청 실패", String(e)); }
-  finally { setRunning(false); }
+    const res = await fetch(S.cfg.apiPrefix + "/extract", { method: "POST", body: raw, headers: {
+      "Authorization": "Bearer " + (S.cfg.token || ""), "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID(),
+      "X-Attempt-Id": crypto.randomUUID(), "Idempotency-Key": ctx.stageExecutionId, "X-Input-SHA256": await sha256Hex(raw) } });
+    const data = await res.json().catch(() => null);
+    if (r !== S.run) return;
+    S.concepts = res.ok ? data.concepts : { error: data?.error ? `${data.error.code}: ${data.error.message}` : `HTTP ${res.status}` };
+  } catch (e) { if (r === S.run) S.concepts = { error: String(e) }; }
+  render();
 }
 
-function renderExtractMain() {
-  const free = NOTE_ID === FREE;
-  $("#editBtn").textContent = EDITING ? "편집 끝" : free ? "글 편집" : "원문 편집";
-  if (!NOTE_ID) return;
-  const head = `<h1 class="title">${esc(displayName(NOTE_ID))}</h1>`;
-  if (EDITING) {
-    const ph = free ? "개념을 뽑을 글을 쓰거나 붙여넣는다. 마크다운도 된다." : "";
-    $("#extractMain").innerHTML = head + `<textarea class="editor" id="noteEditor" spellcheck="false" placeholder="${ph}">${esc(ORIGINAL)}</textarea>
-      <div class="editorMeta"><span class="badge" id="charCount"></span><span>⌘/Ctrl + Enter 로 실행</span></div>`;
-    const ed = $("#noteEditor");
-    const count = () => {
-      const n = ed.value.length;
-      $("#charCount").textContent = `${n.toLocaleString()}자` + (n > MAX_BODY ? ` · ${MAX_BODY.toLocaleString()}자 초과` : "");
+async function runLinks() {
+  const text = currentText();
+  if (!text.trim()) { S.links = null; return render(); }
+  const r = ++S.run;
+  S.links = "loading"; render();
+  const body = { k: 8, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
+  try {
+    const res = await fetch("/dev/graph", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (r !== S.run) return;
+    S.links = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+    if (res.ok) {                                   // 처음에는 가운데 노트와 가장 강한 선을 골라 둔다
+      const first = data.edges.filter((e) => e.a === data.center || e.b === data.center).sort((x, y) => y.score - x.score)[0];
+      S.edge = first ? edgeKey(first) : null;
+    }
+  } catch (e) { if (r === S.run) S.links = { error: String(e) }; }
+  render();
+}
+
+// ---------- 관계 연결 그래프 ----------
+const TYPE_KO = { is_a: "종류", part_of: "구성", causes: "원인", requires: "필요", used_for: "용도",
+                  contrasts_with: "대비", example_of: "예시", analogous_to: "유사" };
+const scopeToggle = () => `<div class="scope" role="group" aria-label="범위">
+  <button data-scope="note" aria-pressed="${S.scope === "note"}">이 노트</button>
+  <button data-scope="all" aria-pressed="${S.scope === "all"}">전체 문서</button></div>`;
+const edgeKey = (e) => [e.a, e.b].sort().join("\u0001");
+const shortTitle = (id, n = 16) => {
+  const t = (id === FREE ? "직접 입력" : id).replace(/\s+[0-9a-f]{32}$/, "");
+  return t.length > n ? t.slice(0, n - 1) + "…" : t;
+};
+
+// ---------- 힘 기반 배치 (실시간): 노트끼리 밀어내고 선은 당긴다. 노트를 끌어 옮길 수 있다 ----------
+function makeSim(nodes, edges, o) {
+  const idx = {}, max = Math.max(...edges.map((e) => e.score), 1e-9);
+  const N = nodes.map((v, i) => { idx[v.id] = i; const p = o.start(v, i); return { id: v.id, x: p[0], y: p[1], vx: 0, vy: 0, fx: p[2] ?? null, fy: p[3] ?? null, r: o.radius(v) }; });
+  const L = edges.filter((e) => e.a in idx && e.b in idx).map((e) => ({ s: idx[e.a], t: idx[e.b], w: 0.3 + 0.7 * e.score / max, len: o.len(e.score / max) }));
+  return { N, L, o, alpha: 1, running: false, svg: null };
+}
+
+function tick(sim) {
+  const { N, L, o } = sim, a = sim.alpha, n = N.length;
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {           // 밀어내기 + 겹침 방지
+    const A = N[i], B = N[j];
+    let dx = A.x - B.x, dy = A.y - B.y, d2 = dx * dx + dy * dy;
+    if (d2 < 1) { dx = (i - j) * 0.5; dy = 0.3; d2 = dx * dx + dy * dy; }
+    const d = Math.sqrt(d2), f = o.charge * a / d2, min = A.r + B.r;
+    let px = dx / d * f * d, py = dy / d * f * d;
+    if (d < min) { const k = (min - d) / d * 0.5; px += dx * k; py += dy * k; }
+    A.vx += px; A.vy += py; B.vx -= px; B.vy -= py;
+  }
+  for (const l of L) {                                                       // 선 = 용수철 (강한 연결일수록 짧고 세다)
+    const S1 = N[l.s], T = N[l.t];
+    const dx = T.x + T.vx - S1.x - S1.vx, dy = T.y + T.vy - S1.y - S1.vy, d = Math.hypot(dx, dy) || 1;
+    const f = (d - l.len) / d * a * o.spring * l.w;
+    T.vx -= dx * f * 0.5; T.vy -= dy * f * 0.5; S1.vx += dx * f * 0.5; S1.vy += dy * f * 0.5;
+  }
+  for (const v of N) {
+    if (v.fx != null) { v.x = v.fx; v.y = v.fy; v.vx = v.vy = 0; continue; }
+    v.vx += (o.W / 2 - v.x) * o.gravity * a; v.vy += (o.H / 2 - v.y) * o.gravity * a;
+    v.vx *= 0.6; v.vy *= 0.6; v.x += v.vx; v.y += v.vy;
+    v.x = Math.min(o.W - v.r, Math.max(v.r, v.x)); v.y = Math.min(o.H - 20, Math.max(20, v.y));
+  }
+  sim.alpha += (0.001 - sim.alpha) * 0.02;
+}
+
+function paint(sim) {
+  const svg = sim.svg; if (!svg || !svg.isConnected) return;
+  const pos = {};
+  sim.N.forEach((v) => { pos[v.id] = v; });
+  svg.querySelectorAll("[data-pid]").forEach((g) => { const v = pos[g.dataset.pid]; if (v) g.setAttribute("transform", `translate(${v.x.toFixed(1)} ${v.y.toFixed(1)})`); });
+  svg.querySelectorAll("[data-la]").forEach((el) => {
+    const A = pos[el.dataset.la], B = pos[el.dataset.lb]; if (!A || !B) return;
+    if (el.tagName === "text") { el.setAttribute("x", ((A.x + B.x) / 2).toFixed(1)); el.setAttribute("y", ((A.y + B.y) / 2 - 6).toFixed(1)); }
+    else { el.setAttribute("x1", A.x.toFixed(1)); el.setAttribute("y1", A.y.toFixed(1)); el.setAttribute("x2", B.x.toFixed(1)); el.setAttribute("y2", B.y.toFixed(1)); }
+  });
+}
+
+function runSim(sim) {
+  if (sim.running) return;
+  sim.running = true;
+  const frame = () => {
+    if (!sim.svg || !sim.svg.isConnected) { sim.running = false; return; }
+    for (let i = 0; i < 3; i++) tick(sim);
+    paint(sim);
+    if (sim.alpha > 0.01 || sim.dragging) requestAnimationFrame(frame); else sim.running = false;
+  };
+  requestAnimationFrame(frame);
+}
+
+// 새로 그린 SVG 에 시뮬레이션을 붙인다. 위치는 시뮬레이션에 남아 있어 다시 그려도 튀지 않는다
+function attachSim(svg, sim) {
+  sim.svg = svg; paint(sim); runSim(sim);
+  const space = svg.querySelector("#vp") || svg;
+  const toLocal = (ev) => { const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; return pt.matrixTransform(space.getScreenCTM().inverse()); };
+  svg.querySelectorAll("[data-pid]").forEach((g) => {
+    g.addEventListener("pointerdown", (ev) => {
+      const v = sim.N.find((x) => x.id === g.dataset.pid); if (!v) return;
+      ev.stopPropagation(); try { g.setPointerCapture(ev.pointerId); } catch (e) { /* 합성 이벤트 등 */ }
+      const pinned = v.fx != null && v.pinned, start = toLocal(ev);
+      let moved = false;
+      sim.dragging = true; v.fx = v.x; v.fy = v.y; sim.alpha = Math.max(sim.alpha, 0.3); runSim(sim);
+      const move = (e) => { const p = toLocal(e); if (Math.hypot(p.x - start.x, p.y - start.y) > 4) moved = true; v.fx = p.x; v.fy = p.y; };
+      const up = () => {
+        g.removeEventListener("pointermove", move); g.removeEventListener("pointerup", up);
+        sim.dragging = false; if (!v.pinned) { v.fx = null; v.fy = null; }
+        if (moved) g.dataset.dragged = "1";
+      };
+      g.addEventListener("pointermove", move); g.addEventListener("pointerup", up);
+    });
+  });
+}
+const wasDragged = (el) => { if (el.dataset.dragged) { delete el.dataset.dragged; return true; } return false; };
+
+function graphSvg(L) {
+  const W = 760, H = 520;
+  if (!L.sim) {
+    const others = L.nodes.slice(1);
+    L.sim = makeSim(L.nodes, L.edges, {
+      W, H, charge: 1400, spring: 0.25, gravity: 0.06,
+      len: (s) => 230 - 110 * s,
+      radius: (v) => Math.max(35, shortTitle(v.id).length * 6.5 + 10),
+      start: (v, i) => {
+        if (i === 0) return [W / 2, H / 2, W / 2, H / 2];                        // 가운데 노트는 고정
+        const t = -Math.PI / 2 + (2 * Math.PI * (i - 1)) / others.length;
+        return [W / 2 + 260 * Math.cos(t), H / 2 + 180 * Math.sin(t)];
+      },
+    });
+    L.sim.N[0].pinned = true;
+  }
+  const max = Math.max(...L.edges.map((e) => e.score), 1e-9);
+  const sel = L.edges.find((e) => edgeKey(e) === S.edge);
+  const ends = sel ? new Set([sel.a, sel.b]) : new Set();
+  const lines = L.edges.map((e) => {
+    const k = edgeKey(e), on = k === S.edge, isCenter = e.a === L.center || e.b === L.center;
+    const w = (1.2 + 6 * e.score / max).toFixed(1), top = e.bridges[0] ? e.bridges[0].labelA : "";
+    const ab = `data-la="${esc(e.a)}" data-lb="${esc(e.b)}"`;
+    return `<g><line class="gEdge${isCenter ? " center" : ""}${on ? " on" : ""}" ${ab} stroke-width="${on ? Math.max(3, +w) : w}"/>
+      <line class="gHit" data-edge="${esc(k)}" ${ab}><title>${esc(e.bridges.map((b) => b.labelA).join(", "))}</title></line>
+      ${isCenter || on ? `<text class="gLabel" ${ab} text-anchor="middle">${esc(top)}</text>` : ""}</g>`;
+  }).join("");
+  const nodes = L.nodes.map((n) => {
+    const label = shortTitle(n.id), w = Math.max(70, label.length * 13 + 20);
+    const cls = n.id === L.center ? " center" : ends.has(n.id) ? " end" : "";
+    return `<g class="gNode${cls}" data-node="${esc(n.id)}" data-pid="${esc(n.id)}"><title>${esc(n.id)}</title>
+      <rect x="${-w / 2}" y="-17" width="${w}" height="34" rx="9"/><text y="5" text-anchor="middle">${esc(label)}</text></g>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="노트 연결 그래프">${lines}${nodes}</svg>`;
+}
+
+function edgePanel(L) {
+  const e = L.edges.find((x) => edgeKey(x) === S.edge);
+  if (!e) return `<p class="empty">선을 누르면 두 노트가 어떻게 이어지는지 여기에 나온다.</p>`;
+  return edgeDetail(e, L.center);
+}
+
+function edgeDetail(e, center) {
+  const A = shortTitle(e.a, 28), B = shortTitle(e.b, 28);
+  const concepts = e.bridges.map((b) => `<div class="card" style="padding:10px 12px">
+      <b>${esc(b.labelA === b.labelB ? b.labelA : `${b.labelA} = ${b.labelB}`)}</b>
+      <p class="note">${esc(A)}</p><div class="quote">${esc(b.quoteA || "—")}</div>
+      <p class="note">${esc(B)}</p><div class="quote">${esc(b.quoteB || "—")}</div></div>`).join("");
+  const chains = e.paths.map((p) => {
+    const [s1, s2] = p.steps;
+    const step = (st) => `<div class="chain">${esc(st.from)} <span class="rule">${esc(TYPE_KO[st.type] || st.type)}</span> ${esc(st.to)}
+        <p class="note">${esc(shortTitle(st.note, 28))}</p>${st.quote ? `<div class="quote">${esc(st.quote)}</div>` : ""}</div>`;
+    return `<div class="card" style="padding:10px 12px">${step(s1)}${step(s2)}
+      <p class="note">→ <b>${esc(s1.from)}</b> 와 <b>${esc(s2.to)}</b> ${p.rule ? `<span class="rule yes">${esc(TYPE_KO[p.rule] || p.rule)}</span>` : `<span class="rule">규칙 없음</span>`}</p></div>`;
+  }).join("");
+  return `<h3>${esc(A)} ↔ ${esc(B)}</h3>
+    <p class="note">연결 점수 ${e.score} · ${center ? `<button class="linkBtn" data-open="${esc(e.a === center ? e.b : e.a)}">이 노트로 →</button>`
+      : `<button class="linkBtn" data-focus="${esc(e.a)}">${esc(shortTitle(e.a, 14))} 중심으로 →</button> · <button class="linkBtn" data-focus="${esc(e.b)}">${esc(shortTitle(e.b, 14))} 중심으로 →</button>`}</p>
+    <h4>함께 다루는 개념 ${e.bridges.length}</h4>${concepts}
+    ${chains ? `<h4>두 노트를 가로지르는 관계 ${e.paths.length}</h4>${chains}` : `<h4>두 노트를 가로지르는 관계</h4><p class="note">한 노트의 관계가 다른 노트의 관계로 이어지는 곳은 없다.</p>`}`;
+}
+
+// ---------- 전체 문서 그래프 ----------
+async function runAll() {
+  if (S.note && S.note !== FREE) S.allSel = S.allSel || S.note;
+  if (S.all && S.all !== "loading" && !S.all.error && S.all.thr === S.thr) return render();
+  const r = ++S.run;
+  S.all = "loading"; S.allEdge = null; S.allDetail = null; render();
+  try {
+    const res = await fetch("/dev/graph/all", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ k: 3, minConfidence: S.thr }) });
+    const data = await res.json().catch(() => ({}));
+    if (r !== S.run) return;
+    if (!res.ok) S.all = { error: data.detail || `HTTP ${res.status}` };
+    else { data.thr = S.thr; S.all = data; S.view = { x: 0, y: 0, k: 1 }; }
+  } catch (e) { if (r === S.run) S.all = { error: String(e) }; }
+  render();
+}
+
+function allSvg(G) {
+  const W = 1000, H = 720;
+  if (!G.sim) {
+    const iso = G.nodes.filter((v) => !v.degree), isoIdx = {};
+    iso.forEach((v, i) => { isoIdx[v.id] = i; });
+    G.sim = makeSim(G.nodes, G.edges, {
+      W, H, charge: 50, spring: 0.6, gravity: 0.03,
+      len: (s) => 45 - 20 * s,
+      radius: (v) => 6 + 1.6 * Math.sqrt(v.degree),
+      start: (v, i) => {
+        if (v.id in isoIdx) {                                                    // 연결 없는 노트는 맨 아래 줄에 고정
+          const x = 40 + (W - 80) * (isoIdx[v.id] + 0.5) / iso.length;
+          return [x, H - 25, x, H - 25];
+        }
+        const r = 27 * Math.sqrt(i + 1), t = i * 2.39996;                        // 최종 크기에 가까운 나선에서 시작
+        return [W / 2 + r * Math.cos(t), (H - 60) / 2 + r * Math.sin(t) * 0.75];
+      },
+    });
+    G.sim.N.forEach((v) => { if (v.fx != null) v.pinned = true; });
+    G.sim.o.H = H - 50;                                                          // 연결된 노트는 아래 줄 위쪽에서 움직인다
+  }
+  const max = Math.max(...G.edges.map((e) => e.score), 1e-9);
+  const sel = S.allSel, nb = new Set();
+  if (sel) G.edges.forEach((e) => { if (e.a === sel) nb.add(e.b); if (e.b === sel) nb.add(e.a); });
+  const topLabels = new Set([...G.nodes].sort((x, y) => y.degree - x.degree).slice(0, 14).map((v) => v.id));
+  const lines = G.edges.map((e) => {
+    const k = edgeKey(e), touch = sel && (e.a === sel || e.b === sel);
+    const cls = k === S.allEdge ? " on" : touch ? " hl" : sel ? " dim" : "";
+    const ab = `data-la="${esc(e.a)}" data-lb="${esc(e.b)}"`;
+    return `<line class="aEdge${cls}" ${ab} stroke-width="${(0.8 + 4 * e.score / max).toFixed(1)}"/>
+      <line class="gHit" data-aedge="${esc(k)}" ${ab}><title>${esc(shortTitle(e.a, 24))} ↔ ${esc(shortTitle(e.b, 24))} · ${esc(e.top)}</title></line>`;
+  }).join("");
+  const nodes = G.nodes.map((v) => {
+    const r = 4 + 1.6 * Math.sqrt(v.degree);
+    const cls = v.id === sel ? " sel" : v.id === S.note ? " cur" : sel && !nb.has(v.id) ? " dim" : "";
+    const show = v.id === sel || nb.has(v.id) || v.id === S.note || (!sel && topLabels.has(v.id));
+    return `<g class="aNode${cls}" data-anode="${esc(v.id)}" data-pid="${esc(v.id)}"><title>${esc(v.id)} · 연결 ${v.degree}</title>
+      <circle r="${r.toFixed(1)}"/>${show ? `<text y="${(-r - 4).toFixed(1)}" text-anchor="middle">${esc(shortTitle(v.id, 14))}</text>` : ""}</g>`;
+  }).join("");
+  const { x, y, k } = S.view;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="전체 문서 연결 그래프"><g id="vp" transform="translate(${x} ${y}) scale(${k})">${lines}${nodes}</g></svg>`;
+}
+
+function allPanel(G) {
+  if (S.allEdge) {
+    if (S.allDetail === "loading") return `<p class="count"><span class="spin"></span>설명을 불러오는 중…</p>`;
+    if (S.allDetail?.error) return `<p class="error">${esc(S.allDetail.error)}</p>`;
+    if (S.allDetail) return edgeDetail(S.allDetail, null);
+  }
+  if (S.allSel) {
+    const mine = G.edges.filter((e) => e.a === S.allSel || e.b === S.allSel);
+    return `<h3>${esc(shortTitle(S.allSel, 40))}</h3>
+      <p class="note">연결 ${mine.length} · <button class="linkBtn" data-focus="${esc(S.allSel)}">이 노트 중심으로 보기 →</button></p>
+      <h4>이어진 노트 (선을 눌러도 된다)</h4>
+      <ul class="list2">${mine.map((e) => { const o = e.a === S.allSel ? e.b : e.a; return `<li><button data-aedge="${esc(edgeKey(e))}">
+        ${esc(shortTitle(o, 26))}<small>${esc(e.top)}</small></button></li>`; }).join("") || `<li class="note">이어진 노트가 없다.</li>`}</ul>`;
+  }
+  return `<p class="empty">점(노트)이나 선을 누른다. 휠로 확대, 끌어서 이동한다.</p>`;
+}
+
+async function loadEdge(key) {
+  const [a, b] = key.split("\u0001");
+  S.allEdge = key; S.allDetail = "loading"; render();
+  try {
+    const res = await fetch("/dev/graph/edge", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                 body: JSON.stringify({ a, b, minConfidence: S.thr }) });
+    const data = await res.json().catch(() => ({}));
+    if (S.allEdge !== key) return;
+    S.allDetail = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+  } catch (e) { if (S.allEdge === key) S.allDetail = { error: String(e) }; }
+  render();
+}
+
+function bindPanZoom(svg) {
+  const vp = svg.querySelector("#vp");
+  const apply = () => vp.setAttribute("transform", `translate(${S.view.x} ${S.view.y}) scale(${S.view.k})`);
+  const toSvg = (ev) => { const r = svg.getBoundingClientRect(); return [(ev.clientX - r.left) * 1000 / r.width, (ev.clientY - r.top) * 720 / r.height]; };
+  svg.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    const [mx, my] = toSvg(ev), f = ev.deltaY < 0 ? 1.15 : 1 / 1.15, k = Math.min(6, Math.max(0.5, S.view.k * f));
+    S.view.x = mx - (mx - S.view.x) * (k / S.view.k); S.view.y = my - (my - S.view.y) * (k / S.view.k); S.view.k = k; apply();
+  }, { passive: false });
+  let drag = null;
+  svg.addEventListener("pointerdown", (ev) => { if (ev.target.closest("[data-anode],[data-aedge]")) return; drag = [...toSvg(ev), S.view.x, S.view.y]; try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* 합성 이벤트 등 */ } });
+  svg.addEventListener("pointermove", (ev) => { if (!drag) return; const [mx, my] = toSvg(ev); S.view.x = drag[2] + mx - drag[0]; S.view.y = drag[3] + my - drag[1]; apply(); });
+  svg.addEventListener("pointerup", () => { drag = null; });
+}
+
+// ---------- 화면 ----------
+function render() {
+  const body = $("#body");
+  const head = `<h1>${esc(name(S.note))}</h1>`;
+  const source = S.note === FREE
+    ? `<textarea id="free" placeholder="글을 붙여넣고 위 버튼을 누른다">${esc(S.free)}</textarea>`
+    : `<pre class="text" id="text">${S.mode === "concepts" && Array.isArray(S.concepts) ? marked() : esc(S.text)}</pre>`;
+  const loading = `<p class="count"><span class="spin"></span>실행 중…</p>`;
+
+  if (S.mode === "suggest") {
+    body.className = "body single";
+    const G = S.suggest;
+    let out = S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : "";
+    const STATUS = { candidate: "후보", hypothesis: "가설", excluded: "제외" };
+    const OUT = { entailed: "근거 있음", contradicted: "근거가 부정", unknown: "근거 불분명", same: "같은 개념", different: "다른 개념",
+                  uncertain: "애매", pass: "통과", fail: "실패" };
+    if (G === "loading") out += `<p class="count"><span class="spin"></span>연결 찾기 → 매개 개념·간선 검증 → 설명 생성 → 설명 검증…</p>`;
+    else if (G?.error) out += `<p class="error">${esc(G.error)}</p>`;
+    else if (G) {
+      out += `<p class="count">이어진 노트 ${G.links.length}개 · 두 노트의 관계를 이어 만든 제안 ${G.suggestions.length}개 · ${G.ms}ms</p>`;
+      out += G.suggestions.map((s) => {
+        const [s1, s2] = s.steps;
+        const step = (st) => `<li>${esc(st.fromLabel)} —${esc(st.typeCode)}→ ${esc(st.toLabel)} <span class="path">· ${esc(st.note)}</span>
+          ${st.evidence.map((e) => `<div class="quote">${esc(e.quote)}</div>`).join("")}</li>`;
+        const bv = s.bridgeVerdict, ev = s.edgeVerdicts, xv = s.explanationVerdict;
+        return `<div class="card"><div class="cardHead"><span class="status ${s.status}">${STATUS[s.status]}</span>
+            <button data-open="${esc(s.note)}" title="${esc(s.note)}">${esc(s.note)}</button></div>
+          <p class="know">${esc(s.knowledge)}</p>
+          <p class="path">${esc(s.explainedBy.model)} 가 씀</p>
+          <p class="path"><b>${esc(s.source)}</b> → ${esc(s.bridge)} → <b>${esc(s.target)}</b>${s.statusReasons.length && s.status !== "candidate" ? ` · ${esc(s.statusReasons.join(", "))}` : ""}</p>
+          <div class="checks"><span>매개 개념: ${OUT[bv?.decision] || "검증 못 함"}</span>
+            ${ev.map((v, i) => `<span>간선 ${i + 1}: ${OUT[v.outcome]}</span>`).join("")}<span>설명: ${OUT[xv.overall]}</span></div>
+          <details><summary>근거와 판정 이유</summary><ul class="steps">${step(s1)}${step(s2)}</ul>
+            <ul class="steps">${bv ? `<li>매개 개념 — ${esc(bv.reason)}</li>` : ""}${ev.map((v, i) => `<li>간선 ${i + 1} — ${esc(v.reason)}</li>`).join("")}
+              ${xv.claimVerdicts.map((c) => `<li>${esc(c.claimRef)}: ${OUT[c.outcome]} — ${esc(c.reason)}</li>`).join("")}
+              ${xv.gaps.map((g) => `<li>빈 단계${g.stepOrder ? " " + g.stepOrder : ""} — ${esc(g.reason)}</li>`).join("")}</ul></details>
+        </div>`;
+      }).join("") || `<p class="empty">제안이 없다. 한 노트의 관계(A→B)와 다른 노트의 관계(B→C)가 같은 개념 B 로 이어질 때 제안이 생긴다.</p>`;
+      out += `<details><summary>합성 규칙 (예시 정책)</summary><p class="path">${G.rules.map(esc).join(" · ")}</p></details>`;
+    }
+    body.innerHTML = `<div class="col">${head}${out}</div>`;
+    body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+  } else if (S.mode === "links" && S.scope === "all") {
+    const G = S.all, toggle = scopeToggle();
+    if (!G || G === "loading" || G.error) {
+      body.className = "body single";
+      body.innerHTML = `<div class="col">${toggle}${G === "loading" ? loading : G?.error ? `<p class="error">${esc(G.error)}</p>` : ""}</div>`;
+    } else {
+      body.className = "body";
+      body.innerHTML = `<div class="col">${toggle}
+          <p class="count">노트 ${G.nodes.length}개 · 노트마다 가장 강한 연결 3개를 선으로 · 신뢰도 ${S.thr.toFixed(2)} 이상인 개념만 · 맨 아래 줄은 연결이 없는 노트 · 점을 끌어 옮길 수 있다</p>
+          <div class="graphWrap allWrap">${allSvg(G)}</div></div><div class="col side">${allPanel(G)}</div>`;
+      bindPanZoom(body.querySelector(".allWrap svg"));
+      attachSim(body.querySelector(".allWrap svg"), G.sim);
+      body.querySelectorAll("[data-anode]").forEach((el) => el.addEventListener("click", () => {
+        if (wasDragged(el)) return;
+        S.allSel = S.allSel === el.dataset.anode ? null : el.dataset.anode; S.allEdge = null; S.allDetail = null; render();
+      }));
+      body.querySelectorAll("[data-aedge]").forEach((el) => el.addEventListener("click", () => loadEdge(el.dataset.aedge)));
+    }
+    body.querySelectorAll("[data-focus]").forEach((b) => b.addEventListener("click", () => {
+      S.scope = "note"; openNote(b.dataset.focus).then(run);
+    }));
+    body.querySelectorAll("[data-scope]").forEach((b) => b.addEventListener("click", () => { S.scope = b.dataset.scope; run(); }));
+  } else if (S.mode === "links") {
+    const L = S.links;
+    if (!L || L === "loading" || L.error || !L.nodes) {
+      body.className = "body single";
+      let out = S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : "";
+      out += L === "loading" ? loading : L?.error ? `<p class="error">${esc(L.error)}</p>` : "";
+      body.innerHTML = `<div class="col">${scopeToggle()}${head}${out}</div>`;
+    } else {
+      body.className = "body";
+      const lonely = L.nodes.length < 2;
+      body.innerHTML = `<div class="col">${scopeToggle()}${head}${S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : ""}
+          <p class="count">이어진 노트 ${L.nodes.length - 1}개 · 선 ${L.edges.length}개 · 선을 누르면 두 노트가 어떻게 이어지는지 보여 준다. 노트를 누르면 가운데로 옮기고, 끌면 자리를 옮긴다.</p>
+          ${lonely ? `<p class="empty">이어진 노트가 없다. 기준을 낮춰 본다.</p>` : `<div class="graphWrap">${graphSvg(L)}</div>`}</div>
+        <div class="col side">${edgePanel(L)}</div>`;
+      if (!lonely) attachSim(body.querySelector(".graphWrap svg"), L.sim);
+      body.querySelectorAll("[data-edge]").forEach((el) => el.addEventListener("click", () => { S.edge = el.dataset.edge; render(); }));
+      body.querySelectorAll("[data-node]").forEach((el) => el.addEventListener("click", () => {
+        if (wasDragged(el)) return;
+        if (el.dataset.node !== L.center) openNote(el.dataset.node).then(run);
+      }));
+    }
+    body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+    body.querySelectorAll("[data-scope]").forEach((b) => b.addEventListener("click", () => { S.scope = b.dataset.scope; run(); }));
+  } else {
+    const C = S.concepts;
+    let side = "";
+    if (C === "loading") side = loading;
+    else if (C?.error) side = `<p class="error">${esc(C.error)}</p>`;
+    else if (Array.isArray(C)) {
+      const ok = C.filter(valid), low = C.filter((c) => !valid(c));
+      const row = (c) => `<li class="${valid(c) ? "" : "invalid"}"><button class="row" data-c="${c.ref}" aria-current="${c.ref === S.sel}">
+        <span class="lbl">${esc(c.label)}</span><span class="meter"><i style="width:${Math.round(c.confidence * 100)}%"></i></span>
+        <span class="conf">${c.confidence.toFixed(2)}</span></button></li>`;
+      side = `<p class="count">유효 개념 ${ok.length} / ${C.length}</p><ul class="list">${ok.map(row).join("")}
+        ${low.length ? `<li class="cut">기준 미만 ${low.length}</li>${low.map(row).join("")}` : ""}</ul>`;
+    }
+    body.className = "body";
+    body.innerHTML = `<div class="col">${head}${source}</div><div class="col">${side}</div>`;
+    const pick = (ref) => {
+      S.sel = S.sel === ref ? null : ref; render();
+      if (S.sel) document.querySelector("#text .m.on")?.scrollIntoView({ block: "center", behavior: "smooth" });
     };
-    ed.addEventListener("input", count);
-    ed.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runExtract(); } });
-    count();
-    return;
+    body.querySelectorAll("[data-c]").forEach((b) => b.addEventListener("click", () => pick(b.dataset.c)));
+    body.querySelectorAll("#text .m").forEach((m) => m.addEventListener("click", () => pick(m.dataset.ref)));
   }
-  if (!LAST) {
-    $("#extractMain").innerHTML = head + `<div class="meta"><span class="badge">${ORIGINAL.length.toLocaleString()}자</span>
-      <span class="muted" style="font:var(--text-ui-label)">실행하면 개념이 표시된다</span></div><pre class="source">${esc(ORIGINAL)}</pre>`;
-    return;
-  }
-  const { text, data, sel, rel } = LAST;
-  const evById = Object.fromEntries(data.evidence.map((e) => [e.ref, e]));
-  const relation = data.relations.find((r) => r.ref === rel);
-  const evRanges = relation ? relation.evidenceRefs.map((id) => evById[id]) : [];
-  const label = Object.fromEntries(data.concepts.map((c) => [c.ref, c.label]));
-  // JS 문자열 위치는 UTF-16 이라 계약 offset 을 그대로 쓴다
+  $("#free")?.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); run(); } });
+}
+
+// 유효 개념만 원문에 칠한다. 계약 offset 은 UTF-16 이라 JS 문자열 위치와 같다
+function marked() {
   const marks = [];
-  for (const c of data.concepts) for (const m of c.mentions) marks.push({ s: m.startOffset, e: m.endOffset, ref: c.ref });
-  const pts = new Set([0, text.length]);
-  marks.forEach((m) => { pts.add(m.s); pts.add(m.e); });
-  evRanges.forEach((x) => { pts.add(x.startOffset); pts.add(x.endOffset); });
-  const ps = [...pts].sort((a, b) => a - b);
-  let html = "";
-  for (let i = 0; i < ps.length - 1; i++) {
-    const s = ps[i], e = ps[i + 1];
-    let piece = esc(text.slice(s, e));
-    const m = marks.find((x) => x.s <= s && e <= x.e);
-    if (m) piece = `<span class="c${m.ref === sel ? " sel" : ""}" data-ref="${m.ref}" title="${esc(label[m.ref])}">${piece}</span>`;
-    if (evRanges.some((x) => x.startOffset <= s && e <= x.endOffset)) piece = `<span class="ev">${piece}</span>`;
-    html += piece;
+  for (const c of S.concepts.filter(valid)) for (const m of c.mentions) marks.push({ s: m.startOffset, e: m.endOffset, c });
+  marks.sort((a, b) => a.s - b.s || b.e - a.e);
+  let html = "", at = 0;
+  for (const m of marks) {
+    if (m.s < at) continue;
+    html += esc(S.text.slice(at, m.s))
+      + `<span class="m${m.c.ref === S.sel ? " on" : ""}" data-ref="${m.c.ref}" title="${esc(m.c.label)} · ${m.c.confidence.toFixed(2)}">${esc(S.text.slice(m.s, m.e))}</span>`;
+    at = m.e;
   }
-  const meta = data.meta;
-  $("#extractMain").innerHTML = head + `<div class="meta">
-      <span class="badge">개념 ${data.concepts.length}</span><span class="badge">관계 ${data.relations.length}</span>
-      <span class="badge">근거 ${data.evidence.length}</span><span class="badge">${meta.durationMs}ms</span>
-      <span class="badge" title="${esc(meta.modelRevision)}">${esc(meta.profileVersion)}</span></div>
-    <pre class="source" id="noteView">${html}</pre>`;
-  document.querySelectorAll("#noteView .c").forEach((el) => el.addEventListener("click", () => {
-    LAST.sel = el.dataset.ref === LAST.sel ? null : el.dataset.ref; LAST.rel = null;
-    renderExtractMain(); renderExtractPanel(); document.querySelector("#noteView .c.sel")?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }));
-}
-
-function renderExtractPanel() {
-  const { data, sel, rel } = LAST;
-  const label = Object.fromEntries(data.concepts.map((c) => [c.ref, c.label]));
-  const evById = Object.fromEntries(data.evidence.map((e) => [e.ref, e]));
-  const relRows = data.relations.map((r) => `<li><button class="row" data-rel="${r.ref}" aria-current="${r.ref === rel}">
-      <span class="rel"><span class="relLine">${esc(label[r.sourceRef])} → ${esc(label[r.targetRef])}</span>
-      <span class="type">${esc(r.typeCode)} · ${r.confidence}</span></span></button>
-      ${r.ref === rel ? r.evidenceRefs.map((id) => `<p class="quote">${esc(evById[id].quote)}</p>`).join("") : ""}</li>`).join("");
-  const conceptRows = data.concepts.map((c) => `<li><button class="row" data-concept="${c.ref}" aria-current="${c.ref === sel}">
-      <span class="label">${esc(c.label)}</span><span class="badge">${c.mentions.length}</span></button></li>`).join("");
-  $("#extractResult").innerHTML = `
-    <p class="sectionLabel">관계 ${data.relations.length}</p>
-    ${relRows ? `<ul class="list">${relRows}</ul>` : `<p class="hint">관계가 없다. profile 이 개념만 뽑거나, 규칙에 맞는 문장이 없거나, policy 에 해당 유형이 없다.</p>`}
-    <p class="sectionLabel">개념 ${data.concepts.length} (점수 순)</p>
-    <ul class="list">${conceptRows}</ul>
-    <details><summary>응답 JSON · ${esc(LAST.requestId || "")}</summary><pre class="json">${esc(JSON.stringify(data, null, 2))}</pre></details>`;
-  document.querySelectorAll("[data-rel]").forEach((b) => b.addEventListener("click", () => {
-    LAST.rel = b.dataset.rel === LAST.rel ? null : b.dataset.rel; LAST.sel = null;
-    renderExtractMain(); renderExtractPanel(); document.querySelector("#noteView .ev")?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }));
-  document.querySelectorAll("[data-concept]").forEach((b) => b.addEventListener("click", () => {
-    LAST.sel = b.dataset.concept === LAST.sel ? null : b.dataset.concept; LAST.rel = null;
-    renderExtractMain(); renderExtractPanel(); document.querySelector("#noteView .c.sel")?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }));
-}
-
-// ---------- 임베딩 ----------
-async function runEmbed() {
-  const opt = $("#profile").selectedOptions[0];
-  if (!opt || opt.disabled) { $("#embedMain").innerHTML = banner("켜진 임베딩 profile 이 없다", "AI_EMBEDDING_PROFILES 를 설정하고 서버를 다시 띄운다."); return; }
-  const lines = $("#eitems").value.split("\n").map((l) => l.trim().normalize("NFC")).filter(Boolean).slice(0, 32);
-  const req = { context: context(crypto.randomUUID()), profileVersion: opt.value, expectedDimensions: Number(opt.dataset.dims),
-                items: lines.map((text, i) => ({ itemId: "i" + (i + 1), text })) };
-  setRunning(true);
-  try {
-    const r = await callApi("/embeddings", req);
-    if (!r.ok) { $("#embedMain").innerHTML = errorBanner(r); return; }
-    const v = r.data.items.map((it) => it.vector);
-    const cos = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
-    const shade = (x) => `background: rgb(38 37 30 / ${Math.max(0, x * 0.32).toFixed(3)})`;
-    $("#embedMain").innerHTML = `<div class="tableWrap"><table class="matrix"><thead><tr><th></th>${lines.map((_, i) => `<th>${i + 1}</th>`).join("")}</tr></thead><tbody>
-      ${v.map((a, i) => `<tr><th>${i + 1}. ${esc(lines[i].slice(0, 36))}</th>${v.map((b, j) => {
-        const c = cos(a, b); return `<td style="${i === j ? "" : shade(c)}">${c.toFixed(3)}</td>`; }).join("")}</tr>`).join("")}
-      </tbody></table></div>`;
-    $("#embedMeta").innerHTML = `<p class="sectionLabel">응답</p>
-      <div class="meta" style="padding:0 var(--space-8)"><span class="badge">${r.data.dimensions}차원</span><span class="badge">${r.data.meta.durationMs}ms</span></div>
-      <p class="hint">${esc(r.data.meta.model)} · ${esc(r.data.meta.modelRevision)}</p>
-      <details><summary>응답 JSON</summary><pre class="json">${esc(JSON.stringify(r.data, null, 2).slice(0, 20000))}</pre></details>`;
-  } catch (e) { $("#embedMain").innerHTML = banner("요청 실패", String(e)); }
-  finally { setRunning(false); }
+  return html + esc(S.text.slice(at));
 }
 
 init();
