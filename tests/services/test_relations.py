@@ -133,3 +133,21 @@ def test_typer_propagates_llm_error(tmp_path):
     with pytest.raises(TyperError) as e:
         RelationTyper(FakeLLM(error=TyperError("invalid_output", "x")), tmp_path).type_pairs(ITEMS, POLICY)
     assert e.value.kind == "invalid_output"
+
+
+def test_typer_caches_refusal_as_no_relation(tmp_path):
+    from app.services.llm import LLMError
+    from app.services.relations.typer import PairItem, RelationTyper
+
+    class Refusing:
+        provider, model, calls = "anthropic", "m", 0
+
+        def complete_json(self, *a, **k):
+            Refusing.calls += 1
+            raise LLMError("refusal", "category=cyber")
+
+    typer = RelationTyper(Refusing(), tmp_path)
+    items = [PairItem("p1", "nc 로 포트에 접속한다.", "nc", "포트")]
+    pt = [("used_for", "용도", "x")]
+    assert typer.type_pairs(items, pt) == {} and typer.type_pairs(items, pt) == {}
+    assert Refusing.calls == 1                                   # 두 번째는 캐시에서

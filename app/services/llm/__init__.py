@@ -8,7 +8,7 @@
   google      GEMINI_API_KEY / GOOGLE_API_KEY  기본 모델 gemini-3.5-flash
 
 계약(ai-communication.md)에 따라 SDK 자동 재시도 0, 자동 모델 fallback 없음. 재시도는 BE 가 한다.
-오류는 LLMError(kind) 하나로 통일한다: timeout | rate_limit | auth | provider | invalid_output
+오류는 LLMError(kind) 하나로 통일한다: timeout | rate_limit | auth | provider | invalid_output | refusal
 """
 
 import json
@@ -38,6 +38,7 @@ class LLMConfig:
     model: str
     timeout: float = 90.0             # 제공자 한 번 호출 (ai-communication.md AI_PROVIDER_TIMEOUT_SECONDS)
     max_output_tokens: int = 16000
+    effort: str | None = None         # anthropic output_config.effort (없으면 어댑터 기본값)
     # 직접 넘긴 API 키 (없으면 각 SDK 가 표준 환경 변수에서 읽는다). 로그·repr 에 찍히지 않게 숨긴다
     api_key: str | None = field(default=None, repr=False, compare=False)
 

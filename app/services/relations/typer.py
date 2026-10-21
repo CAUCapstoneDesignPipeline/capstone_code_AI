@@ -68,7 +68,15 @@ class RelationTyper:
                 out[it.item_id] = Typed(cached["code"], cached["a_is_source"], cached["confidence"])
         for i in range(0, len(todo), self.chunk_size):
             chunk = todo[i:i + self.chunk_size]
-            for it, res in zip(chunk, self._call(chunk, policy_types)):
+            try:
+                results = self._call(chunk, policy_types)
+            except LLMError as e:
+                if e.kind != "refusal":
+                    raise
+                # 모델이 이 문장들을 거절했다 (예: 보안 실습 노트). 관계 없음으로 캐시해 다시 묻지 않는다.
+                # 다른 모델로 바꾸지 않는다 (계약: 자동 모델 fallback 금지)
+                results = [{"code": NONE, "a_is_source": True, "confidence": 0.0, "refused": True} for _ in chunk]
+            for it, res in zip(chunk, results):
                 self._cache_put(self._key(policy_sig, it), res)
                 if res["code"] != NONE:
                     out[it.item_id] = Typed(res["code"], res["a_is_source"], res["confidence"])

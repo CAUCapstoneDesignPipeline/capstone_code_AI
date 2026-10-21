@@ -10,7 +10,7 @@ class AnthropicLLM:
         if client is None:
             import anthropic
             client = anthropic.Anthropic(api_key=config.api_key, max_retries=0, timeout=config.timeout)
-        self.client, self.config, self.model, self.effort = client, config, config.model, effort
+        self.client, self.config, self.model, self.effort = client, config, config.model, config.effort or effort
 
     def complete_json(self, system: str, user: str, schema: dict, name: str) -> LLMResult:
         import anthropic
@@ -34,7 +34,9 @@ class AnthropicLLM:
         except anthropic.APIConnectionError as e:
             raise LLMError("provider", str(e))
 
-        if response.stop_reason != "end_turn":          # refusal, max_tokens 등
+        if response.stop_reason == "refusal":           # 안전 분류기가 거절 (다른 모델로 자동 전환하지 않는다)
+            raise LLMError("refusal", f"category={getattr(getattr(response, 'stop_details', None), 'category', None)}")
+        if response.stop_reason != "end_turn":          # max_tokens 등
             raise LLMError("invalid_output", f"stop_reason={response.stop_reason}")
         text = next((b.text for b in response.content if b.type == "text"), None)
         return LLMResult(parse_object(text), self.provider, getattr(response, "model", None) or self.model)

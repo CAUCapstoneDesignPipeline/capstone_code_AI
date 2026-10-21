@@ -25,7 +25,7 @@ router = APIRouter()
 # LLM 오류 → 계약 오류 코드 (§6). 제공자 rate limit 은 429 로 통일
 _TYPER_ERRORS = {"timeout": ("MODEL_TIMEOUT", None), "rate_limit": ("AI_BUSY", 30),
                  "auth": ("SERVICE_UNAVAILABLE", 60), "provider": ("MODEL_PROVIDER_ERROR", None),
-                 "invalid_output": ("INVALID_MODEL_OUTPUT", None)}
+                 "invalid_output": ("INVALID_MODEL_OUTPUT", None), "refusal": ("INVALID_MODEL_OUTPUT", None)}
 
 
 @router.post("/extract", response_model=ExtractResponse, operation_id="extractKnowledge")
@@ -39,7 +39,7 @@ async def extract(request: Request):
     profile = check_semantics(req, idem)
 
     state = request.app.state
-    if state.extractor is None or (profile.relations == "rules+llm" and state.typer is None):
+    if state.extractor is None or (profile.uses_llm and state.typer is None):
         raise AiError("SERVICE_UNAVAILABLE", retry_after=30)
     if state.inflight.locked():
         raise AiError("AI_BUSY", retry_after=1)
@@ -51,8 +51,9 @@ async def extract(request: Request):
         selected = select_concepts(mentions, profile)
         evidence, relations = [], []
         if profile.relations != "none":
-            typer = state.typer if profile.relations == "rules+llm" else None
-            evidence, relations = extract_relations(req.note.body, selected, policy_types, typer, profile.limits)
+            typer = state.typer if profile.uses_llm else None
+            evidence, relations = extract_relations(req.note.body, selected, policy_types, typer, profile.limits,
+                                                    structure=profile.uses_structure)
         return selected, evidence, relations
 
     async with state.inflight:
@@ -73,7 +74,7 @@ async def extract(request: Request):
     check_output(req.note.body, concepts, ev_out, rel_out, {c for c, _, _ in policy_types})
 
     cfg = state.extractor.config_version
-    llm = profile.relations == "rules+llm"
+    llm = profile.uses_llm
     meta = ResponseMeta(
         profileVersion=req.profileVersion,
         provider=f"local+{state.typer.provider}" if llm else "local",
