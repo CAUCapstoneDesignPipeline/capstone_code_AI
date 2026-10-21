@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Request
 
 from app.core.config import EXTRACT_PROFILES, SCHEMA_VERSION
+from app.services.reasoning import REASONING_PROFILES
 from app.core.errors import AiError
 from app.schemas.health import Liveness, Readiness
 
@@ -15,8 +16,9 @@ def ready_profiles(state) -> list[str]:
     """지금 요청을 받을 수 있는 profile."""
     out = []
     if state.extractor is not None:
-        out += [p.id for p in EXTRACT_PROFILES.values() if p.relations != "rules+llm" or state.typer is not None]
+        out += [p.id for p in EXTRACT_PROFILES.values() if not p.uses_llm or state.typer is not None]
     out += list(state.embedders)
+    out += [p.id for p in REASONING_PROFILES.values() if p.ready(state)]
     return sorted(out)
 
 
@@ -32,5 +34,4 @@ async def ready(request: Request):
     profiles = ready_profiles(request.app.state)
     if request.app.state.extractor is None or not profiles:
         raise AiError("SERVICE_UNAVAILABLE", retry_after=30)
-    # 계약은 7개 operation 의 profile (minItems 7) 을 기대하지만 지금은 extract·embeddings 만 구현했다.
     return Readiness(status="ready", schemaVersion=SCHEMA_VERSION, profileVersions=profiles)
