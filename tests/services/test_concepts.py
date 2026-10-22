@@ -142,3 +142,16 @@ def test_stale_idf_rejected(ex):
     stale = Idf({"wal": 1}, 1, "old", config_version="0000deadbeef")
     with pytest.raises(StaleIdfError):
         ConceptExtractor(ExtractConfig(), stale)
+
+
+def test_particle_after_bold_is_not_a_concept():
+    ex = ConceptExtractor(ExtractConfig())
+    keys = {m.key for m in ex.extract("n", "**WAL**은 Write Ahead Logging이다. **페이지 캐시**는 메모리에 둔다.")}
+    assert "write ahead logging" in keys and "페이지 캐시" in keys
+    assert not any(k.startswith(("은", "는")) for k in keys)
+
+
+def test_particle_after_inline_code_or_math_is_not_a_concept():
+    ex = ConceptExtractor(ExtractConfig())
+    keys = {m.key for m in ex.extract("n", "`n`가 증가하면 $T$을 최소화한다. 페이지 폴트가 늘어난다.")}
+    assert not any(k.split()[0] in ("가", "을") for k in keys)

@@ -61,7 +61,8 @@ def test_adapter_refusal_or_truncation_is_invalid_output(provider):
     llm = make_llm(LLMConfig(provider, "some-model"), client=Recorder(path, bad()))
     with pytest.raises(LLMError) as e:
         llm.complete_json("sys", "user", SCHEMA, name="t")
-    assert e.value.kind == "invalid_output"
+    # anthropic 은 stop_reason=refusal 을 따로 알린다 (노트 하나만 규칙 관계로 두는 데 쓴다)
+    assert e.value.kind == ("refusal" if provider == "anthropic" else "invalid_output")
 
 
 @pytest.mark.parametrize("provider", list(CASES))

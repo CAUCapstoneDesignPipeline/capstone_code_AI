@@ -57,6 +57,8 @@ SEMANTIC_CODES = {
     "contrasts_with": ("contrasts_with",),
     "example_of": ("example_of",),
     "analogous_to": ("analogous_to", "similar_to"),
+    # 구조에서 유형 단서 없이 찾은 막연한 관계 (상위 제목 → 하위 개념 등)
+    "related": ("related_to", "related", "has_subtopic"),
 }
 
 
