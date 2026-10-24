@@ -6,7 +6,6 @@
 4. 선택 (결정적): 확신도 → 위치 → key 순으로 정렬해 관계·근거 한도 안에서 고른다
 """
 
-from collections import defaultdict
 from dataclasses import dataclass
 
 from app.services.concepts import Mention

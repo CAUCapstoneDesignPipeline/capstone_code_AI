@@ -7,7 +7,7 @@
 적은 표기도 받는다 (explanation-det-2).
 explanation-det-3 은 문맥 근거(단계 근거가 아닌, 단계 노트의 요청 근거)만 인용하는 보조 전제도 받는다: 주장과 인용 원문이
 경로의 개념(A·B·C)을 같이 말하면 통과, 아니면 애매. 결정적 검사는 내용이 근거에서 따라 나오는지까지는 보지 못한다
-(explanation-hybrid-1 이 LLM 으로 본다).
+(explanation-hybrid-2 이 LLM 으로 본다).
 하나라도 fail 이면 overall fail, uncertain·빈 단계(gap)가 있으면 uncertain, 아니면 pass.
 합성 규칙의 최종 적용과 후보/가설 결정은 BE 가 다시 확인한다 (계약 §5).
 """
