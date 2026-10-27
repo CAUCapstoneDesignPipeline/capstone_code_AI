@@ -4,19 +4,17 @@
   uv run ai concepts build-idf              # 기준 말뭉치(노트 전체)로 IDF 를 만든다
   uv run ai concepts extract                # 노트마다 개념 언급을 뽑아 mentions.jsonl 에 쓴다
   uv run ai concepts show <note_id>         # 노트 하나의 개념 요약
-  uv run ai concepts eval --gold gold.csv   # 사람이 표시한 개념과 비교 (재현율·정밀도)
+  uv run ai concepts eval [--include-draft]  # 정답 개념과 비교 (재현율·정밀도, docs/eval/gold-concepts.md)
 """
 
 import argparse
-import csv
 import json
-import re
 import sys
-from collections import defaultdict
 from pathlib import Path
 
-from app.services.concepts import (ConceptExtractor, ExtractConfig, Idf, Mention, StaleIdfError, build_idf,
-                                  concept_key, summarize)
+from app.services.concepts import (ConceptExtractor, ExtractConfig, Idf, StaleIdfError, build_idf,
+                                  summarize)
+from app.core.config import EXTRACT_PROFILE
 from app.services.concepts.markdown import nfc
 
 NOTES_DIR = Path("data/private/notes")
@@ -85,39 +83,56 @@ def cmd_show(args):
     print(f"\n개념 {len(rows)}개 · {ex.method_version}")
 
 
-def loose(s: str) -> str:
-    return re.sub(r"[\s\-_·./()\[\]'\"]+", "", concept_key(s))
+THRESHOLDS = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5)
 
 
 def cmd_eval(args):
-    """gold.csv 열: note_id, concept. 같은 개념의 다른 표기는 | 로 잇는다 (WAL|Write Ahead Logging)."""
-    gold: dict[str, list[set[str]]] = defaultdict(list)
-    with args.gold.open(encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            aliases = {loose(a) for a in nfc(row["concept"]).split("|") if loose(a)}
-            if aliases:
-                gold[nfc(row["note_id"]).strip()].append(aliases)
-    extracted: dict[str, set[str]] = defaultdict(set)
-    with args.mentions.open(encoding="utf-8") as f:
-        for line in f:
-            m = Mention.from_dict(json.loads(line))
-            extracted[m.span.note_id].add(loose(m.key))
+    """정답(docs/eval/gold-concepts.md 형식)과 /extract 와 같은 선택 규칙을 거친 추출 결과를 비교한다."""
+    from app.api.v1.extract import select_concepts, to_concepts
+    from app.core.config import EXTRACT_PROFILES
+    from app.services.concepts.gold import Extracted, Score, load_gold, loose, score
 
-    tot_hit = tot_gold = tot_ext = tot_ext_hit = 0
-    print(f"{'recall':>7} {'prec':>6}  note")
-    for note_id in sorted(gold):
-        ext = extracted.get(note_id, set())
-        hit = sum(1 for aliases in gold[note_id] if aliases & ext)
-        all_aliases = set().union(*gold[note_id])
-        ext_hit = len(ext & all_aliases)
-        tot_hit += hit; tot_gold += len(gold[note_id]); tot_ext += len(ext); tot_ext_hit += ext_hit
-        print(f"{hit / len(gold[note_id]):7.0%} {ext_hit / len(ext) if ext else 0:6.0%}  {note_id[:50]}")
+    gold = load_gold(args.gold, include_draft=args.include_draft)
+    if not gold:
+        sys.exit("평가할 정답이 없다 (status=reviewed 인 줄이 없으면 --include-draft)")
+    texts = read_notes(args.notes, sorted(gold))
+    ex = load_extractor(args)
+    profile = EXTRACT_PROFILES[args.profile]
+    extracted = {}
+    for note_id in sorted(texts):
+        concepts, _ = to_concepts(select_concepts(ex.extract(note_id, texts[note_id]), profile), texts[note_id])
+        extracted[note_id] = [Extracted(c.label, frozenset({loose(c.label), *(loose(m.quote) for m in c.mentions)}),
+                                        c.confidence) for c in concepts]
+
+    def at(t):
+        return {n: [e for e in es if e.confidence >= t] for n, es in extracted.items()}
+
+    print(f"정답 노트 {len(gold)}개 · core {sum(g.level == 'core' for gs in gold.values() for g in gs)}개 · "
+          f"전체 {sum(len(gs) for gs in gold.values())}개 · {args.profile} · {ex.method_version}"
+          f"{' · draft 포함' if args.include_draft else ''}\n")
+    print(f"{'신뢰도≥':>7} {'재현율core':>10} {'재현율all':>9} {'정밀도':>6} {'추출 수':>6}")
+    rows = []
+    for t in THRESHOLDS:
+        tot = Score()
+        for n, es in at(t).items():
+            tot.add(score(gold[n], es))
+        rows.append({"threshold": t, "recall_core": round(tot.recall_core, 4), "recall_all": round(tot.recall_all, 4),
+                     "precision": round(tot.precision, 4), "extracted": tot.extracted})
+        print(f"{t:7.1f} {tot.recall_core:10.0%} {tot.recall_all:9.0%} {tot.precision:6.0%} {tot.extracted:6d}")
+
+    print(f"\n노트별 (신뢰도 ≥ {args.min_confidence})")
+    for n, es in sorted(at(args.min_confidence).items()):
+        s = score(gold[n], es)
+        print(f"  재현율 {s.recall_core:4.0%} · 정밀도 {s.precision:4.0%}  {n[:50]}")
         if args.verbose:
-            missed = [sorted(a)[0] for a in gold[note_id] if not a & ext]
-            if missed:
-                print("          놓침:", ", ".join(missed))
-    print(f"\n전체 재현율 {tot_hit / tot_gold:.0%} ({tot_hit}/{tot_gold}) · "
-          f"정밀도 {tot_ext_hit / tot_ext if tot_ext else 0:.0%} ({tot_ext_hit}/{tot_ext})")
+            if s.missed:
+                print("      놓침:", ", ".join(s.missed))
+            if s.wrong:
+                print("      정답 밖:", ", ".join(s.wrong[:25]) + (" …" if len(s.wrong) > 25 else ""))
+    if args.json:
+        args.json.write_text(json.dumps({"profile": args.profile, "method": ex.method_version,
+                                         "includeDraft": args.include_draft, "notes": len(gold), "thresholds": rows},
+                                        ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def concepts_main(argv=None):
@@ -149,10 +164,14 @@ def concepts_main(argv=None):
     s.add_argument("--top", type=int, default=40)
     s.set_defaults(func=cmd_show)
 
-    v = sub.add_parser("eval", help="사람이 표시한 개념과 비교")
-    v.add_argument("--gold", type=Path, required=True)
-    v.add_argument("--mentions", type=Path, default=OUT_DIR / "mentions.jsonl")
-    v.add_argument("-v", "--verbose", action="store_true", help="놓친 개념도 출력")
+    v = sub.add_parser("eval", help="사람이 표시한 개념과 비교 (재현율·정밀도)")
+    common(v)
+    v.add_argument("--gold", type=Path, default=Path("data/private/gold/concepts.csv"))
+    v.add_argument("--profile", default=EXTRACT_PROFILE)
+    v.add_argument("--min-confidence", type=float, default=0.0, help="노트별 결과에 쓸 신뢰도 문턱값")
+    v.add_argument("--include-draft", action="store_true", help="검토 전(draft) 정답도 쓴다")
+    v.add_argument("--json", type=Path, help="문턱값별 결과를 JSON 으로 저장")
+    v.add_argument("-v", "--verbose", action="store_true", help="놓친 개념·정답 밖 개념도 출력")
     v.set_defaults(func=cmd_eval)
 
     args = ap.parse_args(argv)
