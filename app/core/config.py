@@ -80,9 +80,14 @@ class EmbeddingProfile:
 
 
 EMBEDDING_PROFILES = {p.id: p for p in (
-    # 후보 모델. 팀이 모델·차원을 정하면 revision 을 commit hash 로 고정한다 (ai-communication.md 34행).
+    # 별칭 병합 후보 찾기용 (docs/eval/alias-embeddings.md). revision 은 commit hash 로 고정한다 (ai-communication.md 34행).
+    # 권장: bge-m3. 같은 개념의 다른 표기가 최근접 5개 안에 드는 비율이 가장 높다 (CPU 메모리 약 1.6 GB)
+    EmbeddingProfile("embeddings-bge-m3-1", "sentence-transformers", 1024,
+                     model="BAAI/bge-m3", revision="5617a9f61b028005a4858fdac845db406aefb181"),
+    # 메모리가 모자랄 때 (약 0.5 GB). 표기 쌍 찾기는 bge-m3 보다 약하다
     EmbeddingProfile("embeddings-e5-small-1", "sentence-transformers", 384,
-                     model="intfloat/multilingual-e5-small", revision="main", prefix="query: "),
+                     model="intfloat/multilingual-e5-small", revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
+                     prefix="query: "),
     # 모델 파일 없이 쓰는 개발·테스트용. 한국어↔영어 표기를 잇지 못하므로 실제 분석에 쓰지 않는다.
     EmbeddingProfile("embeddings-hash-dev-1", "hash", 256),
 )}
