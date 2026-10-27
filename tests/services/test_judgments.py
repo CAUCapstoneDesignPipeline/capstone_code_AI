@@ -71,3 +71,11 @@ def test_declared_aliases_follow_parenthesized_translations():
     assert "스레드" in declared_aliases("thread", docs) and "가상 메모리" in declared_aliases("Virtual Memory", docs)
     assert mentions_concept("스레드는 실행 단위다", "thread", docs)
     assert not mentions_concept("프로세스는 크다", "thread", docs)
+
+
+def test_alias_from_definition_line_and_naming_sentence():
+    assert stated_alias("ACID\n- **Atomicity**: 원자성\n- **Durability**: 영구성\n", "원자성", "Atomicity")
+    assert stated_alias("이렇게 인증하는 것을 Chain of Trust, 신뢰의 사슬이라고 한다.", "신뢰의 사슬", "Chain of Trust")
+    # 한 줄이 두 표기뿐일 때만: 정의 문장이 붙으면 별칭이 아니다
+    assert not stated_alias("- Page Table: 각 프로세스의 가상 주소와 실제 주소를 잇는다\n", "Page Table", "가상 주소")
+    assert not stated_alias("- Atomicity: 원자성, Consistency: 일관성\n", "Atomicity", "Consistency")

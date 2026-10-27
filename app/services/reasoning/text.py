@@ -25,11 +25,19 @@ def same_label(a: str, b: str) -> bool:
 
 
 def stated_alias(text: str, a: str, b: str) -> bool:
-    """노트가 두 표기를 같은 것으로 적었다: 'X (Y)' / 'Y (X)' 처럼 바로 괄호로 병기했거나,
-    한쪽이 다른 쪽의 약어이고 둘 다 그 노트에 나온다 (WAL ↔ Write Ahead Logging)."""
+    """노트가 두 표기를 같은 것으로 적었다:
+    - 'X (Y)' / 'Y (X)' 처럼 바로 괄호로 병기
+    - 한 줄이 두 표기뿐인 정의 목록: '- **Atomicity**: 원자성'
+    - 이름 붙이기: 'Chain of Trust, 신뢰의 사슬이라고 한다'
+    - 한쪽이 다른 쪽의 약어이고 둘 다 그 노트에 나온다 (WAL ↔ Write Ahead Logging)."""
     t = plain(text)
     for x, y in ((a, b), (b, a)):
-        if re.search(re.escape(x) + r"\s*\(\s*" + re.escape(y) + r"\s*\)", t, re.I):
+        ex, ey = re.escape(x), re.escape(y)
+        if re.search(ex + r"\s*\(\s*" + ey + r"\s*\)", t, re.I):
+            return True
+        if re.search(r"^[ \t]*(?:[-*+][ \t]+)?" + ex + r"[ \t]*[:：][ \t]*" + ey + r"[ \t]*$", t, re.I | re.M):
+            return True
+        if re.search(ex + r"[ \t]*,[ \t]*" + ey + r"(?:이)?라고[ \t]*(?:한다|부른다|하며|부르며|해|불러)", t, re.I):
             return True
     if (_is_acronym(a, b) or _is_acronym(b, a)) and mentions(t, a) and mentions(t, b):
         return True
