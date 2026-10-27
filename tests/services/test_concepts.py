@@ -1,7 +1,7 @@
 import pytest
 
 from app.services.concepts import ConceptExtractor, ExtractConfig, Idf, Method, build_idf, concept_key
-from app.services.concepts.markdown import Utf16Index, mask, region_parts
+from app.services.concepts.markdown import Utf16Index, fenced_blocks, mask, region_parts
 
 NOTE = """# WAL (Write Ahead Logging)
 
@@ -155,3 +155,25 @@ def test_particle_after_inline_code_or_math_is_not_a_concept():
     ex = ConceptExtractor(ExtractConfig())
     keys = {m.key for m in ex.extract("n", "`n`가 증가하면 $T$을 최소화한다. 페이지 폴트가 늘어난다.")}
     assert not any(k.split()[0] in ("가", "을") for k in keys)
+
+
+@pytest.mark.parametrize("text, blocks", [
+    ("a\n```\nx\n```\nb\n", [(2, 11)]),
+    ("- 항목\n  ```\n  ssh 접속\n  ```\n", [(5, 25)]),                    # 목록 안에서 들여쓴 코드 블록
+    ("~~~~py\nx\n~~~\ny\n~~~~\nz\n", [(0, 19)]),                        # 짧은 닫기 줄은 닫지 않는다
+    ("```\n열린 채 끝\n", [(0, 11)]),                                        # 닫히지 않으면 문서 끝까지
+    ("``` 안에 ` 가 있으면 코드 블록이 아니다\n", []),
+])
+def test_fenced_blocks(text, blocks):
+    assert fenced_blocks(text) == blocks
+    masked = mask(text)
+    assert len(masked) == len(text)
+    for a, b in blocks:
+        assert masked[a:b].strip() == ""
+
+
+def test_no_concepts_from_indented_code_block():
+    text = "# SSH\n\n- 접속 방법\n  ```\n  bandit0 password game\n  ```\n\nSSH 는 원격 접속 프로토콜이다.\n"
+    ex = ConceptExtractor(ExtractConfig())
+    labels = {m.surface.lower() for m in ex.extract("n", text)}
+    assert "ssh" in labels and not labels & {"bandit0", "password", "game"}
