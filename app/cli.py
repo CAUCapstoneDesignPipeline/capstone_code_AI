@@ -5,9 +5,11 @@
   uv run ai concepts extract                # 노트마다 개념 언급을 뽑아 mentions.jsonl 에 쓴다
   uv run ai concepts show <note_id>         # 노트 하나의 개념 요약
   uv run ai concepts eval [--include-draft]  # 정답 개념과 비교 (재현율·정밀도, docs/eval/gold-concepts.md)
+  uv run ai links eval                      # ④ 노트 쌍 점수 오프라인 시험 (정답 쌍 Recall@k·MRR, Adamic-Adar × 새로움)
 """
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -178,6 +180,59 @@ def concepts_main(argv=None):
     args.func(args)
 
 
+GOLD_DIR = Path("data/private/gold")
+
+
+def links_main(argv=None):
+    """④ 노트 쌍 점수 오프라인 시험. 정답 쌍(note_a,note_b,bridge_concept)과 노트 주제(note_id,topic)가 필요하다."""
+    from app.api.v1.extract import select_concepts
+    from app.core.config import EXTRACT_PROFILES
+    from app.services.links import build_corpus
+    from app.services.links.evaluate import evaluate
+
+    ap = argparse.ArgumentParser(prog="ai links eval")
+    ap.add_argument("cmd", choices=["eval"])
+    ap.add_argument("--notes", type=Path, default=NOTES_DIR)
+    ap.add_argument("--idf", type=Path, default=OUT_DIR / "idf.json")
+    ap.add_argument("--cache", type=Path, default=OUT_DIR / "cache")
+    ap.add_argument("--pairs", type=Path, default=GOLD_DIR / "pairs.csv")
+    ap.add_argument("--topics", type=Path, default=GOLD_DIR / "topics.csv")
+    ap.add_argument("--json", type=Path, help="결과를 JSON 으로 저장")
+    ap.add_argument("-v", "--verbose", action="store_true", help="정답 쌍마다 순위")
+    args = ap.parse_args(argv)
+
+    read = lambda p: list(csv.DictReader(p.open(encoding="utf-8-sig", newline="")))
+    pairs = [(nfc(r["note_a"]).strip(), nfc(r["note_b"]).strip(), r.get("bridge_concept", "")) for r in read(args.pairs)]
+    topics = {nfc(r["note_id"]).strip(): r["topic"] for r in read(args.topics)}
+    texts = read_notes(args.notes)
+    missing = sorted({n for a, b, _ in pairs for n in (a, b)} - set(texts)) + sorted(set(texts) - set(topics))
+    if missing:
+        sys.exit("노트·주제가 맞지 않는다:\n  " + "\n  ".join(missing))
+    ex = load_extractor(args)
+    profile = EXTRACT_PROFILES[EXTRACT_PROFILE]
+    types = [(c, c, c) for c in ("is_a", "part_of", "requires", "causes", "used_for", "contrasts_with", "example_of")]
+    corpus = build_corpus(texts, ex, lambda ms: select_concepts(ms, profile), types, profile.limits,
+                          version=ex.method_version)
+    rankings = evaluate(corpus, topics, [(a, b) for a, b, _ in pairs])
+
+    ks = (1, 5, 10, 20)
+    print(f"노트 {len(texts)}개 · 주제 {len(set(topics.values()))}개 · 정답 쌍 {len(pairs)}개 (질의 {2 * len(pairs)}개) · "
+          f"{ex.method_version}\n")
+    print(f"{'방법':<26}" + "".join(f"{'R@' + str(k):>7}" for k in ks) + f"{'MRR':>7}")
+    for r in rankings:
+        print(f"{r.method:<26}" + "".join(f"{r.recall_at(k):7.0%}" for k in ks) + f"{r.mrr:7.2f}")
+    if args.verbose:
+        print("\n정답 쌍 순위 (a 로 물었을 때 b, b 로 물었을 때 a)")
+        for a, b, bridge in pairs:
+            cells = "  ".join(f"{r.short}:{r.ranks[(a, b)] or '-'}/{r.ranks[(b, a)] or '-'}" for r in rankings)
+            print(f"  {a[:24]} ↔ {b[:24]} ({bridge})\n      {cells}")
+    if args.json:
+        args.json.write_text(json.dumps({
+            "method": ex.method_version, "notes": len(texts), "pairs": len(pairs),
+            "results": [{"method": r.method, **{f"recall@{k}": round(r.recall_at(k), 4) for k in ks},
+                         "mrr": round(r.mrr, 4)} for r in rankings]}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def serve_main(argv=None):
     import uvicorn
 
@@ -203,6 +258,8 @@ def main() -> None:
     cmd, rest = sys.argv[1], sys.argv[2:]
     if cmd == "concepts":
         concepts_main(rest)
+    elif cmd == "links":
+        links_main(rest)
     elif cmd == "serve":
         serve_main(rest)
     else:
