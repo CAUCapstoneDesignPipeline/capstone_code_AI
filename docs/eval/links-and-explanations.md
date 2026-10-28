@@ -3,6 +3,18 @@
 설계 `concept-pipeline.md` 7장의 평가 중 연결 후보와 설명에 해당하는 것. 결과 파일·표는 노트 내용이 들어 있어
 `data/private/gold/` 에만 둔다. 숫자는 개발 노트 141개, 정답 개념은 **검토 전 초안** 기준이다.
 
+## 한 번에 재기 (`uv run python eval.py`)
+
+①·④·⑤ 를 한 번에 잰다 (`uv run ai eval` 과 같다). 노트 색인은 한 번만 만들고 6초쯤 걸린다. LLM 을 부르지 않는다.
+
+- **신뢰 구간**: 값마다 bootstrap 95% 구간 (노트·질의·쌍 단위, seed 고정). 정답 쌍이 9개라 Recall@10 89% 의 구간은
+  72–100% 다. 구간 안의 변화는 개선이라고 하지 않는다.
+- **dev / test**: 정답 노트를 hash 순으로 dev 5 · test 3 으로 나눈다 (정답 CSV 에 `split` 칸을 두면 그것을 따른다).
+  규칙을 고칠 때는 `ai concepts eval` 로 dev 노트만 들여다보고, test 는 보고서에서만 본다. 지금 8개 노트는 모두 규칙을
+  고치며 본 적이 있어 test 도 깨끗하지 않다. 새로 표시하는 노트는 `split=test` 로 둔다.
+- **비교**: 보고서가 `data/private/eval/` 에 쌓이고, 새 값이 지난 보고서의 95% 구간 밖이면 🔻 나빠짐 / 🔺 좋아짐 으로 표시한다.
+  `--no-save` 는 보고서를 쌓지 않는다. 검토한 정답이 없으면 초안으로 재고 그렇다고 적는다.
+
 ## ④ 정답 노트 쌍 Recall@k (`uv run ai links eval`)
 
 정답 쌍 9개(질의 18개). 설계대로 다른 주제의 노트만 후보로 본다.
@@ -41,8 +53,9 @@ A 와 이미 함께 쓰인 개념은 후보에서 뺀다.
 1. `sample --notes <노트 이름> …` 이 노트마다 새 지식 제안을 만들어 `data/private/gold/explanations.csv` 에 쓴다
    (설명 생성·관계·간선·설명 검증 LLM 을 부른다. 노트마다 설명 `--per-note` 개).
    제안(candidate·hypothesis)과 설명 검증에서 제외된 것(rejected)을 결론 문장·근거와 함께 한 줄씩 적는다.
+   시스템 판정은 표에 없고 `explanations-key.csv` 에 따로 쓴다. 줄 순서도 섞는다 (판정을 보고 표시하면 일치율이 부풀려진다).
 2. 사람이 `human` 칸에 표시한다: `valid`(근거에서 도출되고, 노트에 그대로 있지 않고, 구체적이다) /
-   `invalid`(틀렸거나, 이미 노트에 있거나, 뻔하다) / `unsure`. 시스템 판정은 보지 않고 표시하는 것이 좋다.
+   `invalid`(틀렸거나, 이미 노트에 있거나, 뻔하다) / `unsure`. 열쇠 파일은 열지 않는다.
 3. `score` 가 일치율, candidate 정밀도(통과시킨 제안 중 valid 비율), 제외 정확도(제외한 것 중 invalid 비율)를 낸다.
    시스템 판정은 candidate → valid, hypothesis → unsure, rejected → invalid 로 본다.
 

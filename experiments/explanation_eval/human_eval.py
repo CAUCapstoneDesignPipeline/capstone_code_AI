@@ -6,10 +6,12 @@
   uv run python experiments/explanation_eval/human_eval.py sample --notes "OS-가상메모리" "DB-WAL" [--per-note 4]
   uv run python experiments/explanation_eval/human_eval.py score
 
-표 (data/private/gold/explanations.csv, 노트 내용이 들어 있어 저장소에 넣지 않는다)
-  system  candidate(모든 검증 통과) | hypothesis(애매함이 남음) | rejected(설명 검증에서 제외: 구체적이지 않거나 새롭지 않음)
-  human   사람이 채운다. valid(근거에서 도출되고 새롭고 구체적이다) | invalid(틀렸거나, 이미 노트에 있거나, 뻔하다) | unsure
+파일 두 개 (data/private/gold/, 노트 내용이 들어 있어 저장소에 넣지 않는다)
+  explanations.csv      사람이 표시할 표. 시스템 판정은 없다 (보고 표시하면 일치율이 부풀려진다). 줄 순서도 섞는다
+    human   valid(근거에서 도출되고 새롭고 구체적이다) | invalid(틀렸거나, 이미 노트에 있거나, 뻔하다) | unsure
+  explanations-key.csv  id → 시스템 판정. candidate(모든 검증 통과) | hypothesis(애매함이 남음) | rejected(설명 검증에서 제외)
 시스템 판정을 사람 판정과 같은 세 값으로 본다: candidate → valid, hypothesis → unsure, rejected → invalid.
+`uv run ai eval` 도 두 파일이 있으면 일치율을 신뢰 구간과 함께 보고서에 넣는다.
 """
 
 import argparse
@@ -23,10 +25,19 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 SHEET = ROOT / "data/private/gold/explanations.csv"
-FIELDS = ["id", "note", "linked_note", "source", "bridge", "target", "system", "system_reasons", "knowledge",
-          "evidence", "human", "human_note"]
-AS_HUMAN = {"candidate": "valid", "hypothesis": "unsure", "rejected": "invalid"}
-LABELS = ("valid", "invalid", "unsure")
+FIELDS = ["id", "note", "linked_note", "source", "bridge", "target", "knowledge", "evidence", "human", "human_note"]
+KEY_FIELDS = ["id", "system", "system_reasons"]
+from app.services.evaluation import AS_HUMAN, LABELS  # noqa: E402
+
+
+def key_path(sheet: Path) -> Path:
+    return sheet.with_name(sheet.stem + "-key.csv")
+
+
+def join(sheet_rows: list[dict], key_rows: list[dict]) -> list[dict]:
+    """표와 열쇠를 id 로 합쳐 score 가 받는 줄 (system, human)."""
+    key = {r["id"]: r for r in key_rows}
+    return [{**r, "system": key[r["id"]]["system"]} for r in sheet_rows]
 
 
 def score(rows: list[dict]) -> dict:
@@ -60,6 +71,13 @@ def _rows(name: str, names: dict, res: dict, start: int) -> list[dict]:
     for i, r in enumerate(out):
         r.update(id=f"x{start + i:04d}", human="", human_note="")
     return out
+
+
+def blind(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(사람이 볼 표, 열쇠). 표는 id hash 순으로 섞어 같은 노트·같은 판정끼리 몰리지 않게 한다."""
+    import hashlib
+    sheet = sorted(({k: r[k] for k in FIELDS} for r in rows), key=lambda r: hashlib.sha256(r["id"].encode()).hexdigest())
+    return sheet, [{k: r[k] for k in KEY_FIELDS} for r in rows]
 
 
 async def _sample(note_names: list[str], per_note: int) -> list[dict]:
@@ -109,16 +127,18 @@ def main():
             sys.exit("--notes 로 제안을 만들 노트를 고른다")
         if args.sheet.exists():
             sys.exit(f"{args.sheet} 가 이미 있다. 사람 표시를 덮어쓰지 않도록 다른 --sheet 를 준다")
-        rows = asyncio.run(_sample(args.notes, args.per_note))
+        sheet, key = blind(asyncio.run(_sample(args.notes, args.per_note)))
         args.sheet.parent.mkdir(parents=True, exist_ok=True)
-        with args.sheet.open("w", encoding="utf-8-sig", newline="") as f:
-            w = csv.DictWriter(f, FIELDS)
-            w.writeheader()
-            w.writerows(rows)
-        print(f"{len(rows)}줄 → {args.sheet}. human 칸에 valid / invalid / unsure 를 채운 뒤 score 를 돌린다")
+        for path, fields, rows in ((args.sheet, FIELDS, sheet), (key_path(args.sheet), KEY_FIELDS, key)):
+            with path.open("w", encoding="utf-8-sig", newline="") as f:
+                w = csv.DictWriter(f, fields)
+                w.writeheader()
+                w.writerows(rows)
+        print(f"{len(sheet)}줄 → {args.sheet} (시스템 판정은 {key_path(args.sheet).name} 에 따로). "
+              "열쇠는 열지 말고 human 칸에 valid / invalid / unsure 를 채운 뒤 score 를 돌린다")
         return
-    rows = list(csv.DictReader(args.sheet.open(encoding="utf-8-sig", newline="")))
-    s = score(rows)
+    read = lambda p: list(csv.DictReader(p.open(encoding="utf-8-sig", newline="")))
+    s = score(join(read(args.sheet), read(key_path(args.sheet))))
     if not s["labelled"]:
         sys.exit("사람이 표시한 줄이 없다 (human 칸)")
     pct = lambda x: "-" if x is None else f"{x:.0%}"

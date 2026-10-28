@@ -7,6 +7,7 @@
   uv run ai concepts eval [--include-draft]  # 정답 개념과 비교 (재현율·정밀도, docs/eval/gold-concepts.md)
   uv run ai links eval                      # ④ 노트 쌍 점수 오프라인 시험 (정답 쌍 Recall@k·MRR, Adamic-Adar × 새로움)
   uv run ai links refind                    # 숨겼다 다시 찾기 (정답 표시 없이, 노트를 숨기고 A-C 를 다시 찾는가)
+  uv run ai eval [--include-draft]          # 위 평가 전부 + 설명 사람 판정을 한 번에. 신뢰 구간, dev/test, 지난 보고서와 비교
 """
 
 import argparse
@@ -272,6 +273,120 @@ def serve_main(argv=None):
     uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
 
 
+def eval_main(argv=None):
+    """평가 묶음. 노트 색인은 한 번만 만든다. 보고서는 data/private/eval/ 에 쌓이고, 가장 최근 보고서와 비교한다."""
+    import subprocess
+    import time
+
+    from app.api.v1.extract import select_concepts, to_concepts
+    from app.core.config import EXTRACT_PROFILES
+    from app.services.concepts.gold import Extracted, load_gold, loose, score
+    from app.services.evaluation import assign_splits, bootstrap, compare, labelled_explanations, ratio
+    from app.services.links import build_corpus
+    from app.services.links.evaluate import evaluate, hide_and_refind
+
+    ap = argparse.ArgumentParser(prog="ai eval")
+    ap.add_argument("--notes", type=Path, default=NOTES_DIR)
+    ap.add_argument("--idf", type=Path, default=OUT_DIR / "idf.json")
+    ap.add_argument("--cache", type=Path, default=OUT_DIR / "cache")
+    ap.add_argument("--gold", type=Path, default=GOLD_DIR / "concepts.csv")
+    ap.add_argument("--pairs", type=Path, default=GOLD_DIR / "pairs.csv")
+    ap.add_argument("--topics", type=Path, default=GOLD_DIR / "topics.csv")
+    ap.add_argument("--explanations", type=Path, default=GOLD_DIR / "explanations.csv")
+    ap.add_argument("--include-draft", action="store_true", help="검토 전(draft) 정답 개념도 쓴다")
+    ap.add_argument("--refind-n", type=int, default=200)
+    ap.add_argument("--reports", type=Path, default=Path("data/private/eval"))
+    ap.add_argument("--baseline", type=Path, help="비교할 보고서 (기본: 가장 최근 보고서)")
+    ap.add_argument("--no-save", action="store_true", help="보고서를 쌓지 않는다 (규칙을 고치는 중 dev 만 볼 때)")
+    args = ap.parse_args(argv)
+
+    read = lambda p: list(csv.DictReader(p.open(encoding="utf-8-sig", newline="")))
+    texts = read_notes(args.notes)
+    ex = load_extractor(args)
+    profile = EXTRACT_PROFILES[EXTRACT_PROFILE]
+    metrics: dict[str, dict] = {}
+
+    def put(name, est):
+        metrics[name] = est.to_dict()
+        print(f"  {name:<34} {est}")
+
+    # ① 개념 추출: 노트 단위 bootstrap, dev / test 따로
+    gold = load_gold(args.gold, include_draft=args.include_draft)
+    if not gold and not args.include_draft:      # 아직 검토한 정답이 없으면 초안으로 재고 그렇다고 적는다
+        print("검토한(status=reviewed) 정답 개념이 없어 초안(draft)으로 잰다\n")
+        args.include_draft = True
+        gold = load_gold(args.gold, include_draft=True)
+    splits = assign_splits(gold, {nfc(r["note_id"]).strip(): (r.get("split") or "").strip() for r in read(args.gold)})
+    print(f"① 개념 추출 · 정답 노트 {len(gold)}개 (dev {sum(v == 'dev' for v in splits.values())} · "
+          f"test {sum(v == 'test' for v in splits.values())}){' · draft 포함' if args.include_draft else ''}")
+    per_note = {}
+    for n in sorted(gold):
+        if n not in texts:
+            sys.exit(f"정답 노트가 노트 폴더에 없다: {n}")
+        concepts, _ = to_concepts(select_concepts(ex.extract(n, texts[n]), profile), texts[n])
+        per_note[n] = score(gold[n], [Extracted(c.label, frozenset({loose(c.label), *(loose(m.quote) for m in c.mentions)}),
+                                               c.confidence) for c in concepts])
+    recall = ratio(lambda s: s.core_hit, lambda s: s.core)
+    precision = ratio(lambda s: s.extracted_hit, lambda s: s.extracted)
+    for part in ("dev", "test", "all"):
+        units = [s for n, s in sorted(per_note.items()) if part == "all" or splits.get(n) == part]
+        put(f"concepts.recall_core.{part}", bootstrap(units, recall))
+        put(f"concepts.precision.{part}", bootstrap(units, precision))
+
+    # ④ 노트 쌍과 숨겼다 다시 찾기: 같은 색인
+    types = [(c, c, c) for c in ("is_a", "part_of", "requires", "causes", "used_for", "contrasts_with", "example_of")]
+    corpus = build_corpus(texts, ex, lambda ms: select_concepts(ms, profile), types, profile.limits,
+                          version=ex.method_version)
+    pairs = [(nfc(r["note_a"]).strip(), nfc(r["note_b"]).strip()) for r in read(args.pairs)]
+    topics = {nfc(r["note_id"]).strip(): r["topic"] for r in read(args.topics)}
+    by = {r.method: r for r in evaluate(corpus, topics, pairs)}
+    ranks = list(by["S (다른 주제)"].ranks.values())
+    hit = lambda k: (lambda us: sum(1 for r in us if r is not None and r <= k) / len(us))
+    print(f"④ 노트 쌍 · 정답 쌍 {len(pairs)}개 (질의 {len(ranks)}개, S 다른 주제)")
+    put("links.recall@10", bootstrap(ranks, hit(10)))
+    put("links.mrr", bootstrap(ranks, lambda us: sum(1 / r for r in us if r is not None) / len(us)))
+    refind = hide_and_refind(corpus, n=args.refind_n)
+    print(f"④ 숨겼다 다시 찾기 · 쌍 {len(refind[0].ranks)}개")
+    put("refind.recall@20", bootstrap(list(refind[0].ranks.values()), hit(20)))
+    put("refind.baseline_recall@20", bootstrap(list(refind[1].ranks.values()), hit(20)))
+
+    # ⑤ 설명 사람 판정 (표와 열쇠가 있고 표시한 줄이 있을 때)
+    key = args.explanations.with_name(args.explanations.stem + "-key.csv")
+    if args.explanations.exists() and key.exists():
+        labelled = labelled_explanations(read(args.explanations), read(key))
+        print(f"⑤ 설명 사람 판정 · 표시 {len(labelled)}줄")
+        if labelled:
+            put("explanations.agreement", bootstrap(labelled, lambda us: sum(s == h for s, h in us) / len(us)))
+            cand = [h for s, h in labelled if s == "valid"]
+            put("explanations.candidate_precision", bootstrap(cand, lambda us: us.count("valid") / len(us)))
+    else:
+        print("⑤ 설명 사람 판정 · 표 없음 (experiments/explanation_eval/human_eval.py sample)")
+
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+        dirty = bool(subprocess.run(["git", "status", "--porcelain", "app"], capture_output=True, text=True).stdout.strip())
+    except OSError:
+        commit, dirty = "unknown", False
+    report = {"commit": commit + ("+dirty" if dirty else ""), "method": ex.method_version,
+              "includeDraft": args.include_draft, "notes": len(texts), "metrics": metrics}
+    old = sorted(args.reports.glob("*.json")) if args.reports.exists() else []
+    base = args.baseline or (old[-1] if old else None)
+    if base:
+        prev = json.loads(base.read_text(encoding="utf-8"))
+        if prev.get("includeDraft") != args.include_draft:
+            print(f"\n(비교 생략: {base.name} 는 includeDraft={prev.get('includeDraft')})")
+        else:
+            print(f"\n지난 보고서 {base.name} ({prev.get('commit')}) 와 비교 (지난 값의 95% 구간 기준)")
+            for name, new, was, verdict in compare(metrics, prev["metrics"]):
+                mark = {"나빠짐": "🔻", "좋아짐": "🔺"}.get(verdict, "  ")
+                print(f"  {mark} {name:<34} {was:5.0%} → {new:5.0%}  {verdict}")
+    if not args.no_save:
+        args.reports.mkdir(parents=True, exist_ok=True)
+        out = args.reports / f"{time.strftime('%Y%m%d-%H%M%S')}-{commit or 'unknown'}.json"
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\n보고서 → {out}")
+
+
 def main() -> None:
     """`uv run ai <명령> ...` 진입점."""
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
@@ -282,6 +397,8 @@ def main() -> None:
         concepts_main(rest)
     elif cmd == "links":
         links_main(rest)
+    elif cmd == "eval":
+        eval_main(rest)
     elif cmd == "serve":
         serve_main(rest)
     else:
