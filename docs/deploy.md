@@ -25,7 +25,7 @@ docker build -t capstone-ai --build-arg SOURCE_REVISION=$(git rev-parse HEAD) .
 | `/var/cache/ai` volume | 권장 | 추출·관계·LLM 설명 캐시. 같은 입력의 LLM 호출을 다시 과금하지 않는다 |
 | `AI_EXPLAIN_LLM_MODEL` / `AI_EXPLAIN_LLM_EFFORT` | 아니오 | 기본 `claude-opus-5-5`, `medium` |
 | `AI_RELATION_LLM=1` | 권장 | 관계를 LLM 으로 보탠다 (`extract-hybrid-2`, `links-hybrid-1`). 끄면 노트 사이 경로가 거의 없다. effort 기본 `low` |
-| `AI_VERIFY_LLM` | 아니오 | 기본 1. LLM 간선 검증 `edges-llm-1`, LLM 설명 검증 `explanation-hybrid-2` (effort `low`) |
+| `AI_VERIFY_LLM` | 아니오 | 기본 1. LLM 간선 검증 `edges-llm-1`·`edges-llm-2`, LLM 설명 검증 `explanation-hybrid-2`, LLM 병합 판정 `merge-hybrid-1` (effort `low`) |
 | `AI_EMBEDDING_PROFILES` | 아니오 | 켤 임베딩 profile. 별칭 병합 후보 찾기는 `embeddings-bge-m3-1` (약 2 GB 메모리, [선택 근거](eval/alias-embeddings.md)). embeddings extra 로 빌드한 이미지만 |
 | `AI_MAX_INFLIGHT`, `AI_LLM_TIMEOUT_SECONDS` | 아니오 | 동시성, LLM 한 번 호출 제한(기본 90초) |
 
@@ -80,6 +80,6 @@ volumes:
 ## 확인한 것 (로컬 Docker 28, arm64)
 
 - 빌드 성공, `uid=10001` 로 실행, `HEALTHCHECK` healthy
-- readiness 200: `explain-llm-2` 포함 10개 profile. IDF 를 안 주면 readiness 503 (liveness 는 healthy)
+- readiness 200: 그 commit 의 profile 목록이 `profileVersions` 에 나온다 (LLM profile 은 LLM 설정이 있을 때만). IDF 를 안 주면 readiness 503 (liveness 는 healthy)
 - `/dev/` 404, 틀린 토큰 401
 - 참조 클라이언트(`app/client.py`)로 컨테이너에 전체 흐름(note-links → 검증 → LLM 설명 → 설명 검증)을 불러 candidate 제안 1건

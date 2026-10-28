@@ -91,8 +91,10 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 | --- | --- | --- |
 | extractKnowledge | `extract-det-3` | Kiwi 명사구 + TF-IDF + 마크다운 구조. 관계는 한국어 문형 규칙 + 구조(제목·목록·정의·비교 표) |
 | decideConceptMerges | `merge-det-1` | 아래 동일성 규칙 (병합용, 덜 엄격) |
+| decideConceptMerges | `merge-hybrid-1` | `merge-det-1` + 규칙이 same 이라 하지 못한 쌍과 주제가 다른 same 쌍을 LLM(검증 LLM, effort low)이 두 표기와 근거 문장만 보고 판정. LLM same 은 확신 0.8 이상만 같음, 규칙 same 인데 LLM 이 아니라고 하면 애매. 쌍마다 캐시. 번역·음역(`Mutex ↔ 뮤텍스`)을 잇는다 ([측정](eval/alias-embeddings.md)) |
 | verifyBridgeIdentity | `bridges-det-1` | 아래 동일성 규칙 (매개 검증용, 엄격) |
-| verifyEdgeEntailment | **`edges-llm-1`** (권장) | LLM 이 근거 원문만 읽고 entailed / contradicted / unknown. 관계 판정과 다른 프롬프트 (독립 검증). 간선마다 정확히 하나 아니면 502. 캐시 |
+| verifyEdgeEntailment | **`edges-llm-2`** (권장) | `edges-llm-1` + 근거마다 노트의 제목 경로("DB > WAL > 오해")를 보여 준다. '오해'·'예전 방식' 절의 문장을 글쓴이의 주장으로 읽지 않게 |
+| verifyEdgeEntailment | `edges-llm-1` | LLM 이 근거 원문만 읽고 entailed / contradicted / unknown. 관계 판정과 다른 프롬프트 (독립 검증). 간선마다 정확히 하나 아니면 502. 캐시 |
 | verifyEdgeEntailment | `edges-det-1` | 두 개념이 근거에 나오는가 + 유형별 단서 말 + 부정 표현. 단서 말 없이 쓰인 관계(LLM 이 찾은 관계)는 대부분 unknown |
 | generateExplanation | `explain-llm-8` | 항상 LLM(기본 `claude-opus-5-5`, effort medium)이 전제·보조 전제(문맥 근거)·조건·결론(새 지식)을 쓴다. 결론은 A–C 관계와 그것을 A 에 적용한 결과 2~4 문장, 근거보다 넓게 말하지 않는다. 문체는 해요체(~에요/~예요), 용어 쓰는 방식은 트리거 노트(context.noteId)를 따른다. 경로·근거·합성 규칙은 입력으로 고정. 인용은 요청 근거 중에서만 고르게 구조화 출력 enum 으로 묶고, 응답은 코드가 §3.9 로 다시 검사한다 (어기면 502, 자동 재시도·모델 fallback 없음). 같은 입력은 캐시 |
 | verifyExplanation | **`explanation-hybrid-2`** (권장) | `explanation-det-3` + LLM(검증 LLM, effort low)이 주장마다 인용 근거가 뒷받침하는지(supported → pass, partial → uncertain, unsupported·contradicted → fail), 결론이 구체적인지·새로운지 본다. 구체적이지 않거나 한 노트 내용의 바꿔쓰기면 결론 fail. 생성기와 prompt 가 달라 독립. 주장마다 정확히 하나 아니면 502. 캐시 |
@@ -101,7 +103,8 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 | findNoteLinks (제안) | **`links-hybrid-1`** (권장) | 3장 + 관계를 LLM 으로 보탠다 (`extract-hybrid-2` 의 관계와 같다) |
 | findNoteLinks (제안) | `links-det-1` | 3장. 규칙·구조 관계만 써서 경로가 거의 없다 |
 
-`explain-llm-8`, `edges-llm-1`, `explanation-hybrid-2`, `links-hybrid-1`·`extract-hybrid-*` 의 관계 판정이 LLM 이고 나머지는 결정적이다.
+`explain-llm-8`, `edges-llm-*`, `explanation-hybrid-2`, `merge-hybrid-1`, `links-hybrid-1`·`extract-hybrid-*` 의 관계 판정이 LLM 이고 나머지는 결정적이다.
+Anthropic 호출은 역할마다 고정인 system prompt 를 캐시한다 (같은 역할의 요청이 5분 안에 이어지면 system 을 캐시에서 읽는다).
 새 지식(설명)은 해요체, 판정 이유(reason)는 ~습니다체다. LLM 검증 profile 은 생성 profile 과 prompt 가 달라 계약 §5 독립성을 지킨다.
 
 `meta.modelRevision` 은 그 방법 코드의 hash 다 (LLM profile 은 `모델 id@코드 hash`, `meta.model` 은 실제 호출한 모델 id). 코드가 바뀌면 값이 바뀌므로 BE 는 결과를 구분할 수 있다.
