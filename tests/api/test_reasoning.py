@@ -483,3 +483,17 @@ def test_hybrid_merge_asks_llm_only_where_rules_cannot_decide(tmp_path):
 def test_hybrid_merge_unavailable_without_llm(client):
     r = post(client, "/merge-decisions", base("merge-hybrid-1", pairs=[PAIR]))
     assert r.status_code == 503
+
+
+def test_llm_edge_check_with_heading_path():
+    c, fake = edge_client([{"edge": "X1", "outcome": "entailed", "confidence": 0.9,
+                            "reason": "근거가 재시도가 중복을 만든다고 말합니다."}])
+    with c:
+        r = post(c, "/verifications/edges", base("edges-llm-2", policy=POLICY, edges=[EDGE],
+                                                 generationProvenance=[STAMP]))
+        assert r.status_code == 200, r.text
+        assert r.json()["meta"]["promptVersion"] == "edges-llm-2"
+        system, user, _ = fake.calls[0]
+        assert "근거 (위치: 지식 🧠): **재시도**는 중복을 만든다." in user and "제목 경로" in system
+        post(c, "/verifications/edges", base("edges-llm-1", policy=POLICY, edges=[EDGE], generationProvenance=[STAMP]))
+        assert "위치:" not in fake.calls[1][1]                               # edges-llm-1 은 그대로

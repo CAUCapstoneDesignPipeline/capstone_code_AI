@@ -24,6 +24,7 @@ from app.schemas.reasoning import (Claim, ClaimVerdict, EdgeVerdict, ExplainRequ
                                    MergeDecision, MergeRequest, MergeResponse, VerifyBridgesRequest,
                                    VerifyBridgesResponse, VerifyEdgesRequest, VerifyEdgesResponse,
                                    VerifyExplanationRequest, VerifyExplanationResponse)
+from app.services.links.context import heading_path, py_index
 from app.services.links.corpus import loose_key
 from app.services.llm import LLMError
 from app.services.reasoning import REASONING_PROFILES, ReasoningProfile
@@ -187,10 +188,18 @@ async def verify_edges(request: Request):
             out.append(EdgeVerdict(edgeId=e.edgeId, outcome=r.outcome, confidence=r.confidence, reason=r.reason))
         return out
 
+    with_headings = profile.prompt == "edges-llm-2"
+
+    def where(x: str) -> str:
+        e = ev[x.lower()]
+        body = docs[e.noteId.lower()].body
+        return heading_path(body, py_index(body, e.startOffset))
+
     def llm():
         items = [EdgeIn(e.edgeId, e.source.label, e.target.label, e.typeCode, *types[e.typeCode],
-                        tuple(ev[x.lower()].quote for x in e.evidenceIds)) for e in req.edges]
-        outs, prov, mod = judge.judge(items)
+                        tuple(ev[x.lower()].quote for x in e.evidenceIds),
+                        tuple(where(x) for x in e.evidenceIds) if with_headings else ()) for e in req.edges]
+        outs, prov, mod = judge.judge(items, headings=with_headings)
         return [build(EdgeVerdict, edgeId=o.edge_id, outcome=o.outcome, confidence=o.confidence, reason=o.reason)
                 for o in outs], prov, mod
 

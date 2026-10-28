@@ -151,3 +151,11 @@ def test_hide_and_refind_finds_pair_through_other_notes():
     hidden = {(a, x): r for (nid, a, x), r in aa.ranks.items() if nid == "a"}
     assert hidden[("장애", "재시도")] == 1 or hidden.get(("재시도", "장애")) == 1     # 다른 두 노트의 '중복' 을 거쳐 다시 찾는다
     assert hide_and_refind(c, n=50, seed=0, hub_ratio=1.0)[0].ranks == aa.ranks      # 같은 seed 면 같은 결과
+
+
+def test_heading_path_skips_code_blocks():
+    from app.services.links.context import heading_path
+    text = "# DB\n## WAL\n```\n# 주석\n```\n### 오해\n문장이다.\n## 체크포인트\n끝.\n"
+    assert heading_path(text, text.index("문장이다")) == "DB > WAL > 오해"
+    assert heading_path(text, text.index("끝.")) == "DB > 체크포인트"
+    assert heading_path("본문뿐", 0) == ""

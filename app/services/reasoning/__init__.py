@@ -58,6 +58,9 @@ REASONING_PROFILES = {p.id: p for p in (
                      ("reasoning/entailment.py", "reasoning/text.py")),
     # LLM 이 근거를 읽고 간선을 판정한다. 관계 판정(relation-typing)과 prompt 가 달라 계약 §5 독립성을 지킨다
     ReasoningProfile("edges-llm-1", "edges", "llm", "edges-llm-1", ("reasoning/entailment_llm.py",), ("edge_judge",)),
+    # + 근거마다 노트의 제목 경로를 보여 준다 ('오해'·'예전 방식' 절의 문장을 관계로 읽지 않게)
+    ReasoningProfile("edges-llm-2", "edges", "llm", "edges-llm-2",
+                     ("reasoning/entailment_llm.py", "links/context.py", "concepts/markdown.py"), ("edge_judge",)),
     # 새 지식 제안은 항상 LLM 이 쓴다 (해요체, 모든 사실은 근거 인용). 경로·근거·합성 규칙은 입력으로 고정, 응답은 §3.9 로 코드가 다시 검사한다
     ReasoningProfile("explain-llm-8", "explain", "llm", "explain-llm-8",
                      ("reasoning/explain_llm.py", "reasoning/explain.py", "reasoning/text.py"), ("explainer",)),

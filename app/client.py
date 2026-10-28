@@ -116,7 +116,7 @@ async def suggest_knowledge(client: AiClient, note: dict, candidates: list[dict]
                             min_confidence: float = 0.0, max_paths: int = 6, pool: int = 12,
                             embedding_profile: tuple[str, int] | None = None,
                             explain_profile: str = "explain-llm-8", links_profile: str = "links-hybrid-1",
-                            edges_profile: str = "edges-llm-1", verify_profile: str = "explanation-hybrid-2",
+                            edges_profile: str = "edges-llm-2", verify_profile: str = "explanation-hybrid-2",
                             taxonomy_codes: frozenset[str] = TAXONOMY_CODES) -> dict:
     """note 와 연결된 노트·새 지식 제안. 단계를 나눠 싼 검사부터 하고 비싼 LLM 설명은 살아남은 경로에만 쓴다.
 
