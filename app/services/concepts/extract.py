@@ -21,6 +21,9 @@ INNER_TAGS = NOUN_TAGS | {"SN", "XSN", "XPN", "W_SERIAL"}  # 명사구 안에만
 CONNECTORS = {"-", "_", "/", "+"}                # 명사 사이를 잇는 기호 (Bellman-Ford, TCP/IP)
 SEPARATOR_WORDS = {"vs", "versus"}               # 영어 명사로 읽히지만 두 개념을 가르는 말
 PREDICATE_SUFFIX = {"XSV", "XSA"}                # 명사를 동사·형용사로 만드는 접미사 (-하다, -되다)
+_HEADING_NUMBER = re.compile(r"\d+(?:\.\d+)*[.)]\s+")    # 제목·목록 번호 (1. , 2.3) )
+# 제목·명사구 끝에 붙어 개념을 꾸미기만 하는 틀 말 ("X 과정", "X 비교"). '문제'는 "키 배송 문제" 처럼 개념의 일부라 넣지 않는다
+FRAME_SUFFIXES = frozenset("과정 비교 예시 예제 정리 요약 복습 관점 수식 개요 소개 구조 동작 정의 설명 특징 원리 흐름".split())
 STRUCT_COVER = 0.6                               # 후보가 구조 조각의 이만큼 이상을 덮어야 구조 가중치를 받는다
 # 구조 구간 조각이 통째로 개념이 되려면 이 품사로만 이뤄져야 한다 (조사·어미·동사가 있으면 문장이다)
 REGION_TAGS = INNER_TAGS | {"SO", "SS", "SW", "SP", "W_EMOJI", "NNB"}
@@ -188,8 +191,12 @@ class ConceptExtractor:
                 continue
             kept.append((s, e))
 
-        out = []
+        out, seen = [], set()
         for s, e in kept:
+            s, e = self._trim(text, s, e)
+            if (s, e) in seen:
+                continue
+            seen.add((s, e))
             surface = text[s:e]
             key = concept_key(surface)
             if not self._keep(key):
@@ -200,6 +207,18 @@ class ConceptExtractor:
                           if ps <= s and e <= pe and (e - s) >= STRUCT_COVER * (pe - ps)), default=0.0)
             out.append(Candidate(s, e, surface, key, struct))
         return out
+
+    def _trim(self, text: str, s: int, e: int) -> tuple[int, int]:
+        """명사구의 제목 번호("1. Classification Problem")와 끝에 붙은 틀 말("Policy Iteration 비교", "SSL/TLS 과정")을
+        떼어 낸다. 앞쪽 낱말은 떼지 않는다 ("Page Table", "데이터 블록" 의 앞말은 불용어여도 개념의 일부다)."""
+        m = _HEADING_NUMBER.match(text, s, e)
+        if m and m.end() < e:
+            s = m.end()
+        while True:
+            words = list(re.finditer(r"\S+", text[s:e]))
+            if len(words) < 2 or concept_key(words[-1].group()) not in FRAME_SUFFIXES:
+                return s, e
+            e = s + words[-2].end()
 
     def _tokens(self, clean: str, pos: list[int]):
         """기호를 뺀 글의 토큰을 원문 위치로 돌려 낸다 (start, len 만 원문 기준으로 바꾼다)."""
