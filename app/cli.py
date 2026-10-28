@@ -310,6 +310,10 @@ def eval_main(argv=None):
     ap.add_argument("--reports", type=Path, default=Path("data/private/eval"))
     ap.add_argument("--baseline", type=Path, help="비교할 보고서 (기본: 가장 최근 보고서)")
     ap.add_argument("--no-save", action="store_true", help="보고서를 쌓지 않는다 (규칙을 고치는 중 dev 만 볼 때)")
+    ap.add_argument("--concept-filter", action="store_true", help="LLM 개념 거르기(extract-hybrid-3)를 켜고 잰다. LLM 을 부른다")
+    ap.add_argument("--only", choices=["concepts"], help="개념 추출만 잰다")
+    ap.add_argument("--split", choices=["dev", "test", "all"], default="all",
+                    help="개념 추출을 잴 노트 (규칙·설정을 고치는 중에는 dev)")
     args = ap.parse_args(argv)
 
     read = lambda p: list(csv.DictReader(p.open(encoding="utf-8-sig", newline="")))
@@ -322,6 +326,21 @@ def eval_main(argv=None):
         metrics[name] = est.to_dict()
         print(f"  {name:<34} {est}")
 
+    cfilter = None
+    if args.concept_filter:                      # extract-hybrid-3 과 같이 LLM 이 개념 후보를 거른다 (노트마다 한 번, 캐시)
+        from app.api.v1.extract import filter_concepts
+        from app.main import role_llm_config
+        from app.services.concepts.filter_llm import ConceptFilter
+        from app.services.llm import make_llm
+        cfg = role_llm_config("relation", "low")
+        if cfg is None:
+            sys.exit("--concept-filter 에는 LLM 설정이 필요하다 (ANTHROPIC_API_KEY 등)")
+        cfilter = ConceptFilter(make_llm(cfg), Path("data/private/cache/relations/concepts"))
+
+    def select(n):
+        sel = select_concepts(ex.extract(n, texts[n]), profile)
+        return filter_concepts(sel, texts[n], cfilter) if cfilter else sel
+
     # ① 개념 추출: 노트 단위 bootstrap, dev / test 따로
     gold = load_gold(args.gold, include_draft=args.include_draft)
     if not gold and not args.include_draft:      # 아직 검토한 정답이 없으면 초안으로 재고 그렇다고 적는다
@@ -332,23 +351,29 @@ def eval_main(argv=None):
     print(f"① 개념 추출 · 정답 노트 {len(gold)}개 (dev {sum(v == 'dev' for v in splits.values())} · "
           f"test {sum(v == 'test' for v in splits.values())}){' · draft 포함' if args.include_draft else ''}")
     per_note = {}
-    for n in sorted(gold):
+    for n in sorted(n for n in gold if args.split == "all" or splits.get(n) == args.split):
         if n not in texts:
             sys.exit(f"정답 노트가 노트 폴더에 없다: {n}")
-        concepts, _ = to_concepts(select_concepts(ex.extract(n, texts[n]), profile), texts[n])
+        concepts, _ = to_concepts(select(n), texts[n])
         per_note[n] = score(gold[n], [Extracted(c.label, frozenset({loose(c.label), *(loose(m.quote) for m in c.mentions)}),
                                                c.confidence) for c in concepts])
     recall = ratio(lambda s: s.core_hit, lambda s: s.core)
     precision = ratio(lambda s: s.extracted_hit, lambda s: s.extracted)
-    for part in ("dev", "test", "all"):
+    for part in (("dev", "test", "all") if args.split == "all" else (args.split,)):
         units = [s for n, s in sorted(per_note.items()) if part == "all" or splits.get(n) == part]
         put(f"concepts.recall_core.{part}", bootstrap(units, recall))
         put(f"concepts.precision.{part}", bootstrap(units, precision))
 
+    if args.only == "concepts":
+        return
+
     # ④ 노트 쌍과 숨겼다 다시 찾기: 같은 색인
     types = [(c, c, c) for c in ("is_a", "part_of", "requires", "causes", "used_for", "contrasts_with", "example_of")]
-    corpus = build_corpus(texts, ex, lambda ms: select_concepts(ms, profile), types, profile.limits,
-                          version=ex.method_version)
+    def corpus_select(ms):
+        sel = select_concepts(ms, profile)
+        return filter_concepts(sel, texts[ms[0].span.note_id], cfilter) if cfilter and ms else sel
+    corpus = build_corpus(texts, ex, corpus_select, types, profile.limits,
+                          version=ex.method_version + ("+concept-filter" if cfilter else ""))
     pairs = [(a, b) for a, b, _ in gold_pairs(read(args.pairs), include_draft=args.include_draft)]
     topics = {nfc(r["note_id"]).strip(): r["topic"] for r in read(args.topics)}
     by = {r.method: r for r in evaluate(corpus, topics, pairs)}
@@ -389,7 +414,8 @@ def eval_main(argv=None):
     import hashlib
     data = hashlib.sha256(b"".join(p.read_bytes() for p in (args.gold, args.pairs, args.topics, args.judgments)
                                    if p.exists())).hexdigest()[:12]
-    report = {"commit": commit + ("+dirty" if dirty else ""), "method": ex.method_version, "data": data,
+    report = {"commit": commit + ("+dirty" if dirty else ""), "data": data,
+              "method": ex.method_version + ("+concept-filter" if cfilter else ""),
               "includeDraft": args.include_draft, "notes": len(texts), "metrics": metrics}
     old = sorted(args.reports.glob("*.json")) if args.reports.exists() else []
     base = args.baseline or (old[-1] if old else None)

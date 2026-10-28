@@ -90,6 +90,7 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 | operation | profileVersion | 방법 |
 | --- | --- | --- |
 | extractKnowledge | `extract-det-3` | Kiwi 명사구 + TF-IDF + 마크다운 구조. 관계는 한국어 문형 규칙 + 구조(제목·목록·정의·비교 표) |
+| extractKnowledge | **`extract-hybrid-3`** (권장) | `extract-det-3` 의 개념 후보를 LLM(관계 LLM, effort low)이 노트 원문과 함께 읽고 개념이 아닌 것(일반 낱말·문장 조각·예시 값·이름)을 **빼기만** 한다. 위치·표기는 결정적 추출 그대로. 관계는 `extract-hybrid-2` 와 같다. 노트 원문으로 캐시. 처음 보는 노트에서 정밀도 43% → 73%, 재현율 85% → 84% ([측정](eval/links-and-explanations.md)) |
 | decideConceptMerges | `merge-det-1` | 아래 동일성 규칙 (병합용, 덜 엄격) |
 | decideConceptMerges | `merge-hybrid-1` | `merge-det-1` + 규칙이 same 이라 하지 못한 쌍과 주제가 다른 same 쌍을 LLM(검증 LLM, effort low)이 두 표기와 근거 문장만 보고 판정. LLM same 은 확신 0.8 이상만 같음, 규칙 same 인데 LLM 이 아니라고 하면 애매. 쌍마다 캐시. 번역·음역(`Mutex ↔ 뮤텍스`)을 잇는다 ([측정](eval/alias-embeddings.md)) |
 | verifyBridgeIdentity | `bridges-det-1` | 아래 동일성 규칙 (매개 검증용, 엄격) |

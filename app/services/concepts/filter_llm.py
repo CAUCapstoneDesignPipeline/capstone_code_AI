@@ -5,8 +5,8 @@
 여기서는 LLM 이 노트 원문과 후보 목록을 함께 읽고 후보마다 keep / drop 만 정한다.
 
 권한: 후보를 **빼기만** 한다. 새 개념을 더하거나 표기·위치를 바꾸지 못한다 (위치는 결정적 추출의 것 그대로).
-응답은 후보마다 정확히 하나여야 하고(아니면 invalid_output), 노트 원문·후보·프롬프트·모델의 hash 로 캐시해 같은 노트는
-다시 묻지 않는다 (같은 입력이면 같은 결과).
+응답은 뺄 후보 번호 목록이다 (후보가 200개여도 출력이 짧아 긴 노트도 제한 시간 안에 끝난다). 목록 밖 번호는
+invalid_output, 중복은 한 번으로 본다. 노트 원문·후보·프롬프트·모델의 hash 로 캐시해 같은 노트는 다시 묻지 않는다 (같은 입력이면 같은 결과).
 """
 
 import hashlib
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from app.services.llm import LLMError
 
-PROMPT_VERSION = "concept-filter-1"
+PROMPT_VERSION = "concept-filter-2"
 
 SYSTEM = """너는 공부 노트에서 자동으로 뽑은 '개념 후보' 중 지식 그래프의 노드로 둘 만한 것만 고른다.
 
@@ -28,7 +28,7 @@ drop: 개념이 아닌 것.
   - 예시 속 값: 파일 이름, 비밀번호, 숫자, 변수 이름, 명령 예시의 인자
   - 사람·회사·제품·책·강의 이름 (개념 이름의 일부일 때는 keep: Bellman 방정식)
   - 다른 후보와 같은 개념에 꾸밈말만 붙은 것 (예: 'X 동작' 이 'X' 와 같은 대상이면 'X 동작' 은 drop)
-판단이 서지 않으면 keep 한다. 후보마다 정확히 한 번 답한다."""
+판단이 서지 않으면 keep 한다. drop 할 후보의 번호(C1, C2 …)만 답한다. 모두 keep 이면 빈 목록이다."""
 
 
 class ConceptFilter:
@@ -64,24 +64,17 @@ class ConceptFilter:
         handle = {f"C{i}": l for i, l in enumerate(labels, 1)}
         user = ("<노트>\n" + body + "\n</노트>\n\n개념 후보:\n" + "\n".join(f"[{h}] {l}" for h, l in handle.items()))
         schema = {
-            "type": "object", "additionalProperties": False, "required": ["decisions"],
-            "properties": {"decisions": {"type": "array", "items": {
-                "type": "object", "additionalProperties": False, "required": ["candidate", "decision"],
-                "properties": {"candidate": {"type": "string", "enum": list(handle)},
-                               "decision": {"type": "string", "enum": ["keep", "drop"]}}}}},
+            "type": "object", "additionalProperties": False, "required": ["drop"],
+            "properties": {"drop": {"type": "array", "items": {"type": "string", "enum": list(handle)}}},
         }
         r = self.llm.complete_json(SYSTEM, user, schema, "concept_filter")
         try:
-            got = {}
-            for d in r.data["decisions"]:
-                if d["candidate"] in got:
-                    raise LLMError("invalid_output", "duplicate candidate")
-                got[d["candidate"]] = d["decision"]
+            drop = list(r.data["drop"])
         except (KeyError, TypeError) as e:
             raise LLMError("invalid_output", f"shape: {e}")
-        if set(got) != set(handle):
-            raise LLMError("invalid_output", "missing candidate")
-        return {handle[h] for h, d in got.items() if d == "keep"}
+        if not set(drop) <= set(handle):            # 중복은 뜻이 같아 받는다 (set). 목록 밖 번호는 오류
+            raise LLMError("invalid_output", "unknown candidate")
+        return {l for h, l in handle.items() if h not in drop}
 
     def _cache_get(self, key: str):
         if not self.cache_dir:

@@ -267,10 +267,8 @@ def test_concept_filter_only_removes_candidates(tmp_path):
 
         def complete_json(self, system, user, schema, name):
             FakeLLM.calls.append(user)
-            handles = schema["properties"]["decisions"]["items"]["properties"]["candidate"]["enum"]
             lines = dict(l[1:].split("] ", 1) for l in user.splitlines() if l.startswith("[C"))
-            return LLMResult({"decisions": [{"candidate": h, "decision": "drop" if lines[h] == "메모" else "keep"}
-                                            for h in handles]}, self.provider, self.model)
+            return LLMResult({"drop": [h for h, l in lines.items() if l == "메모"]}, self.provider, self.model)
 
     body_text = "# 메모\n지수 백오프 방법과 재시도 정책. 지수 백오프 방법.\n"
     body = mutate(lambda b: b["note"].update(body=body_text, bodySha256=hashlib.sha256(body_text.encode()).hexdigest()))
@@ -286,6 +284,6 @@ def test_concept_filter_only_removes_candidates(tmp_path):
         assert r.status_code == 200, r.text
         labels = {x["label"] for x in r.json()["concepts"]}
         assert "메모" in base_labels and labels == base_labels - {"메모"}       # 빼기만 한다
-        assert "concept-filter-1" in r.json()["meta"]["promptVersion"]
+        assert "concept-filter-2" in r.json()["meta"]["promptVersion"]
         post(c, mutate(lambda b: b.update(**{**body, "context": {**body["context"], "stageExecutionId": str(uuid.uuid4())}})))
     assert len(FakeLLM.calls) == 1                                             # 같은 노트는 캐시
