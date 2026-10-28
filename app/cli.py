@@ -6,6 +6,7 @@
   uv run ai concepts show <note_id>         # 노트 하나의 개념 요약
   uv run ai concepts eval [--include-draft]  # 정답 개념과 비교 (재현율·정밀도, docs/eval/gold-concepts.md)
   uv run ai links eval                      # ④ 노트 쌍 점수 오프라인 시험 (정답 쌍 Recall@k·MRR, Adamic-Adar × 새로움)
+  uv run ai links refind                    # 숨겼다 다시 찾기 (정답 표시 없이, 노트를 숨기고 A-C 를 다시 찾는가)
 """
 
 import argparse
@@ -188,10 +189,10 @@ def links_main(argv=None):
     from app.api.v1.extract import select_concepts
     from app.core.config import EXTRACT_PROFILES
     from app.services.links import build_corpus
-    from app.services.links.evaluate import evaluate
+    from app.services.links.evaluate import evaluate, hide_and_refind
 
-    ap = argparse.ArgumentParser(prog="ai links eval")
-    ap.add_argument("cmd", choices=["eval"])
+    ap = argparse.ArgumentParser(prog="ai links")
+    ap.add_argument("cmd", choices=["eval", "refind"])
     ap.add_argument("--notes", type=Path, default=NOTES_DIR)
     ap.add_argument("--idf", type=Path, default=OUT_DIR / "idf.json")
     ap.add_argument("--cache", type=Path, default=OUT_DIR / "cache")
@@ -199,7 +200,31 @@ def links_main(argv=None):
     ap.add_argument("--topics", type=Path, default=GOLD_DIR / "topics.csv")
     ap.add_argument("--json", type=Path, help="결과를 JSON 으로 저장")
     ap.add_argument("-v", "--verbose", action="store_true", help="정답 쌍마다 순위")
+    ap.add_argument("--n", type=int, default=200, help="refind: 숨길 개념 쌍 수")
+    ap.add_argument("--seed", type=int, default=0, help="refind: 쌍을 고르는 순서 (고정하면 같은 쌍)")
     args = ap.parse_args(argv)
+    profile = EXTRACT_PROFILES[EXTRACT_PROFILE]
+    types = [(c, c, c) for c in ("is_a", "part_of", "requires", "causes", "used_for", "contrasts_with", "example_of")]
+    ks = (1, 5, 10, 20)
+    if args.cmd == "refind":
+        texts = read_notes(args.notes)
+        ex = load_extractor(args)
+        corpus = build_corpus(texts, ex, lambda ms: select_concepts(ms, profile), types, profile.limits,
+                              version=ex.method_version)
+        results = hide_and_refind(corpus, n=args.n, seed=args.seed)
+        print(f"노트 {len(texts)}개 · 숨긴 개념 쌍 {len(results[0].ranks)}개 (seed {args.seed}) · {ex.method_version}\n")
+        print(f"{'방법':<22}" + "".join(f"{'R@' + str(k):>7}" for k in ks) + f"{'MRR':>7}")
+        for r in results:
+            print(f"{r.method:<22}" + "".join(f"{r.recall_at(k):7.0%}" for k in ks) + f"{r.mrr:7.2f}")
+        if args.verbose:
+            for (nid, a, c), rank in sorted(results[0].ranks.items(), key=lambda x: (x[1] or 10**9, x[0])):
+                print(f"  {rank or '-':>4}  {a} → {c}  ({nid[:30]})")
+        if args.json:
+            args.json.write_text(json.dumps({
+                "method": ex.method_version, "notes": len(texts), "pairs": len(results[0].ranks), "seed": args.seed,
+                "results": [{"method": r.method, **{f"recall@{k}": round(r.recall_at(k), 4) for k in ks},
+                             "mrr": round(r.mrr, 4)} for r in results]}, ensure_ascii=False, indent=2), encoding="utf-8")
+        return
 
     read = lambda p: list(csv.DictReader(p.open(encoding="utf-8-sig", newline="")))
     pairs = [(nfc(r["note_a"]).strip(), nfc(r["note_b"]).strip(), r.get("bridge_concept", "")) for r in read(args.pairs)]
@@ -209,13 +234,10 @@ def links_main(argv=None):
     if missing:
         sys.exit("노트·주제가 맞지 않는다:\n  " + "\n  ".join(missing))
     ex = load_extractor(args)
-    profile = EXTRACT_PROFILES[EXTRACT_PROFILE]
-    types = [(c, c, c) for c in ("is_a", "part_of", "requires", "causes", "used_for", "contrasts_with", "example_of")]
     corpus = build_corpus(texts, ex, lambda ms: select_concepts(ms, profile), types, profile.limits,
                           version=ex.method_version)
     rankings = evaluate(corpus, topics, [(a, b) for a, b, _ in pairs])
 
-    ks = (1, 5, 10, 20)
     print(f"노트 {len(texts)}개 · 주제 {len(set(topics.values()))}개 · 정답 쌍 {len(pairs)}개 (질의 {2 * len(pairs)}개) · "
           f"{ex.method_version}\n")
     print(f"{'방법':<26}" + "".join(f"{'R@' + str(k):>7}" for k in ks) + f"{'MRR':>7}")
