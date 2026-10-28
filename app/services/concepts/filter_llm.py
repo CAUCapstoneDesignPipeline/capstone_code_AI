@@ -4,6 +4,9 @@
 문장 조각, 예시 값까지 개념으로 뽑는다. 규칙을 노트 몇 개에 맞춰 고치면 다른 노트로 옮겨지지 않았다 (docs/eval).
 여기서는 LLM 이 노트 원문과 후보 목록을 함께 읽고 후보마다 keep / drop 만 정한다.
 
+모델이 거절하면(stop_reason=refusal, 예: 해킹 실습 노트) 후보를 모두 남긴다. 결정적 추출 결과 그대로이고 다른 모델로
+바꾸지 않는다 (계약: 자동 fallback 없음).
+
 권한: 후보를 **빼기만** 한다. 새 개념을 더하거나 표기·위치를 바꾸지 못한다 (위치는 결정적 추출의 것 그대로).
 응답은 뺄 후보 번호 목록이다 (후보가 200개여도 출력이 짧아 긴 노트도 제한 시간 안에 끝난다). 목록 밖 번호는
 invalid_output, 중복은 한 번으로 본다. 노트 원문·후보·프롬프트·모델의 hash 로 캐시해 같은 노트는 다시 묻지 않는다 (같은 입력이면 같은 결과).
@@ -56,7 +59,14 @@ class ConceptFilter:
         key = self._key(body, labels)
         cached = self._cache_get(key)
         if cached is None:
-            cached = sorted(self._ask(body, labels))
+            try:
+                cached = sorted(self._ask(body, labels))
+            except LLMError as e:
+                # 안전 분류기 거절(보안 실습 노트 등): 거르기는 빼기만 하므로 의견 없음 = 모두 남김 (결정적 추출 그대로).
+                # 다른 모델로 바꾸지 않는다. 같은 노트는 같은 결과가 되도록 이 결정도 캐시한다
+                if e.kind != "refusal":
+                    raise
+                cached = labels
             self._cache_put(key, cached)
         return set(cached)
 

@@ -336,6 +336,18 @@ def eval_main(argv=None):
         if cfg is None:
             sys.exit("--concept-filter 에는 LLM 설정이 필요하다 (ANTHROPIC_API_KEY 등)")
         cfilter = ConceptFilter(make_llm(cfg), Path("data/private/cache/relations/concepts"))
+        keep_once = cfilter.keep
+
+        def keep_retry(body, labels):            # 평가 스크립트만 일시 오류에 두 번 더 시도한다 (서버는 재시도 0, BE 가 재시도)
+            from app.services.llm import LLMError
+            for attempt in range(5):
+                try:
+                    return keep_once(body, labels)
+                except LLMError as e:
+                    if e.kind not in ("timeout", "provider", "rate_limit") or attempt == 4:
+                        raise
+                    time.sleep(5 * (attempt + 1))
+        cfilter.keep = keep_retry
 
     def select(n):
         sel = select_concepts(ex.extract(n, texts[n]), profile)

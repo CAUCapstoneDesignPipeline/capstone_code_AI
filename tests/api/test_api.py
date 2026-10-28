@@ -287,3 +287,19 @@ def test_concept_filter_only_removes_candidates(tmp_path):
         assert "concept-filter-2" in r.json()["meta"]["promptVersion"]
         post(c, mutate(lambda b: b.update(**{**body, "context": {**body["context"], "stageExecutionId": str(uuid.uuid4())}})))
     assert len(FakeLLM.calls) == 1                                             # 같은 노트는 캐시
+
+
+def test_concept_filter_refusal_keeps_all_candidates(tmp_path):
+    from app.services.concepts.filter_llm import ConceptFilter
+    from app.services.llm import LLMError
+
+    class Refusing:
+        provider, model, calls = "fake", "fake-model", 0
+
+        def complete_json(self, *a):
+            Refusing.calls += 1
+            raise LLMError("refusal", "category=cyber")
+
+    f = ConceptFilter(Refusing(), tmp_path)
+    assert f.keep("본문", ["nc", "포트 스캔"]) == {"nc", "포트 스캔"}
+    assert f.keep("본문", ["nc", "포트 스캔"]) == {"nc", "포트 스캔"} and Refusing.calls == 1     # 캐시
