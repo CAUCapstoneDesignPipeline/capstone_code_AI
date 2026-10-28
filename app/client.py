@@ -143,8 +143,9 @@ async def suggest_knowledge(client: AiClient, note: dict, candidates: list[dict]
     done = await asyncio.gather(*(_explain(client, note, p, policy, explain_profile, verify_profile) for p in chosen))
     order = {"candidate": 0, "hypothesis": 1}
     suggestions = sorted((s for s in done if s["status"] != "excluded"), key=lambda s: order[s["status"]])
-    rejected = [{"source": s["source"], "bridge": s["bridge"], "target": s["target"], "reasons": s["statusReasons"],
-                 "explanationVerdict": s["explanationVerdict"]} for s in done if s["status"] == "excluded"]
+    rejected = [{"source": s["source"], "bridge": s["bridge"], "target": s["target"], "knowledge": s["knowledge"],
+                 "reasons": s["statusReasons"], "explanationVerdict": s["explanationVerdict"]}
+                for s in done if s["status"] == "excluded"]
     return {"links": links["links"], "linksMeta": links["meta"], "suggestions": suggestions,
             "screened": {"paths": len(preps), "excluded": len(excluded), "merged": merged, "explained": len(chosen),
                          "rejected": rejected}}
