@@ -325,7 +325,7 @@ async def suggest(q: SuggestQuery, request: Request):
     t0 = time.monotonic()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=request.app), base_url="http://ai",
                                  timeout=130) as http:
-        # 서버의 동시 처리 한도(AI_MAX_INFLIGHT, playground 기본 8)보다 작게: 설명 6개를 한 번에 보낸다
+        # 서버의 동시 처리 한도(AI_MAX_INFLIGHT, 기본 8)보다 작게: 설명 6개를 한 번에 보낸다
         client = AiClient("http://ai", state.settings.service_token, http,
                           concurrency=max(1, min(6, state.settings.max_inflight - 1)))
         try:

@@ -12,7 +12,7 @@ docker build -t capstone-ai --build-arg SOURCE_REVISION=$(git rev-parse HEAD) .
 - 의존성은 `uv.lock` 그대로 설치한다 (`uv sync --frozen --no-dev`). Python 3.11, non-root(uid 10001), 약 690 MB (대부분 Kiwi 형태소 모델).
 - 이미지에 **넣지 않는 것**: `data/`(노트·IDF·캐시), `.env`·API 키, 개발용 playground(`app/dev`). `.dockerignore` 가 허용 목록이다.
 - 임베딩 모델(e5)을 쓰려면 `--build-arg UV_EXTRAS="--extra embeddings"` (torch 포함, 이미지가 커진다). 기본은 넣지 않는다.
-- 프로세스 1개(uvicorn worker 1). 동시 요청 수는 `AI_MAX_INFLIGHT` (기본 4, 넘으면 429 `AI_BUSY`).
+- 프로세스 1개(uvicorn worker 1). 동시 요청 수는 `AI_MAX_INFLIGHT` (기본 8, 넘으면 429 `AI_BUSY`). 요청 대부분이 LLM 응답을 기다리는 시간이라 CPU 보다 크게 둔다.
 - `HEALTHCHECK` 는 `/internal/v1/health/live` 를 서비스 토큰으로 부른다 (`deploy/healthcheck.py`).
 
 ## 실행할 때 주는 것

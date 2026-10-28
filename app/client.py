@@ -61,10 +61,10 @@ def stamp(meta: dict) -> dict:
 
 class AiClient:
     def __init__(self, base_url: str, token: str, http: httpx.AsyncClient | None = None, timeout: float = 130,
-                 concurrency: int = 3):
+                 concurrency: int = 6):
         self.http = http or httpx.AsyncClient(base_url=base_url, timeout=timeout)
         self.token = token
-        # 동시에 보내는 요청 수. AI 서버의 AI_MAX_INFLIGHT(기본 4)보다 작게 둔다 (넘으면 429 AI_BUSY)
+        # 동시에 보내는 요청 수. AI 서버의 AI_MAX_INFLIGHT(기본 8)보다 작게 둔다 (넘으면 429 AI_BUSY)
         self.sem = asyncio.Semaphore(concurrency)
 
     def context(self, note: dict, user_id: str = "00000000-0000-4000-8000-000000000001") -> dict:

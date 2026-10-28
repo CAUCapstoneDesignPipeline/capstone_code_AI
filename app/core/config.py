@@ -4,7 +4,7 @@
   AI_SERVICE_TOKEN        BE 서비스 secret (Bearer). 없으면 모든 요청에 503
   AI_CONCEPT_IDF          기준 IDF 파일 (기본 data/private/concepts/idf.json). 없으면 추출 profile 이 준비되지 않음
   AI_CONCEPT_CACHE        개념 추출 결과 캐시 폴더 (선택). 같은 원문·설정이면 다시 분석하지 않는다
-  AI_MAX_INFLIGHT         동시에 받을 요청 수 (기본 4). 넘으면 429 AI_BUSY
+  AI_MAX_INFLIGHT         동시에 받을 요청 수 (기본 8). 넘으면 429 AI_BUSY. 대부분 LLM 응답을 기다리는 시간이다
   AI_RELATION_LLM         1 이면 관계 판정 LLM 을 켠다: extract-hybrid-1·2, links-hybrid-1 (제공자가 없고
                           ANTHROPIC_API_KEY 가 있으면 anthropic · claude-opus-5-5 · effort low, AI_RELATION_LLM_EFFORT)
   AI_LLM_PROVIDER         LLM 제공자: anthropic | openai | google
@@ -98,7 +98,7 @@ class Settings:
     service_token: str | None
     concept_idf: Path
     concept_cache: Path | None = None
-    max_inflight: int = 4
+    max_inflight: int = 8
     relation_llm: bool = False
     relation_cache: Path | None = Path("data/private/cache/relations")
     explain_llm: bool = False
@@ -115,7 +115,7 @@ class Settings:
             service_token=env("AI_SERVICE_TOKEN"),
             concept_idf=Path(env("AI_CONCEPT_IDF", "data/private/concepts/idf.json")),
             concept_cache=Path(env("AI_CONCEPT_CACHE")) if env("AI_CONCEPT_CACHE") else None,
-            max_inflight=int(env("AI_MAX_INFLIGHT", "4")),
+            max_inflight=int(env("AI_MAX_INFLIGHT", "8")),
             relation_llm=env("AI_RELATION_LLM", "0") == "1",
             relation_cache=Path(env("AI_RELATION_CACHE", "data/private/cache/relations")),
             explain_llm=env("AI_EXPLAIN_LLM", "1") == "1",
