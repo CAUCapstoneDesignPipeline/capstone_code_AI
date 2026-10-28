@@ -48,10 +48,11 @@ class ExtractProfile:
     max_concepts: int = 200             # ExtractResponse.concepts maxItems
     max_mentions: int = 20              # ExtractedConcept.mentions maxItems
     relations: str = "none"             # "none" 또는 "rules" / "structure" / "llm" 을 + 로 이은 것
+    concept_filter: bool = False        # 결정적으로 뽑은 개념 후보 중 개념이 아닌 것을 LLM 이 거른다 (빼기만)
 
     @property
     def uses_llm(self) -> bool:
-        return "llm" in self.relations.split("+")
+        return "llm" in self.relations.split("+") or self.concept_filter
 
     @property
     def uses_structure(self) -> bool:
@@ -65,6 +66,8 @@ EXTRACT_PROFILES = {p.id: p for p in (
     ExtractProfile("extract-hybrid-1", relations="rules+llm"),    # + 규칙이 못 정한 쌍은 LLM (캐시)
     ExtractProfile("extract-det-3", relations="rules+structure"), # + 마크다운 구조(제목·목록·정의·비교 표)
     ExtractProfile("extract-hybrid-2", relations="rules+structure+llm"),
+    # + 개념 후보를 LLM 이 거른다 (처음 보는 노트의 일반 낱말·문장 조각·예시 값). 위치·표기는 결정적 추출 그대로
+    ExtractProfile("extract-hybrid-3", relations="rules+structure+llm", concept_filter=True),
 )}
 EXTRACT_PROFILE = "extract-det-3"       # 권장 기본값 (완전 결정적)
 

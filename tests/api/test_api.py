@@ -255,3 +255,37 @@ def test_hybrid_profile_uses_typer_for_unresolved_pairs():
     assert data["meta"]["provider"] == "local+fake" and "fake-model" in data["meta"]["model"]
     assert data["relations"] and all(rel["typeCode"] == "cause" for rel in data["relations"])
     assert FakeTyper.calls == 1
+
+
+def test_concept_filter_only_removes_candidates(tmp_path):
+    from app.services.concepts.filter_llm import ConceptFilter
+    from app.services.llm import LLMResult
+
+    class FakeLLM:
+        provider, model = "fake", "fake-model"
+        calls = []
+
+        def complete_json(self, system, user, schema, name):
+            FakeLLM.calls.append(user)
+            handles = schema["properties"]["decisions"]["items"]["properties"]["candidate"]["enum"]
+            lines = dict(l[1:].split("] ", 1) for l in user.splitlines() if l.startswith("[C"))
+            return LLMResult({"decisions": [{"candidate": h, "decision": "drop" if lines[h] == "메모" else "keep"}
+                                            for h in handles]}, self.provider, self.model)
+
+    body_text = "# 메모\n지수 백오프 방법과 재시도 정책. 지수 백오프 방법.\n"
+    body = mutate(lambda b: b["note"].update(body=body_text, bodySha256=hashlib.sha256(body_text.encode()).hexdigest()))
+    det = create_app(settings(), extractor=ConceptExtractor(ExtractConfig(stopwords=frozenset())))
+    with TestClient(det) as c:
+        base_labels = {x["label"] for x in post(c, body).json()["concepts"]}
+        body["profileVersion"] = "extract-hybrid-3"
+        assert post(c, body).status_code == 503                               # 거르는 LLM 이 없으면 준비되지 않음
+    app = create_app(settings(), extractor=ConceptExtractor(ExtractConfig(stopwords=frozenset())), typer=FakeTyper(),
+                     concept_filter=ConceptFilter(FakeLLM(), tmp_path))
+    with TestClient(app) as c:
+        r = post(c, body)
+        assert r.status_code == 200, r.text
+        labels = {x["label"] for x in r.json()["concepts"]}
+        assert "메모" in base_labels and labels == base_labels - {"메모"}       # 빼기만 한다
+        assert "concept-filter-1" in r.json()["meta"]["promptVersion"]
+        post(c, mutate(lambda b: b.update(**{**body, "context": {**body["context"], "stageExecutionId": str(uuid.uuid4())}})))
+    assert len(FakeLLM.calls) == 1                                             # 같은 노트는 캐시

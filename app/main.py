@@ -62,7 +62,7 @@ def explain_llm_config():
 
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
-               explanation_judge=None, merge_judge=None) -> FastAPI:
+               explanation_judge=None, merge_judge=None, concept_filter=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -82,7 +82,12 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 cfg = role_llm_config("relation", "low")     # 문장 속 관계 유형 고르기는 짧은 판단이라 effort low
                 if cfg is None:
                     raise ValueError("관계 LLM 제공자가 없다 (AI_RELATION_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
-                st.typer = RelationTyper(make_llm(cfg), settings.relation_cache)
+                llm = make_llm(cfg)
+                st.typer = RelationTyper(llm, settings.relation_cache)
+                if st.concept_filter is None:          # 개념 거르기도 같은 관계 LLM (짧은 판단, effort low)
+                    from app.services.concepts.filter_llm import ConceptFilter
+                    st.concept_filter = ConceptFilter(
+                        llm, settings.relation_cache / "concepts" if settings.relation_cache else None)
                 log.info("관계 판정 LLM: %s · %s", cfg.provider, cfg.model)
             except Exception as e:      # 설정이 틀리면 hybrid profile 만 준비되지 않은 상태로 둔다
                 log.error("관계 판정 LLM 을 만들지 못했다: %s", e)
@@ -136,6 +141,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.edge_judge = edge_judge
     app.state.explanation_judge = explanation_judge
     app.state.merge_judge = merge_judge
+    app.state.concept_filter = concept_filter
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()

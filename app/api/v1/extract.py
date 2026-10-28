@@ -15,6 +15,7 @@ from app.schemas.common import Span
 from app.schemas.extract import (ExtractedConcept, ExtractedEvidence, ExtractedRelation, ExtractRequest,
                                  ExtractResponse, ResponseMeta)
 from app.services.concepts import Mention
+from app.services.concepts.filter_llm import PROMPT_VERSION as FILTER_PROMPT
 from app.services.llm import LLMError
 from app.services.relations import PROMPT_VERSION, extract_relations
 
@@ -39,7 +40,8 @@ async def extract(request: Request):
     profile = check_semantics(req, idem)
 
     state = request.app.state
-    if state.extractor is None or (profile.uses_llm and state.typer is None):
+    if state.extractor is None or (profile.uses_llm and state.typer is None) or \
+            (profile.concept_filter and state.concept_filter is None):
         raise AiError("SERVICE_UNAVAILABLE", retry_after=30)
     if state.inflight.locked():
         raise AiError("AI_BUSY", retry_after=1)
@@ -49,6 +51,8 @@ async def extract(request: Request):
         with state.kiwi_lock:   # 형태소 분석기 한 개를 여러 스레드가 동시에 쓰지 않게
             mentions = state.extractor.extract(req.note.noteId, req.note.body, req.note.noteVersion)
         selected = select_concepts(mentions, profile)
+        if profile.concept_filter:
+            selected = filter_concepts(selected, req.note.body, state.concept_filter)
         evidence, relations = [], []
         if profile.relations != "none":
             typer = state.typer if profile.uses_llm else None
@@ -78,9 +82,11 @@ async def extract(request: Request):
     meta = ResponseMeta(
         profileVersion=req.profileVersion,
         provider=f"local+{state.typer.provider}" if llm else "local",
-        model=f"kiwi-tfidf-markdown+{state.typer.model}" if llm else "kiwi-tfidf-markdown",
+        model=(f"kiwi-tfidf-markdown+{state.typer.model}" + ("+concept-filter" if profile.concept_filter else "")
+               if llm else "kiwi-tfidf-markdown"),
         modelRevision=state.extractor.method_version,
-        promptVersion=f"{PROMPT_VERSION}+rules-{cfg}" if llm else f"rules-{cfg}",
+        promptVersion=(f"{PROMPT_VERSION}+{FILTER_PROMPT}+rules-{cfg}" if profile.concept_filter
+                       else f"{PROMPT_VERSION}+rules-{cfg}" if llm else f"rules-{cfg}"),
         schemaVersion=SCHEMA_VERSION, preprocessingVersion=f"md-mask-{cfg}",
         durationMs=min(120000, int((time.monotonic() - t0) * 1000)),
     )
@@ -136,13 +142,25 @@ def select_concepts(mentions: list[Mention], profile: ExtractProfile) -> dict[st
     return {k: sorted(ms, key=lambda m: (m.span.start, m.span.end))[: profile.max_mentions] for k, ms in ranked}
 
 
+def concept_label(ms: list[Mention]) -> str:
+    """가장 많이 쓰인 표기, 같으면 사전순."""
+    counts: dict[str, int] = defaultdict(int)
+    for m in ms:
+        counts[m.surface] += 1
+    return sorted(counts, key=lambda s: (-counts[s], s))[0]
+
+
+def filter_concepts(selected: dict[str, list[Mention]], body: str, concept_filter) -> dict[str, list[Mention]]:
+    """LLM 이 개념이 아니라고 한 후보를 뺀다. 순서·언급은 그대로 (extract-hybrid-3)."""
+    labels = {k: concept_label(ms) for k, ms in selected.items()}
+    keep = concept_filter.keep(body, list(labels.values()))
+    return {k: ms for k, ms in selected.items() if labels[k] in keep}
+
+
 def to_concepts(selected: dict[str, list[Mention]], body: str) -> tuple[list[ExtractedConcept], dict[str, str]]:
     out, refs = [], {}
     for i, (key, ms) in enumerate(selected.items(), 1):
-        counts: dict[str, int] = defaultdict(int)
-        for m in ms:
-            counts[m.surface] += 1
-        label = sorted(counts, key=lambda s: (-counts[s], s))[0]   # 가장 많이 쓰인 표기, 같으면 사전순
+        label = concept_label(ms)
         refs[key] = f"c-{i}"
         out.append(ExtractedConcept(
             ref=refs[key], label=label[:200],
