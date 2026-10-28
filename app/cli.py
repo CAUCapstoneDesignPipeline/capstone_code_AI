@@ -96,7 +96,12 @@ def cmd_eval(args):
     from app.core.config import EXTRACT_PROFILES
     from app.services.concepts.gold import Extracted, Score, load_gold, loose, score
 
+    from app.services.evaluation import assign_splits
     gold = load_gold(args.gold, include_draft=args.include_draft)
+    if args.split != "all":                      # 규칙을 고칠 때는 dev 만 본다 (test 의 오답을 보면 test 가 test 가 아니게 된다)
+        rows = list(csv.DictReader(args.gold.open(encoding="utf-8-sig", newline="")))
+        splits = assign_splits(gold, {nfc(r["note_id"]).strip(): (r.get("split") or "").strip() for r in rows})
+        gold = {n: g for n, g in gold.items() if splits[n] == args.split}
     if not gold:
         sys.exit("평가할 정답이 없다 (status=reviewed 인 줄이 없으면 --include-draft)")
     texts = read_notes(args.notes, sorted(gold))
@@ -174,6 +179,8 @@ def concepts_main(argv=None):
     v.add_argument("--profile", default=EXTRACT_PROFILE)
     v.add_argument("--min-confidence", type=float, default=0.0, help="노트별 결과에 쓸 신뢰도 문턱값")
     v.add_argument("--include-draft", action="store_true", help="검토 전(draft) 정답도 쓴다")
+    v.add_argument("--split", choices=["dev", "test", "all"], default="dev",
+                   help="볼 정답 노트 (기본 dev: 규칙을 고칠 때 test 노트의 오답을 보지 않는다)")
     v.add_argument("--json", type=Path, help="문턱값별 결과를 JSON 으로 저장")
     v.add_argument("-v", "--verbose", action="store_true", help="놓친 개념·정답 밖 개념도 출력")
     v.set_defaults(func=cmd_eval)

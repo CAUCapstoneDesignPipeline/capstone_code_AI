@@ -23,7 +23,13 @@ SEPARATOR_WORDS = {"vs", "versus"}               # 영어 명사로 읽히지만
 PREDICATE_SUFFIX = {"XSV", "XSA"}                # 명사를 동사·형용사로 만드는 접미사 (-하다, -되다)
 _HEADING_NUMBER = re.compile(r"\d+(?:\.\d+)*[.)]\s+")    # 제목·목록 번호 (1. , 2.3) )
 # 제목·명사구 끝에 붙어 개념을 꾸미기만 하는 틀 말 ("X 과정", "X 비교"). '문제'는 "키 배송 문제" 처럼 개념의 일부라 넣지 않는다
-FRAME_SUFFIXES = frozenset("과정 비교 예시 예제 정리 요약 복습 관점 수식 개요 소개 구조 동작 정의 설명 특징 원리 흐름".split())
+FRAME_SUFFIXES = frozenset("과정 비교 예시 예제 정리 요약 복습 관점 수식 개요 소개 구조 동작 정의 설명 특징 원리 흐름 "
+                           "생성 확인 계산 불가 허용 해석".split())
+# 명사구 앞에 붙어 꾸미기만 하는 말 ("핵심 통찰", "3가지 핵심 설계 결정"). 'N가지' 꼴도 뗀다
+FRAME_PREFIXES = frozenset("핵심 주요 전체 직관적".split())
+_COUNT_WORD = re.compile(r"\d+\s*가지")
+# 영어 제목이 문장이면 개념이 아니다 ("More is better", "Sooner is better"). 'of' 는 개념 이름에 흔해 넣지 않는다 (Chain of Trust)
+_ENGLISH_VERBS = frozenset("is are was were be been am does do has have can should will".split())
 STRUCT_COVER = 0.6                               # 후보가 구조 조각의 이만큼 이상을 덮어야 구조 가중치를 받는다
 # 구조 구간 조각이 통째로 개념이 되려면 이 품사로만 이뤄져야 한다 (조사·어미·동사가 있으면 문장이다)
 REGION_TAGS = INNER_TAGS | {"SO", "SS", "SW", "SP", "W_EMOJI", "NNB"}
@@ -193,7 +199,10 @@ class ConceptExtractor:
 
         out, seen = [], set()
         for s, e in kept:
-            s, e = self._trim(text, s, e)
+            trimmed = self._trim(text, s, e)
+            if trimmed is None:
+                continue
+            s, e = trimmed
             if (s, e) in seen:
                 continue
             seen.add((s, e))
@@ -208,17 +217,34 @@ class ConceptExtractor:
             out.append(Candidate(s, e, surface, key, struct))
         return out
 
-    def _trim(self, text: str, s: int, e: int) -> tuple[int, int]:
-        """명사구의 제목 번호("1. Classification Problem")와 끝에 붙은 틀 말("Policy Iteration 비교", "SSL/TLS 과정")을
-        떼어 낸다. 앞쪽 낱말은 떼지 않는다 ("Page Table", "데이터 블록" 의 앞말은 불용어여도 개념의 일부다)."""
+    def _trim(self, text: str, s: int, e: int) -> tuple[int, int] | None:
+        """명사구 앞뒤의 틀 말을 떼어 낸다. 개념이 아니면 None.
+          - 제목 번호 ("1. Classification Problem"), 앞의 꾸밈말 ("핵심 통찰", "3가지 설계 결정")
+          - 끝의 틀 말 ("Policy Iteration 비교", "Master Secret 생성", "Dirty Read 불가")
+          - 소유격 's 로 잘린 이름은 앞 낱말까지 넓힌다 ("s Algorithm" → "Banker's Algorithm")
+          - 영어 문장 ("More is better") 은 버린다
+        앞쪽의 불용어는 떼지 않는다 ("Page Table", "데이터 블록" 의 앞말은 개념의 일부다)."""
+        if text.startswith("s ", s) and s >= 2 and text[s - 1] in "'’" and text[s - 2].isalnum():
+            k = s - 1
+            while k > 0 and (text[k - 1].isalnum() or text[k - 1] in "-_"):
+                k -= 1
+            s = k
         m = _HEADING_NUMBER.match(text, s, e)
         if m and m.end() < e:
             s = m.end()
         while True:
             words = list(re.finditer(r"\S+", text[s:e]))
-            if len(words) < 2 or concept_key(words[-1].group()) not in FRAME_SUFFIXES:
+            if any(w.group().lower() in _ENGLISH_VERBS for w in words):
+                return None
+            if len(words) < 2:
                 return s, e
-            e = s + words[-2].end()
+            first, last = words[0].group(), words[-1].group()
+            if concept_key(last) in FRAME_SUFFIXES:
+                e = s + words[-2].end()
+            elif first in FRAME_PREFIXES or _COUNT_WORD.fullmatch(first):
+                s = s + words[1].start()
+            else:
+                return s, e
 
     def _tokens(self, clean: str, pos: list[int]):
         """기호를 뺀 글의 토큰을 원문 위치로 돌려 낸다 (start, len 만 원문 기준으로 바꾼다)."""
