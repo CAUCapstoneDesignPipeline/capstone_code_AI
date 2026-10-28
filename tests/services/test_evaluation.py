@@ -36,3 +36,13 @@ def test_explanation_labels_join_blind_sheet_and_key():
     assert labelled_explanations(sheet, key) == [("valid", "valid"), ("valid", "invalid")]
     with pytest.raises(ValueError):
         labelled_explanations([{"id": "x9", "human": "valid"}], key)
+
+
+def test_gold_pairs_and_judged_precision():
+    from app.services.evaluation import gold_pairs, judged_precision
+    rows = [{"note_a": "a", "note_b": "b", "bridge_concept": "x"},
+            {"note_a": "a", "note_b": "c", "bridge_concept": "y", "status": "draft"}]
+    assert gold_pairs(rows, include_draft=False) == [("a", "b", "x")]
+    assert len(gold_pairs(rows, include_draft=True)) == 2
+    judgments = [{"query": "q", "candidate": c, "label": l} for c, l in (("x", "yes"), ("y", "no"), ("z", "yes"))]
+    assert judged_precision({"q": ["x", "y", "z"], "r": ["x", "y", "z"]}, judgments) == [2 / 3]   # r 는 판정 없음

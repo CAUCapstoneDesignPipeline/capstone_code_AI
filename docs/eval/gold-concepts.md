@@ -11,6 +11,15 @@
 | `concept` | 개념의 표기. 노트에 실제로 쓰인 그대로. 같은 개념의 다른 표기는 `\|` 로 잇는다 (`WAL\|Write Ahead Logging`) |
 | `level` | `core`: 노트가 설명하거나 다른 개념과의 관계를 말하는 개념. `mentioned`: 지나가며 나오는 개념 |
 | `status` | `draft` (초안, 검토 전) 또는 `reviewed` (사람이 확인함). 평가는 기본으로 `reviewed` 만 쓴다 |
+| `split` | `dev` / `test` / 빈칸. 규칙을 고칠 때 들여다본 노트는 dev, 아직 보지 않은 노트는 test. 빈칸이면 hash 로 정한다 |
+
+## 노트 쌍 (`pairs.csv`, `pair-judgments.csv`)
+
+- `pairs.csv` (`note_a,note_b,bridge_concept,status`): 이어진다고 본 노트 쌍. 1주차에 사람이 만든 9쌍은 `reviewed`.
+- `pair-judgments.csv` (`query,candidate,label,bridge_concept,reason,status`): 판정 풀(`experiments/gold_pairs/pool.py`)의
+  쌍마다 `yes` / `no`. `yes` 는 `pairs.csv` 에도 들어간다. `no` 까지 있어 사용자에게 보이는 상위 3 개의 정밀도를 잴 수 있다.
+- **이어진다(yes)**: 두 노트가 모두 실제로 설명하거나 쓰는 기술 개념을 공유하거나, 한쪽 개념이 다른 쪽을 직접 설명한다.
+  일반적인 말(데이터, 시스템, 문제)만 겹치거나 한쪽에서 이름만 나오면 no. 목차 페이지(링크 모음)는 늘 no.
 
 ## 개념으로 표시하는 것
 

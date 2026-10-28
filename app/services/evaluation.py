@@ -92,3 +92,29 @@ def labelled_explanations(sheet_rows: list[dict], key_rows: list[dict]) -> list[
             raise ValueError(f"열쇠에 없는 id: {r['id']}")
         out.append((AS_HUMAN[key[r["id"]]], h))
     return out
+
+
+# ---- ④ 정답 노트 쌍 ----
+
+def gold_pairs(rows: list[dict], include_draft: bool) -> list[tuple[str, str, str]]:
+    """pairs.csv 줄 → (note_a, note_b, 매개 개념). status 가 없으면 reviewed (1주차에 사람이 만든 쌍)."""
+    from app.services.concepts.markdown import nfc
+    out = []
+    for r in rows:
+        status = (r.get("status") or "reviewed").strip()
+        if status == "reviewed" or (include_draft and status == "draft"):
+            out.append((nfc(r["note_a"]).strip(), nfc(r["note_b"]).strip(), (r.get("bridge_concept") or "").strip()))
+    return out
+
+
+def judged_precision(top: dict[str, list[str]], judgments: list[dict], k: int = 3) -> list[float]:
+    """질의마다 시스템 상위 k 개 중 '이어진다(yes)' 로 판정된 비율. 상위 k 개가 모두 판정된 질의만 센다
+    (판정 풀에 든 질의는 S 상위 3 개를 모두 판정했다). 판정은 (query, candidate) 순서 그대로만 본다."""
+    from app.services.concepts.markdown import nfc
+    label = {(nfc(j["query"]).strip(), nfc(j["candidate"]).strip()): j["label"].strip() for j in judgments}
+    out = []
+    for q, cands in sorted(top.items()):
+        got = [label.get((q, c)) for c in cands[:k]]
+        if len(got) == k and None not in got:
+            out.append(sum(g == "yes" for g in got) / k)
+    return out

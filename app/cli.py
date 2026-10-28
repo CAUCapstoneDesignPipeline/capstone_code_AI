@@ -201,6 +201,7 @@ def links_main(argv=None):
     ap.add_argument("--topics", type=Path, default=GOLD_DIR / "topics.csv")
     ap.add_argument("--json", type=Path, help="결과를 JSON 으로 저장")
     ap.add_argument("-v", "--verbose", action="store_true", help="정답 쌍마다 순위")
+    ap.add_argument("--include-draft", action="store_true", help="eval: 검토 전(draft) 정답 쌍도 쓴다")
     ap.add_argument("--n", type=int, default=200, help="refind: 숨길 개념 쌍 수")
     ap.add_argument("--seed", type=int, default=0, help="refind: 쌍을 고르는 순서 (고정하면 같은 쌍)")
     args = ap.parse_args(argv)
@@ -228,7 +229,8 @@ def links_main(argv=None):
         return
 
     read = lambda p: list(csv.DictReader(p.open(encoding="utf-8-sig", newline="")))
-    pairs = [(nfc(r["note_a"]).strip(), nfc(r["note_b"]).strip(), r.get("bridge_concept", "")) for r in read(args.pairs)]
+    from app.services.evaluation import gold_pairs
+    pairs = gold_pairs(read(args.pairs), include_draft=args.include_draft)
     topics = {nfc(r["note_id"]).strip(): r["topic"] for r in read(args.topics)}
     texts = read_notes(args.notes)
     missing = sorted({n for a, b, _ in pairs for n in (a, b)} - set(texts)) + sorted(set(texts) - set(topics))
@@ -281,8 +283,9 @@ def eval_main(argv=None):
     from app.api.v1.extract import select_concepts, to_concepts
     from app.core.config import EXTRACT_PROFILES
     from app.services.concepts.gold import Extracted, load_gold, loose, score
-    from app.services.evaluation import assign_splits, bootstrap, compare, labelled_explanations, ratio
-    from app.services.links import build_corpus
+    from app.services.evaluation import (assign_splits, bootstrap, compare, gold_pairs, judged_precision,
+                                        labelled_explanations, ratio)
+    from app.services.links import build_corpus, related_notes
     from app.services.links.evaluate import evaluate, hide_and_refind
 
     ap = argparse.ArgumentParser(prog="ai eval")
@@ -292,6 +295,8 @@ def eval_main(argv=None):
     ap.add_argument("--gold", type=Path, default=GOLD_DIR / "concepts.csv")
     ap.add_argument("--pairs", type=Path, default=GOLD_DIR / "pairs.csv")
     ap.add_argument("--topics", type=Path, default=GOLD_DIR / "topics.csv")
+    ap.add_argument("--judgments", type=Path, default=GOLD_DIR / "pair-judgments.csv",
+                    help="판정한 노트 쌍 (query,candidate,label=yes|no,…,status)")
     ap.add_argument("--explanations", type=Path, default=GOLD_DIR / "explanations.csv")
     ap.add_argument("--include-draft", action="store_true", help="검토 전(draft) 정답 개념도 쓴다")
     ap.add_argument("--refind-n", type=int, default=200)
@@ -337,14 +342,21 @@ def eval_main(argv=None):
     types = [(c, c, c) for c in ("is_a", "part_of", "requires", "causes", "used_for", "contrasts_with", "example_of")]
     corpus = build_corpus(texts, ex, lambda ms: select_concepts(ms, profile), types, profile.limits,
                           version=ex.method_version)
-    pairs = [(nfc(r["note_a"]).strip(), nfc(r["note_b"]).strip()) for r in read(args.pairs)]
+    pairs = [(a, b) for a, b, _ in gold_pairs(read(args.pairs), include_draft=args.include_draft)]
     topics = {nfc(r["note_id"]).strip(): r["topic"] for r in read(args.topics)}
     by = {r.method: r for r in evaluate(corpus, topics, pairs)}
     ranks = list(by["S (다른 주제)"].ranks.values())
     hit = lambda k: (lambda us: sum(1 for r in us if r is not None and r <= k) / len(us))
-    print(f"④ 노트 쌍 · 정답 쌍 {len(pairs)}개 (질의 {len(ranks)}개, S 다른 주제)")
+    print(f"④ 노트 쌍 · 정답 쌍 {len(pairs)}개{' (draft 포함)' if args.include_draft else ''} (질의 {len(ranks)}개, S 다른 주제)")
     put("links.recall@10", bootstrap(ranks, hit(10)))
     put("links.mrr", bootstrap(ranks, lambda us: sum(1 / r for r in us if r is not None) / len(us)))
+    if args.judgments.exists():                  # 사용자에게 보이는 상위 3 개 중 이어진다고 판정된 비율
+        judgments = [j for j in read(args.judgments)
+                     if (j.get("status") or "reviewed").strip() == "reviewed" or args.include_draft]
+        queries = sorted({nfc(j["query"]).strip() for j in judgments})
+        top = {q: [l.note_b for l in related_notes(corpus, q, k=len(texts)) if topics.get(l.note_b) != topics.get(q)][:3]
+               for q in queries if q in corpus.notes and topics.get(q) != "목차"}      # 목차 페이지는 링크 모음
+        put("links.precision@3", bootstrap(judged_precision(top, judgments), lambda us: sum(us) / len(us)))
     refind = hide_and_refind(corpus, n=args.refind_n)
     print(f"④ 숨겼다 다시 찾기 · 쌍 {len(refind[0].ranks)}개")
     put("refind.recall@20", bootstrap(list(refind[0].ranks.values()), hit(20)))
@@ -367,14 +379,17 @@ def eval_main(argv=None):
         dirty = bool(subprocess.run(["git", "status", "--porcelain", "app"], capture_output=True, text=True).stdout.strip())
     except OSError:
         commit, dirty = "unknown", False
-    report = {"commit": commit + ("+dirty" if dirty else ""), "method": ex.method_version,
+    import hashlib
+    data = hashlib.sha256(b"".join(p.read_bytes() for p in (args.gold, args.pairs, args.topics, args.judgments)
+                                   if p.exists())).hexdigest()[:12]
+    report = {"commit": commit + ("+dirty" if dirty else ""), "method": ex.method_version, "data": data,
               "includeDraft": args.include_draft, "notes": len(texts), "metrics": metrics}
     old = sorted(args.reports.glob("*.json")) if args.reports.exists() else []
     base = args.baseline or (old[-1] if old else None)
     if base:
         prev = json.loads(base.read_text(encoding="utf-8"))
-        if prev.get("includeDraft") != args.include_draft:
-            print(f"\n(비교 생략: {base.name} 는 includeDraft={prev.get('includeDraft')})")
+        if prev.get("includeDraft") != args.include_draft or prev.get("data") != data:
+            print(f"\n(비교 생략: {base.name} 는 정답 자료가 다르다. 코드 변화와 자료 변화를 섞어 비교하지 않는다)")
         else:
             print(f"\n지난 보고서 {base.name} ({prev.get('commit')}) 와 비교 (지난 값의 95% 구간 기준)")
             for name, new, was, verdict in compare(metrics, prev["metrics"]):
