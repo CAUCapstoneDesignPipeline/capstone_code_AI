@@ -32,6 +32,7 @@ from app.services.reasoning.entailment_llm import EdgeIn
 from app.services.reasoning.explain import ClaimOut, Step, verify
 from app.services.reasoning.explanation_llm import combine
 from app.services.reasoning.identity import Side, judge
+from app.services.reasoning.identity_llm import PairIn, combine as combine_merge, needs_llm
 
 from .deps import common_checks, parse_model, read_json_body, require_uuid_header
 from .grounding import (check_documents, check_evidence, check_idempotency, check_ids, check_independence,
@@ -101,18 +102,27 @@ def note_context(state, docs: dict) -> dict[str, frozenset]:
     return out
 
 
-def _identity(state, req, docs, ev, strict: bool) -> list[MergeDecision]:
+def _identity(state, req, docs, ev, strict: bool, llm_judge=None) -> tuple[list[MergeDecision], str | None, str | None]:
+    """(판정들, LLM provider, LLM model). llm_judge 가 있으면 규칙이 정하지 못한 쌍을 LLM 에 묻는다 (merge-hybrid-1)."""
     ctx = note_context(state, {e.noteId.lower(): docs[e.noteId.lower()] for e in ev.values()})
 
     def side(o):
         e = ev[o.evidenceId.lower()]
         return Side(o.label, o.surface, o.topicId, e.quote, docs[e.noteId.lower()].body, ctx[e.noteId.lower()])
 
+    rows = [(p.pairId, side(p.left), side(p.right)) for p in req.pairs]
+    rules = {pid: judge(l, r, p.similarity, strict) for (pid, l, r), p in zip(rows, req.pairs)}
+    asked, provider, model = {}, None, None
+    if llm_judge is not None:
+        todo = [PairIn(pid, l, r) for pid, l, r in rows if needs_llm(rules[pid], l, r)]
+        provider, model = llm_judge.provider, llm_judge.model
+        if todo:
+            asked, provider, model = llm_judge.judge(todo)
     out = []
-    for p in req.pairs:
-        v = judge(side(p.left), side(p.right), p.similarity, strict)
-        out.append(MergeDecision(pairId=p.pairId, decision=v.decision, confidence=v.confidence, reason=v.reason))
-    return out
+    for pid, l, r in rows:
+        v = combine_merge(rules[pid], asked.get(pid), l, r)
+        out.append(MergeDecision(pairId=pid, decision=v.decision, confidence=v.confidence, reason=v.reason))
+    return out, provider, model
 
 
 def _check_one_each(ids_in: list[str], ids_out: list[str]):
@@ -127,9 +137,13 @@ async def merge_decisions(request: Request):
     docs = check_documents(req.context, req.documents)
     ev = check_evidence(req.evidence, docs)
     check_pairs(req.pairs, ev, docs)
-    decisions = await run(request, profile, lambda: _identity(request.app.state, req, docs, ev, strict=False))
+    state = request.app.state
+    llm_judge = state.merge_judge if "merge_judge" in profile.requires else None
+    decisions, provider, model = await run(request, profile, lambda: _identity(state, req, docs, ev, strict=False,
+                                                                              llm_judge=llm_judge))
     _check_one_each([p.pairId for p in req.pairs], [d.pairId for d in decisions])
-    return build(MergeResponse, context=data["context"], meta=meta(profile, t0), decisions=decisions)
+    m = meta(profile, t0, "local+" + provider, model) if llm_judge else meta(profile, t0)
+    return build(MergeResponse, context=data["context"], meta=m, decisions=decisions)
 
 
 @router.post("/verifications/bridges", response_model=VerifyBridgesResponse, operation_id="verifyBridgeIdentity")
@@ -139,7 +153,7 @@ async def verify_bridges(request: Request):
     ev = check_evidence(req.evidence, docs)
     check_pairs(req.pairs, ev, docs)
     check_independence(profile.model, profile.prompt, req.generationProvenance)
-    verdicts = await run(request, profile, lambda: _identity(request.app.state, req, docs, ev, strict=True))
+    verdicts, _, _ = await run(request, profile, lambda: _identity(request.app.state, req, docs, ev, strict=True))
     _check_one_each([p.pairId for p in req.pairs], [v.pairId for v in verdicts])
     return build(VerifyBridgesResponse, context=data["context"], meta=meta(profile, t0), verdicts=verdicts)
 

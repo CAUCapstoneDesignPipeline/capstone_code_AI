@@ -62,7 +62,7 @@ def explain_llm_config():
 
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
-               explanation_judge=None) -> FastAPI:
+               explanation_judge=None, merge_judge=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -97,10 +97,11 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 log.info("설명 생성 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
             except Exception as e:      # explain-llm-8 만 준비되지 않은 상태로 둔다
                 log.error("설명 생성 LLM 을 만들지 못했다: %s", e)
-        if (st.edge_judge is None or st.explanation_judge is None) and settings.verify_llm:
+        if (st.edge_judge is None or st.explanation_judge is None or st.merge_judge is None) and settings.verify_llm:
             from app.services.llm import make_llm
             from app.services.reasoning.entailment_llm import EdgeJudge
             from app.services.reasoning.explanation_llm import ExplanationJudge
+            from app.services.reasoning.identity_llm import MergeJudge
             try:
                 cfg = role_llm_config("verify", "low")
                 if cfg is None:
@@ -109,8 +110,10 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 st.edge_judge = st.edge_judge or EdgeJudge(llm, settings.verify_cache)
                 st.explanation_judge = st.explanation_judge or ExplanationJudge(
                     llm, settings.verify_cache / "explanations" if settings.verify_cache else None)
-                log.info("검증 LLM (간선·설명): %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
-            except Exception as e:      # edges-llm-1, explanation-hybrid-2 만 준비되지 않은 상태로 둔다
+                st.merge_judge = st.merge_judge or MergeJudge(
+                    llm, settings.verify_cache / "merges" if settings.verify_cache else None)
+                log.info("검증 LLM (간선·설명·병합): %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
+            except Exception as e:      # edges-llm-1, explanation-hybrid-2, merge-hybrid-1 만 준비되지 않은 상태로 둔다
                 log.error("검증 LLM 을 만들지 못했다: %s", e)
         for pid in settings.embedding_profiles:
             if pid in st.embedders:
@@ -132,6 +135,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.explainer = explainer
     app.state.edge_judge = edge_judge
     app.state.explanation_judge = explanation_judge
+    app.state.merge_judge = merge_judge
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()

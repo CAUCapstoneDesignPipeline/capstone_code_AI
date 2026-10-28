@@ -79,3 +79,18 @@ def test_alias_from_definition_line_and_naming_sentence():
     # 한 줄이 두 표기뿐일 때만: 정의 문장이 붙으면 별칭이 아니다
     assert not stated_alias("- Page Table: 각 프로세스의 가상 주소와 실제 주소를 잇는다\n", "Page Table", "가상 주소")
     assert not stated_alias("- Atomicity: 원자성, Consistency: 일관성\n", "Atomicity", "Consistency")
+
+
+def test_merge_llm_combination_never_adds_low_confidence_merges():
+    from app.services.reasoning.identity import Side, Verdict
+    from app.services.reasoning.identity_llm import PairOut, combine, needs_llm
+    a = Side("Mutex", "Mutex", "t1", "Mutex 로 임계 구역을 보호한다.", "", frozenset())
+    b = Side("뮤텍스", "뮤텍스", "t1", "뮤텍스는 락이다.", "", frozenset())
+    c = Side("뮤텍스", "뮤텍스", "t2", "뮤텍스는 락이다.", "", frozenset())
+    rule_diff, rule_same = Verdict("different", 0.7, "표기가 다릅니다."), Verdict("same", 0.85, "표기가 같습니다.")
+    assert not needs_llm(rule_same, a, b) and needs_llm(rule_same, a, c) and needs_llm(rule_diff, a, b)
+    assert combine(rule_diff, PairOut("p", "same", 0.9, "음역입니다."), a, b).decision == "same"
+    assert combine(rule_diff, PairOut("p", "same", 0.6, "아마 같습니다."), a, b).decision == "uncertain"
+    assert combine(rule_diff, PairOut("p", "different", 0.9, "다릅니다."), a, b).decision == "different"
+    assert combine(rule_same, PairOut("p", "different", 0.9, "다릅니다."), a, c).decision == "uncertain"
+    assert combine(rule_same, None, a, b) == rule_same

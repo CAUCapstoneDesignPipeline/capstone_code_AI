@@ -1,6 +1,7 @@
 """노트 사이 추론 단계 (병합 판단·매개 검증·간선 검증·설명 생성·설명 검증). 설명 생성만 LLM, 나머지는 결정적이다.
 
   identity     두 occurrence 가 같은 개념인가          → /merge-decisions, /verifications/bridges
+  identity_llm 규칙이 정하지 못한 병합 후보의 LLM 판정  → /merge-decisions (hybrid)
   entailment   간선 근거가 그 관계를 말하는가          → /verifications/edges
   explain_llm  A-B-C 경로 설명 = 새 지식 제안 (LLM)   → /explanations
   explain      설명 검증 (결정적)                       → /verifications/explanations
@@ -30,7 +31,7 @@ class ReasoningProfile:
     model: str
     prompt: str
     files: tuple[str, ...]
-    requires: tuple[str, ...] = ()   # 이 profile 이 쓰는 서버 구성 요소 (app.state 속성): extractor, typer, explainer, edge_judge, explanation_judge
+    requires: tuple[str, ...] = ()   # 이 profile 이 쓰는 서버 구성 요소 (app.state 속성): extractor, typer, explainer, edge_judge, explanation_judge, merge_judge
     # 설명 검증: 단계 근거가 아닌 단계 노트의 요청 근거를 문맥 근거로 받아 보조 전제를 인정하는가 (아니면 경로 밖 근거)
     context_evidence: bool = False
 
@@ -49,6 +50,9 @@ _LINKS = ("links/corpus.py", "links/linker.py", "links/context.py")
 
 REASONING_PROFILES = {p.id: p for p in (
     ReasoningProfile("merge-det-1", "merge", "rules-identity", "merge-rules-1", _ID, ("extractor",)),
+    # merge-det-1 + 규칙이 same 이라 하지 못한 쌍(번역·음역)과 주제가 다른 same 쌍을 LLM 이 판정한다
+    ReasoningProfile("merge-hybrid-1", "merge", "llm", "merge-llm-1", (*_ID, "reasoning/identity_llm.py"),
+                     ("extractor", "merge_judge")),
     ReasoningProfile("bridges-det-1", "bridges", "rules-identity", "bridges-rules-1", _ID, ("extractor",)),
     ReasoningProfile("edges-det-1", "edges", "rules-entailment-cues", "edges-cues-1",
                      ("reasoning/entailment.py", "reasoning/text.py")),
