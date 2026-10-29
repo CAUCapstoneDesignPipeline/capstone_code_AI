@@ -10,7 +10,11 @@
                                     단계 근거와 함께 문맥 근거(/note-links 단계의 context)를 보내 결론이 인용해 풀어 쓴다
       5. /verifications/explanations 설명의 주장별 판정 (explanation-hybrid-2: 근거 뒷받침·구체성·새로움을 LLM 이 본다)
       6. 판정 결합 (계약 §5 표): 하나라도 탈락이면 제외, 애매·가정·규칙 없음이면 가설, 아니면 후보.
-         제외된 제안은 보여 주지 않는다 (screened.rejected 에 이유만 남긴다)
+         제외·가설은 보여 주지 않는다 (팀 결정 2026-10-29: 도출 조건이 부족하면 결과에서 뺀다).
+         screened.rejected · screened.held 에 이유만 남긴다
+  derive_insights    조건부 결론 (R1 구현 적용 · R2 비용 합성):
+      1. /facts        노트마다 계산용 사실 (BE 는 노트 리비전마다 한 번 부르고 저장한다)
+      2. /derivations  관련 노트들의 사실 → 결론. conclusion 만 보여 주고 held·rejected·known 은 이유만 남긴다
 
 여기서 만드는 UUID 는 BE 의 저장 UUID 를 흉내 낸 것이다 (uuid5). 실제 BE 는 자기가 저장한
 concept·relation·evidence UUID 를 쓴다. 경로 단계의 근거 구간은 /extract 응답의 evidence 와 같은 위치라서
@@ -141,14 +145,15 @@ async def suggest_knowledge(client: AiClient, note: dict, candidates: list[dict]
     excluded = [p for p in preps if _excluded(p)]
     chosen, merged = pick_paths([p for p in preps if not _excluded(p)], max_paths, taxonomy_codes)
     done = await asyncio.gather(*(_explain(client, note, p, policy, explain_profile, verify_profile) for p in chosen))
-    order = {"candidate": 0, "hypothesis": 1}
-    suggestions = sorted((s for s in done if s["status"] != "excluded"), key=lambda s: order[s["status"]])
-    rejected = [{"source": s["source"], "bridge": s["bridge"], "target": s["target"], "knowledge": s["knowledge"],
+    suggestions = [s for s in done if s["status"] == "candidate"]
+
+    def screened(status):
+        return [{"source": s["source"], "bridge": s["bridge"], "target": s["target"], "knowledge": s["knowledge"],
                  "reasons": s["statusReasons"], "explanationVerdict": s["explanationVerdict"]}
-                for s in done if s["status"] == "excluded"]
+                for s in done if s["status"] == status]
     return {"links": links["links"], "linksMeta": links["meta"], "suggestions": suggestions,
             "screened": {"paths": len(preps), "excluded": len(excluded), "merged": merged, "explained": len(chosen),
-                         "rejected": rejected}}
+                         "rejected": screened("excluded"), "held": screened("hypothesis")}}
 
 
 def _excluded(p) -> bool:
@@ -418,3 +423,86 @@ async def _explain(client, note, p: _Prep, policy, explain_profile, verify_profi
     if p.bridge:
         result["bridgeVerdict"] = p.bridge
     return result
+
+
+# ---- 조건부 결론 (R1 구현 적용 · R2 비용 합성) ----
+
+MAX_DERIVE_DOCS = 20
+
+
+async def extract_facts(client: AiClient, note: dict, known_subjects: list[str] = (),
+                        profile: str = "facts-llm-1") -> dict:
+    """노트 하나 → /facts 응답. BE 는 (noteId, noteVersion) 마다 저장해 두고 원문이 바뀔 때만 다시 부른다."""
+    ctx = client.context(note)
+    return await client.call("/facts", {"context": ctx, "profileVersion": profile, "note": note,
+                                        "knownSubjects": sorted(set(known_subjects))[:500]})
+
+
+def related_notes(trigger: str, facts_by_note: dict[str, list[dict]], limit: int = MAX_DERIVE_DOCS) -> list[str]:
+    """트리거 노트와 함께 볼 노트: 같은 역할·연산·주체를 말하는 노트를 먼저 (요청 문서 상한 20개).
+    역할을 쓰는 알고리즘 노트 ↔ 그 역할의 구현 노트, 이미 쓴 결론(stated_result)이 있는 노트가 이어진다."""
+    def marks(fs):
+        out = set()
+        for f in fs:
+            out |= {("role", f["role"]), ("op", f["op"]), ("key", f["subjectKey"]), ("key", f["otherKey"])}
+        return out - {("role", None), ("op", None), ("key", None)}
+    mine = marks(facts_by_note.get(trigger, []))
+    scored = sorted(((len(marks(fs) & mine), n) for n, fs in facts_by_note.items() if n != trigger and fs),
+                    key=lambda x: (-x[0], x[1]))
+    return [trigger] + [n for s, n in scored if s][:limit - 1]
+
+
+def pick_insights(derivations: list[dict], k: int = 5) -> list[dict]:
+    """보여 줄 결론 카드 (최대 k 개). (알고리즘, 자료 구조, 역할) 마다 하나: R2 결론이 있으면 R2 (R1 은 그 안의 단계),
+    없으면 R1. 순서: R2 → 전제를 낸 노트 수 → 이름."""
+    by = {}
+    for d in derivations:
+        if d["status"] != "conclusion":
+            continue
+        key = (d["algorithm"]["key"], d["structure"]["key"], d["role"])
+        if key not in by or (d["rule"] == "R2" and by[key]["rule"] == "R1"):
+            by[key] = d
+    cards = sorted(by.values(), key=lambda d: (d["rule"] != "R2", -len(d["noteIds"]), d["conclusion"]))
+    return cards[:k]
+
+
+async def derive_insights(client: AiClient, note: dict, others: list[dict], facts_cache: dict | None = None,
+                          facts_profile: str = "facts-llm-1", derive_profile: str = "derive-sound-1",
+                          k: int = 5) -> dict:
+    """note 를 포함한 조건부 결론. facts_cache: noteId → (bodySha256, /facts 응답) — BE 의 저장된 사실 흉내.
+    노트마다 사실을 뽑고(캐시에 없을 때만), 관련 노트를 골라 /derivations 를 한 번 부른다."""
+    cache = facts_cache if facts_cache is not None else {}
+    notes = {n["noteId"]: n for n in (note, *others)}
+    known: set[str] = {f["subjectKey"] for _, r in cache.values() for f in r["facts"]}
+
+    async def facts_of(n):
+        hit = cache.get(n["noteId"])
+        if hit and hit[0] == n["bodySha256"]:
+            return hit[1]
+        r = await extract_facts(client, n, sorted(known), facts_profile)
+        cache[n["noteId"]] = (n["bodySha256"], r)
+        return r
+
+    # 트리거 노트를 먼저 (그 이름을 다른 노트가 따라 쓰게), 나머지는 동시에
+    first = await facts_of(note)
+    known |= {f["subjectKey"] for f in first["facts"]}
+    rest = await asyncio.gather(*(facts_of(n) for n in others))
+    got = {note["noteId"]: first, **{n["noteId"]: r for n, r in zip(others, rest)}}
+    facts_by_note = {nid: r["facts"] for nid, r in got.items()}
+    picked = related_notes(note["noteId"], facts_by_note)
+    facts = [f for nid in picked for f in facts_by_note[nid]]
+    empty = {"insights": [], "derivations": [], "screened": {"held": [], "rejected": [], "known": []},
+             "notes": picked, "facts": len(facts)}
+    if not facts_by_note.get(note["noteId"]) or len(picked) < 2:
+        return empty
+    stamps = [stamp(got[nid]["meta"]) for nid in picked if got[nid]["facts"]][:8]
+    r = await client.call("/derivations", {"context": client.context(note), "profileVersion": derive_profile,
+                                           "documents": [notes[nid] for nid in picked], "facts": facts,
+                                           "generationProvenance": stamps})
+    ds = r["derivations"]
+    touch = [d for d in ds if note["noteId"] in d["noteIds"]]     # 트리거 노트가 전제를 낸 결론만
+    brief = lambda d: {"rule": d["rule"], "conclusion": d["conclusion"], "reasons": d["reasons"],
+                       "missing": d["missing"]}
+    return {"insights": pick_insights(touch, k), "derivations": ds, "meta": r["meta"],
+            "screened": {s: [brief(d) for d in touch if d["status"] == s] for s in ("held", "rejected", "known")},
+            "notes": picked, "facts": len(facts), "noveltyScope": r["noveltyScope"]}

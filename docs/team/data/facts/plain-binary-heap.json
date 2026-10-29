@@ -1,0 +1,33 @@
+[
+ {
+  "quote": "우선순위 큐 구현에 제일 많이 쓴다",
+  "kind": "implements",
+  "subject": "이진 힙",
+  "subjectKey": "binary_heap",
+  "role": "priority_queue"
+ },
+ {
+  "quote": "insert: O(log n)",
+  "kind": "op_cost",
+  "subject": "이진 힙",
+  "subjectKey": "binary_heap",
+  "op": "insert",
+  "expr": "log n"
+ },
+ {
+  "quote": "extract-min: O(log n)",
+  "kind": "op_cost",
+  "subject": "이진 힙",
+  "subjectKey": "binary_heap",
+  "op": "extract_min",
+  "expr": "log n"
+ },
+ {
+  "quote": "이진 힙은 decrease-key 를 지원하지 않는다",
+  "kind": "op_cost",
+  "subject": "이진 힙",
+  "subjectKey": "binary_heap",
+  "op": "decrease_key",
+  "negated": true
+ }
+]

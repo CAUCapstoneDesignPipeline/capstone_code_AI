@@ -19,6 +19,8 @@
   AI_EXPLAIN_CACHE        LLM 설명 캐시 폴더 (기본 data/private/cache/explanations)
   AI_VERIFY_LLM           1 이면 LLM 간선 검증(edges-llm-1)을 켠다 (기본 1). 제공자 설정은 AI_VERIFY_LLM_* (없으면 anthropic,
                           effort low). AI_VERIFY_CACHE 캐시 폴더 (기본 data/private/cache/verifications)
+  AI_FACTS_LLM_PROVIDER / _MODEL / _EFFORT   계산용 사실 추출(facts-llm-1, AI_RELATION_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
+  AI_SOUND_LLM_PROVIDER / _MODEL / _EFFORT   조건부 결론 판정(derive-sound-1, AI_VERIFY_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
   AI_EMBEDDING_PROFILES   켤 임베딩 profile id, 쉼표로 구분 (기본 없음)
   AI_DEV_UI               1 이면 개발용 playground (/dev/) 를 붙인다. 배포에서는 켜지 않는다
 

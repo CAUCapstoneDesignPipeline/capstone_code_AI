@@ -7,6 +7,7 @@
   uv run ai concepts eval [--include-draft]  # 정답 개념과 비교 (재현율·정밀도, docs/eval/gold-concepts.md)
   uv run ai links eval                      # ④ 노트 쌍 점수 오프라인 시험 (정답 쌍 Recall@k·MRR, Adamic-Adar × 새로움)
   uv run ai links refind                    # 숨겼다 다시 찾기 (정답 표시 없이, 노트를 숨기고 A-C 를 다시 찾는가)
+  uv run ai derive [--auto] [--sound] [--show]   # 조건부 결론(R1·R2) 사례 시험 (docs/team/data). --auto 는 사실을 LLM 으로 뽑는다
   uv run ai eval [--include-draft]          # 위 평가 전부 + 설명 사람 판정을 한 번에. 신뢰 구간, dev/test, 지난 보고서와 비교
 """
 
@@ -447,6 +448,84 @@ def eval_main(argv=None):
         print(f"\n보고서 → {out}")
 
 
+def derive_main(argv=None):
+    """docs/team/data 의 사례를 돌려 기대와 비교한다. 기본은 사람이 적은 사실 + 규칙만 (LLM 없음, 같은 입력이면 같은 결과).
+    --auto: 사실을 LLM 으로 뽑는다 (자동 추출 성능. 사람이 적은 사실과 따로 잰다), --sound: soundness 판정까지."""
+    from app.main import role_llm_config
+    from app.services.derive.cases import DATA, load_cases, run_case, score_case
+    from app.services.llm import make_llm
+
+    ap = argparse.ArgumentParser(prog="ai derive")
+    ap.add_argument("--data", type=Path, default=DATA)
+    ap.add_argument("--case", nargs="*", help="이 사례만")
+    ap.add_argument("--split", choices=["dev", "test", "all"], default="all")
+    ap.add_argument("--auto", action="store_true", help="사실을 LLM 으로 뽑는다 (facts-llm-1)")
+    ap.add_argument("--sound", action="store_true", help="규칙을 통과한 결론을 LLM 이 판정한다 (derive-sound-1)")
+    ap.add_argument("--show", action="store_true", help="결론마다 설명을 보여 준다")
+    ap.add_argument("--cache", type=Path, default=Path("data/private/cache"))
+    args = ap.parse_args(argv)
+
+    facts_of, judge, dropped = None, None, {}
+    if args.auto:
+        from app.services.derive.extract_llm import FactExtractor
+        cfg = role_llm_config("facts", "medium")
+        if cfg is None:
+            sys.exit("사실 추출 LLM 이 없다 (ANTHROPIC_API_KEY 또는 AI_FACTS_LLM_PROVIDER)")
+        ex = FactExtractor(make_llm(cfg), args.cache / "relations" / "facts")
+        known: set[str] = set()
+
+        def facts_of(n):
+            got = ex.extract(n.note_id, 1, n.body, n.sha, sorted(known))
+            known.update(f.subject_key for f in got.facts)
+            for k, v in got.dropped.items():
+                dropped[k] = dropped.get(k, 0) + v
+            return got.facts
+    if args.sound:
+        from app.services.derive.sound_llm import SoundnessJudge
+        cfg = role_llm_config("sound", "medium")
+        if cfg is None:
+            sys.exit("soundness LLM 이 없다 (ANTHROPIC_API_KEY 또는 AI_SOUND_LLM_PROVIDER)")
+        judge = SoundnessJudge(make_llm(cfg), args.cache / "verifications" / "soundness")
+
+    cases = [c for c in load_cases(args.data) if (not args.case or c["id"] in args.case)
+             and args.split in ("all", c.get("split", "dev")) and (c.get("needs") != "sound" or judge is not None)]
+    rows = []
+    for c in cases:
+        got, used = run_case(c, args.data, facts_of)
+        if judge is not None:
+            from app.services.derive.sound_llm import Premise, SoundIn, apply
+            by_id = {f.fact_id: f for f in used}
+            todo = [d for d in got if d.status == "conclusion"]
+            if todo:
+                verdicts, _, _ = judge.judge([SoundIn(d.derivation_id, d.conclusion, tuple(t for t, _ in d.conditions),
+                                                      tuple(s.text for s in d.steps),
+                                                      tuple(Premise(x, by_id[x].text(), by_id[x].evidence.quote)
+                                                            for x in d.premises)) for d in todo])
+                apply(got, {v.ref: v for v in verdicts}, by_id)
+        s = score_case(c, got)
+        rows.append(s)
+        mark = "✓" if not s["mismatch"] else "✗"
+        print(f"{mark} {c['id']:<32} 결론 {s['conclusions']} (맞음 {s['true_conclusions']}) · "
+              f"기대 {s['expected']} 중 찾음 {s['found']} · 상태 {s['status_ok']}/{s['status_total']}  — {c.get('scene', '')}")
+        for m in s["mismatch"]:
+            print(f"    {m['key']}: 기대 {m['want']} · 결과 {m['got']}{' ' + m['result'] if m['result'] else ''}")
+        if args.show:
+            for d in got:
+                print(f"    [{d.rule} {d.status}] {d.conclusion}")
+                if d.status != "conclusion":
+                    print("      " + " / ".join(d.reasons))
+    tot = lambda k: sum(r[k] for r in rows)
+    neg = [r for r in rows if r["negative"]]
+    pct = lambda a, b: f"{a / b:.0%} ({a}/{b})" if b else "-"
+    print(f"\n사례 {len(rows)}개 · 사실: {'LLM 추출' if args.auto else '사람이 적은 것'} · soundness: {'켬' if judge else '끔'}")
+    print(f"  결론 정밀도      {pct(tot('true_conclusions'), tot('conclusions'))}")
+    print(f"  결론 재현율      {pct(tot('found'), tot('expected'))}")
+    print(f"  잘못된 확정      {pct(sum(r['false_confirm'] for r in neg), len(neg))} (음성 사례)")
+    print(f"  상태 일치        {pct(tot('status_ok'), tot('status_total'))} (보류·기각·이미 앎 포함)")
+    if dropped:
+        print("  버린 사실        " + ", ".join(f"{k} {v}" for k, v in sorted(dropped.items())))
+
+
 def main() -> None:
     """`uv run ai <명령> ...` 진입점."""
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
@@ -459,6 +538,8 @@ def main() -> None:
         links_main(rest)
     elif cmd == "eval":
         eval_main(rest)
+    elif cmd == "derive":
+        derive_main(rest)
     elif cmd == "serve":
         serve_main(rest)
     else:

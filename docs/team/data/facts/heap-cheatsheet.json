@@ -1,0 +1,52 @@
+[
+ {
+  "quote": "| 이진 힙 | O(log n) | O(log n) | O(log n) |",
+  "kind": "op_cost",
+  "subject": "이진 힙",
+  "subjectKey": "binary_heap",
+  "op": "insert",
+  "expr": "log n"
+ },
+ {
+  "quote": "| 이진 힙 | O(log n) | O(log n) | O(log n) |",
+  "kind": "op_cost",
+  "subject": "이진 힙",
+  "subjectKey": "binary_heap",
+  "op": "extract_min",
+  "expr": "log n"
+ },
+ {
+  "quote": "| 이진 힙 | O(log n) | O(log n) | O(log n) |",
+  "kind": "op_cost",
+  "subject": "이진 힙",
+  "subjectKey": "binary_heap",
+  "op": "decrease_key",
+  "expr": "log n"
+ },
+ {
+  "quote": "| 피보나치 힙 | O(1) | O(log n) 상각 | O(1) 상각 |",
+  "kind": "op_cost",
+  "subject": "피보나치 힙",
+  "subjectKey": "fibonacci_heap",
+  "op": "insert",
+  "expr": "1"
+ },
+ {
+  "quote": "| 피보나치 힙 | O(1) | O(log n) 상각 | O(1) 상각 |",
+  "kind": "op_cost",
+  "subject": "피보나치 힙",
+  "subjectKey": "fibonacci_heap",
+  "op": "extract_min",
+  "expr": "log n",
+  "case": "amortized"
+ },
+ {
+  "quote": "| 피보나치 힙 | O(1) | O(log n) 상각 | O(1) 상각 |",
+  "kind": "op_cost",
+  "subject": "피보나치 힙",
+  "subjectKey": "fibonacci_heap",
+  "op": "decrease_key",
+  "expr": "1",
+  "case": "amortized"
+ }
+]

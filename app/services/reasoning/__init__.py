@@ -27,7 +27,7 @@ def code_revision(*files: str) -> str:
 class ReasoningProfile:
     """불변 추론 profile. 검증 profile 은 생성 profile 과 model 또는 prompt 가 달라야 한다 (계약 §5)."""
     id: str
-    operation: str              # merge | bridges | edges | explain | explanation | links
+    operation: str              # merge | bridges | edges | explain | explanation | links | facts | derive
     model: str
     prompt: str
     files: tuple[str, ...]
@@ -46,6 +46,7 @@ class ReasoningProfile:
 _ID = ("reasoning/identity.py", "reasoning/text.py",       # 문맥은 추출기의 명사구 후보라 그 코드도 넣는다
        "concepts/extract.py", "concepts/markdown.py", "concepts/config.py")
 _EX = ("reasoning/explain.py", "reasoning/text.py")
+_DERIVE = ("derive/rules.py", "derive/bigo.py", "derive/facts.py", "derive/korean.py")
 _LINKS = ("links/corpus.py", "links/linker.py", "links/context.py")
 
 REASONING_PROFILES = {p.id: p for p in (
@@ -74,6 +75,14 @@ REASONING_PROFILES = {p.id: p for p in (
     # 노트 사이 연결·경로 후보. 계약 v0.1.0 에는 없는 AI 쪽 제안 operation (경로·순위는 계약상 BE 책임)
     ReasoningProfile("links-det-1", "links", "kiwi-tfidf-adamic-adar", "links-det-1", _LINKS, ("extractor",)),
     # 같은 방법에 관계를 LLM 으로 보탠다 (extract-hybrid-2 의 관계와 같다). 규칙만으로는 관계가 적어 경로가 거의 없다
+    # 계산용 사실 추출 (노트 하나). 노트에 쓰인 것만, quote 가 원문에 그대로 있어야 한다
+    ReasoningProfile("facts-llm-1", "facts", "llm", "facts-llm-1",
+                     ("derive/extract_llm.py", "derive/facts.py", "derive/cases.py"), ("fact_extractor",)),
+    # 조건부 결론 도출 R1 구현 적용 · R2 비용 합성 (결정적). 규칙 검사만
+    ReasoningProfile("derive-rules-1", "derive", "rules-r1-r2", "derive-rules-1", _DERIVE),
+    # + 규칙을 통과한 결론의 원문 충실성·soundness 를 LLM 이 판정 (판정만, 전제를 채우지 않는다)
+    ReasoningProfile("derive-sound-1", "derive", "llm", "derive-sound-1", (*_DERIVE, "derive/sound_llm.py"),
+                     ("soundness_judge",)),
     ReasoningProfile("links-hybrid-1", "links", "kiwi-tfidf-adamic-adar+llm-typing", "links-hybrid-1",
                      (*_LINKS, "relations/typer.py"), ("extractor", "typer")),
 )}

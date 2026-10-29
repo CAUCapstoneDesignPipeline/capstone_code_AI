@@ -64,10 +64,11 @@ def _rows(name: str, names: dict, res: dict, start: int) -> list[dict]:
                     "bridge": s["bridge"], "target": s["target"], "system": s["status"],
                     "system_reasons": " / ".join(s["statusReasons"]), "knowledge": s["knowledge"],
                     "evidence": " | ".join(quotes)})
-    for s in res["screened"]["rejected"]:
-        out.append({"note": name, "linked_note": "", "source": s["source"], "bridge": s["bridge"], "target": s["target"],
-                    "system": "rejected", "system_reasons": " / ".join(s["reasons"]),
-                    "knowledge": s.get("knowledge", ""), "evidence": ""})
+    for group, system in (("rejected", "rejected"), ("held", "hypothesis")):      # 가설은 화면에 없지만 판정은 잰다
+        for s in res["screened"].get(group, []):
+            out.append({"note": name, "linked_note": "", "source": s["source"], "bridge": s["bridge"],
+                        "target": s["target"], "system": system, "system_reasons": " / ".join(s["reasons"]),
+                        "knowledge": s.get("knowledge", ""), "evidence": ""})
     for i, r in enumerate(out):
         r.update(id=f"x{start + i:04d}", human="", human_note="")
     return out
