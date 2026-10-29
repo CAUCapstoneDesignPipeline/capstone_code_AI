@@ -460,7 +460,7 @@ def derive_main(argv=None):
     ap.add_argument("--case", nargs="*", help="이 사례만")
     ap.add_argument("--split", choices=["dev", "test", "all"], default="dev",
                     help="규칙·프롬프트를 고치는 중에는 dev. test 는 고친 뒤 한 번만")
-    ap.add_argument("--auto", action="store_true", help="사실을 LLM 으로 뽑는다 (facts-llm-2)")
+    ap.add_argument("--auto", action="store_true", help="사실을 LLM 으로 뽑는다 (facts-llm-3)")
     ap.add_argument("--sound", action="store_true", help="규칙을 통과한 결론을 LLM 이 판정한다 (derive-sound-1)")
     ap.add_argument("--show", action="store_true", help="결론마다 설명을 보여 준다")
     ap.add_argument("--cache", type=Path, default=Path("data/private/cache"))

@@ -104,7 +104,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 st.fact_extractor = FactExtractor(make_llm(cfg), settings.relation_cache / "facts"
                                                   if settings.relation_cache else None)
                 log.info("사실 추출 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
-            except Exception as e:      # facts-llm-2 만 준비되지 않은 상태로 둔다
+            except Exception as e:      # facts-llm-3 만 준비되지 않은 상태로 둔다
                 log.error("사실 추출 LLM 을 만들지 못했다: %s", e)
         if st.soundness_judge is None and settings.verify_llm:
             from app.services.derive.sound_llm import SoundnessJudge

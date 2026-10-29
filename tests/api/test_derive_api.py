@@ -138,7 +138,7 @@ def test_sound_profile_unavailable_without_judge():
 
 def test_facts(client):
     note = doc("indexed-heap")
-    r = post(client, "/facts", {"context": ctx(note), "profileVersion": "facts-llm-2", "note": note,
+    r = post(client, "/facts", {"context": ctx(note), "profileVersion": "facts-llm-3", "note": note,
                                 "knownSubjects": ["dijkstra"]})
     assert r.status_code == 200, r.text
     fs = r.json()["facts"]
@@ -147,7 +147,7 @@ def test_facts(client):
         e = f["evidence"]
         assert note["body"].encode("utf-16-le")[2 * e["startOffset"]:2 * e["endOffset"]].decode("utf-16-le") == e["quote"]
     other = dict(ctx(note), noteId=str(uuid.uuid4()))
-    r = post(client, "/facts", {"context": other, "profileVersion": "facts-llm-2", "note": note})
+    r = post(client, "/facts", {"context": other, "profileVersion": "facts-llm-3", "note": note})
     assert r.status_code == 422
 
 

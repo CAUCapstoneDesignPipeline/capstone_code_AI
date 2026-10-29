@@ -430,7 +430,7 @@ async def _explain(client, note, p: _Prep, policy, explain_profile, verify_profi
 MAX_DERIVE_DOCS = 20
 
 
-async def extract_facts(client: AiClient, note: dict, known_subjects: list[str] = (), profile: str = "facts-llm-2",
+async def extract_facts(client: AiClient, note: dict, known_subjects: list[str] = (), profile: str = "facts-llm-3",
                         known_roles: list[str] = (), known_ops: list[str] = ()) -> dict:
     """노트 하나 → /facts 응답. BE 는 (noteId, noteVersion) 마다 저장해 두고 원문이 바뀔 때만 다시 부른다."""
     ctx = client.context(note)
@@ -474,7 +474,7 @@ def pick_insights(derivations: list[dict], k: int = 5) -> list[dict]:
 
 
 async def derive_insights(client: AiClient, note: dict, others: list[dict], facts_cache: dict | None = None,
-                          facts_profile: str = "facts-llm-2", derive_profile: str = "derive-sound-1",
+                          facts_profile: str = "facts-llm-3", derive_profile: str = "derive-sound-1",
                           k: int = 5) -> dict:
     """note 를 포함한 조건부 결론. facts_cache: noteId → (bodySha256, /facts 응답) — BE 의 저장된 사실 흉내.
     노트마다 사실을 뽑고(캐시에 없을 때만), 관련 노트를 골라 /derivations 를 한 번 부른다."""

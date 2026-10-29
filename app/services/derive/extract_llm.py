@@ -1,4 +1,4 @@
-"""노트 → 계산용 사실 (profile facts-llm-2). LLM 이 노트를 읽고 사실과 그 근거 원문(quote)을 고른다.
+"""노트 → 계산용 사실 (profile facts-llm-3). LLM 이 노트를 읽고 사실과 그 근거 원문(quote)을 고른다.
 
 권한과 검사
   - 노트에 쓰여 있는 것만 사실이 된다. 모델이 아는 것(교과서 상식)으로 빠진 전제를 채우지 않는다 (프롬프트 + 아래 검사)
@@ -18,7 +18,7 @@ from app.services.llm import LLMError
 from .cases import locate
 from .facts import CASES, KINDS, OPS, ROLES, Fact, FactEvidence, canon_op, canon_role, check_fact
 
-PROMPT_VERSION = "facts-llm-2"
+PROMPT_VERSION = "facts-llm-3"
 
 SYSTEM = f"""너는 컴퓨터 과학 공부 노트에서 '계산에 쓸 사실'을 뽑는다. 사실마다 그 사실을 말하는 원문 구절(quote)을 붙인다.
 
@@ -45,7 +45,8 @@ quote 는 노트에서 글자 하나 바꾸지 않고 그대로 복사한 연속
 키로 찾기는 lookup·probe·get 이 아니라 search 로, 넣기는 put·add 가 아니라 insert 로 쓴다.
 한 문장이 "앞이나 뒤에서 빼기"처럼 여러 변형 중 어느 쪽이든 쓴다고 하면 변형마다 사실 하나 (같은 횟수 상한, 예: pop_front 와 pop_back 각각).
 같은 연산에 최악·평균·상각 비용이 따로 적혀 있으면 case 마다 사실 하나씩 (한 줄에 여러 개면 quote 는 같은 줄).
-식(expr) 쓰는 법: O() 없이. 정점 수 V, 간선 수 E, 자료 구조 자신의 크기는 n 으로 맞춘다 (노트가 m, |V| 로 써도). log, α(n), ^ 를 쓴다.
+식(expr) 쓰는 법: O() 없이. 변수 이름은 그 노트에 쓴 그대로 쓴다 (n, m, N, M, V, E, k …; |V| 는 V). 노트가 n 이라고 썼는데 V 로
+바꾸거나 정점 수를 V 로 맞추지 않는다. 단 자료 구조(op_cost)의 비용 식에서 그 자료 구조가 담은 원소 수는 n 으로 쓴다. log, α(n), ^ 를 쓴다.
 subjectKey: 대상의 영어 정규 이름, 소문자와 밑줄 ("dijkstra", "indexed_binary_min_heap", "bfs").
   '이미 있는 이름' 목록에 같은 대상이 있으면 그 key 를 그대로 쓴다. 비슷하지만 다른 대상(인덱스 없는 이진 힙 ≠ 인덱스 있는 이진 힙)이면 새 key.
 subject 는 그 대상의 온전한 이름으로, 노트(제목·본문)에 쓴 표기를 쓴다. '인덱스 있는 버전', '이것', '그냥 힙' 같은

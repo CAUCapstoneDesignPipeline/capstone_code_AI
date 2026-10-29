@@ -95,7 +95,7 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 인덱스 있는 이진 최소 힙 노트("세 연산 모두 O(log n)") → **"인덱스 있는 이진 최소 힙으로 구현한 다익스트라의 시간은 O((V + E) log V) 이하예요"**.
 
 ```
-노트 저장 ─▶ ① POST /facts          노트 하나 → 계산용 사실 (facts-llm-2). (noteId, noteVersion) 마다 한 번, BE 가 저장
+노트 저장 ─▶ ① POST /facts          노트 하나 → 계산용 사실 (facts-llm-3). (noteId, noteVersion) 마다 한 번, BE 가 저장
 분석 실행 ─▶ ② 관련 노트 고르기      트리거 노트와 역할·연산·주체가 겹치는 노트 (최대 20개, app/client.py related_notes)
            ③ POST /derivations    그 노트들의 사실 → 결론 (derive-sound-1)
            ④ status = conclusion 만 화면에. held·rejected·known 은 이유만 저장
@@ -177,7 +177,7 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 | verifyExplanation | `explanation-det-2` | 주장마다 인용이 어느 단계 근거인지, 두 개념이 원문에 나오는지, 결론이 두 전제를 잇는지, 합성 규칙이 있는지. 단계 근거가 아닌 인용은 경로 밖 근거로 본다 |
 | findNoteLinks (제안) | **`links-hybrid-1`** (권장) | 3장 + 관계를 LLM 으로 보탠다 (`extract-hybrid-2` 의 관계와 같다) |
 | findNoteLinks (제안) | `links-det-1` | 3장. 규칙·구조 관계만 써서 경로가 거의 없다 |
-| extractFacts (제안) | `facts-llm-2` | 4장. LLM(사실 LLM, 기본 effort medium)이 노트에 쓰인 계산용 사실과 원문 구절을 고른다. quote 가 원문에 그대로 없거나 key 모양이 아니면 버림. 이미 쓰인 key 를 받아 맞춘다. 거절이면 사실 없음. 노트 원문·knownSubjects 로 캐시 |
+| extractFacts (제안) | `facts-llm-3` | 4장. LLM(사실 LLM, 기본 effort medium)이 노트에 쓰인 계산용 사실과 원문 구절을 고른다. quote 가 원문에 그대로 없거나 key 모양이 아니면 버림. 이미 쓰인 key 를 받아 맞춘다. 거절이면 사실 없음. 노트 원문·knownSubjects 로 캐시 |
 | deriveConclusions (제안) | `derive-rules-1` | 4장 R1·R2 규칙만 (결정적, LLM 없음) |
 | deriveConclusions (제안) | **`derive-sound-1`** (권장) | `derive-rules-1` + 규칙을 통과한 결론을 LLM(soundness LLM, effort medium)이 판정. 사실 추출과 prompt 가 달라 독립 |
 

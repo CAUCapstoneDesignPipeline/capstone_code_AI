@@ -1,6 +1,6 @@
 """계산용 사실 추출과 조건부 결론 도출 (R1 구현 적용 · R2 비용 합성). 계약 v0.1.0 에 없는 AI 쪽 제안 operation.
 
-  POST /facts         extractFacts         노트 하나 → 계산용 사실 (facts-llm-2). 노트를 저장할 때 한 번, 리비전마다
+  POST /facts         extractFacts         노트 하나 → 계산용 사실 (facts-llm-3). 노트를 저장할 때 한 번, 리비전마다
   POST /derivations   deriveConclusions    여러 노트의 사실 → 조건부 결론 (derive-rules-1: 규칙만, derive-sound-1: + soundness 판정)
 
 BE 는 /facts 결과를 노트 리비전과 함께 저장하고, 분석 버튼·저장 때 관련 노트의 사실을 모아 /derivations 를 부른다.
