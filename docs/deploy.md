@@ -83,3 +83,39 @@ volumes:
 - readiness 200: 그 commit 의 profile 목록이 `profileVersions` 에 나온다 (LLM profile 은 LLM 설정이 있을 때만). IDF 를 안 주면 readiness 503 (liveness 는 healthy)
 - `/dev/` 404, 틀린 토큰 401
 - 참조 클라이언트(`app/client.py`)로 컨테이너에 전체 흐름(note-links → 검증 → LLM 설명 → 설명 검증)을 불러 candidate 제안 1건
+
+## GCP 이미지 발행 준비 (#6)
+
+위 EC2/SSM/ECR 절차와 arm64 검증은 과거 배포 기록이다. 신규 GCP 발행은
+`.github/workflows/gcp-publish-image.yml`과 `deploy/gcp/publish_preflight.py`를 사용한다.
+로컬 코드 준비와 실제 AR 발행·GCP 인수는 별개이며 현재 원격 변경 승인은 없다.
+
+- Python 3.11.18 / uv 0.12.19 공식 image index digest를 2026-10-30 registry 조회로 고정했다.
+  운영 build는 `linux/amd64`, 기본 `--extra embeddings`, uv frozen, UID10001이다.
+- BGE-M3 `5617a9f61b028005a4858fdac845db406aefb181`은 기존 profile을 그대로 쓴다.
+  `deploy/gcp/image_smoke.py`는 합성 2문서로 IDF를 만들고 CPU 모델 적재, 1024차원 벡터,
+  인증 live/ready·profile·잘못된 토큰·`/dev` 비노출을 검사한다. 실제 provider를 호출하지 않는다.
+- `develop`의 수동 실행만 허용한다. 기본은 실행 안 함이며 `GCP_IMAGE_PUBLISH_ENABLED=true`,
+  보호된 `image-publish` environment, BE #36의 AI publisher WIF/AR 출력이 필요하다.
+  repo/owner 숫자 ID, ref, workflow를 검사하며 IAM 측 조건과 실제 token 교환도 별도 인수한다.
+- `GCP_PROJECT_ID`, `GCP_REGION`, `AR_REPOSITORY=capstone-ai`, `GCP_IMAGE_SERVICE_ACCOUNT`,
+  `GCP_WIF_PROVIDER`는 승인된 Terraform output으로 설정한다. 장기 JSON key를 사용하지 않는다.
+- run ID와 attempt를 image tag/artifact 이름에 포함해 immutable tag를 덮지 않는다.
+  배포 입력은 `image.json`의 정확한 source SHA와 digest이며 tag는 배포에 쓰지 않는다.
+- AI publisher가 앱 AR·VM·DB·Secret Manager에 접근할 수 없는지는 실제 IAM 부정 시험이 남는다.
+  CI 통과나 preflight는 WIF 정책·provider 호출·모델 품질의 증거가 아니다.
+
+검증 명령(저장소 루트):
+
+```bash
+uv sync --frozen --python 3.11
+uv run --frozen pytest -q
+docker build --platform linux/amd64 --build-arg UV_EXTRAS="--extra embeddings" \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" -t capstone-ai:gcp-check .
+docker run --rm --platform linux/amd64 --entrypoint python \
+  -v "$PWD/deploy/gcp/image_smoke.py:/opt/image_smoke.py:ro" \
+  capstone-ai:gcp-check /opt/image_smoke.py
+```
+
+CPU smoke는 BGE-M3 모델 다운로드·적재를 수행한다. local arm64 빌드나 hash embedder 테스트를
+이 검사로 대체하지 않는다. 비밀값·IDF·개인 노트·캐시는 build context 허용 목록 밖에 둔다.
