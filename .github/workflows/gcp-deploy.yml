@@ -24,10 +24,10 @@ permissions:
 jobs:
   deploy:
     if: github.repository == 'CAUCapstoneDesignPipeline/capstone_code_AI' && github.ref == 'refs/heads/develop' && vars.GCP_DEPLOY_ENABLED == 'true'
-    uses: CAUCapstoneDesignPipeline/capstone_code_AI/.github/workflows/gcp-deploy-reusable.yml@40d9b6fe697f1ff5d633b75a57e8455e3263c636
+    uses: CAUCapstoneDesignPipeline/capstone_code_AI/.github/workflows/gcp-deploy-reusable.yml@d50a4c135aa79896d18053d323ecf1208cff068f
     with:
       operation: ${{ inputs.operation }}
       manifest_path: ${{ inputs.manifest_path }}
       expected_release: ${{ inputs.expected_release }}
       operation_id: ${{ inputs.operation_id }}
-      deploy_tool_sha: 40d9b6fe697f1ff5d633b75a57e8455e3263c636
+      deploy_tool_sha: d50a4c135aa79896d18053d323ecf1208cff068f

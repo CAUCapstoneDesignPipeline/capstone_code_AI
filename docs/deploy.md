@@ -215,6 +215,6 @@ Ops Agent 수신/알림을 포함한다. readiness는 provider를 호출하지 �
 - 로컬-only commit은 Actions checkout할 수 없다. 원격 게시 후 ref 접근을 검증하고 WIF를 활성화한다.
 - 이 배포는 private AI 서버 인수다. BE 기능 계약 승인이나 운영 사용자 대상 AI 공개를 대신하지 않는다.
 
-AI caller는 실제 로컬 commit `40d9b6fe697f1ff5d633b75a57e8455e3263c636`의 reusable/tool에 고정했다.
+AI caller는 실제 로컬 commit `d50a4c135aa79896d18053d323ecf1208cff068f`의 reusable/tool에 고정했다.
 이 commit은 원격 게시 전에는 GitHub에서 사용할 수 없다. 설치 tool SHA 및 `GCP_AI_DEPLOY_TOOL_SHA`,
 WIF `job_workflow_ref`도 같은 값으로 대조한 후 사용한다. Manifest는 별도의 `GCP_RELEASE_MANIFEST_SHA`에서 읽는다.
