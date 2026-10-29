@@ -24,6 +24,19 @@ def py_index(text: str, u16: int) -> int:
     return len(text)
 
 
+def heading_path(text: str, pos: int) -> str:
+    """pos 위의 제목 경로 ("DB > WAL > 장점"). 코드 블록 안의 # 줄은 제목이 아니다. 제목이 없으면 빈 문자열."""
+    from app.services.concepts.markdown import mask
+    masked = mask(text[:pos])
+    path: list[tuple[int, str]] = []
+    for line in masked.split("\n"):
+        m = _HEADING.match(line)
+        if m:
+            level = len(m.group(1))
+            path = [(lv, t) for lv, t in path if lv < level] + [(level, line[m.end():].strip(" #*"))]
+    return " > ".join(t for _, t in path if t)
+
+
 def section(text: str, pos: int) -> tuple[int, int]:
     """pos 가 들어 있는 절 [start, end): 바로 앞 제목부터 같은 수준 이하의 다음 제목 전까지. 제목이 없으면 문서 전체."""
     starts, p = [], 0

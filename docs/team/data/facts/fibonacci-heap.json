@@ -1,0 +1,36 @@
+[
+ {
+  "quote": "우선순위 큐의 이론적으로 빠른 구현",
+  "kind": "implements",
+  "subject": "피보나치 힙",
+  "subjectKey": "fibonacci_heap",
+  "role": "priority_queue"
+ },
+ {
+  "quote": "insert: O(1)",
+  "kind": "op_cost",
+  "subject": "피보나치 힙",
+  "subjectKey": "fibonacci_heap",
+  "op": "insert",
+  "expr": "1",
+  "case": "worst"
+ },
+ {
+  "quote": "extract-min: 상각 O(log n)",
+  "kind": "op_cost",
+  "subject": "피보나치 힙",
+  "subjectKey": "fibonacci_heap",
+  "op": "extract_min",
+  "expr": "log n",
+  "case": "amortized"
+ },
+ {
+  "quote": "decrease-key: 상각 O(1)",
+  "kind": "op_cost",
+  "subject": "피보나치 힙",
+  "subjectKey": "fibonacci_heap",
+  "op": "decrease_key",
+  "expr": "1",
+  "case": "amortized"
+ }
+]

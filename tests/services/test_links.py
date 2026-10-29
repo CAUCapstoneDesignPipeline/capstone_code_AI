@@ -137,3 +137,25 @@ def test_offline_evaluation_ranks_gold_pair_and_novelty():
     assert by["S (다른 주제)"].ranks[("db-wal", "os-journal")] == 1     # 같은 주제(db-wal2)는 후보에서 빠진다
     n1 = by["S·N^1"].ranks
     assert n1[("db-wal", "os-journal")] == 1 and n1[("os-journal", "db-wal")] in (1, 2)   # 반대쪽은 db-wal2 도 후보
+
+
+def test_hide_and_refind_finds_pair_through_other_notes():
+    from app.services.links.evaluate import hide_and_refind
+    texts = {"a": "# 메모\n\n재시도와 장애는 함께 나타난다.\n",
+             "b": "# 네트워크\n\n재시도는 타임아웃 뒤에 일어난다. 재시도는 중복을 만든다.\n",
+             "c": "# DB\n\n중복은 장애를 만든다. 장애는 복구가 필요하다.\n"}
+    ex = ConceptExtractor(ExtractConfig())
+    c = build_corpus(texts, ex, lambda ms: select_concepts(ms, PROF), POLICY, PROF.limits)
+    aa, pop = hide_and_refind(c, n=50, seed=0, hub_ratio=1.0)
+    assert aa.ranks and set(aa.ranks) == set(pop.ranks)
+    hidden = {(a, x): r for (nid, a, x), r in aa.ranks.items() if nid == "a"}
+    assert hidden[("장애", "재시도")] == 1 or hidden.get(("재시도", "장애")) == 1     # 다른 두 노트의 '중복' 을 거쳐 다시 찾는다
+    assert hide_and_refind(c, n=50, seed=0, hub_ratio=1.0)[0].ranks == aa.ranks      # 같은 seed 면 같은 결과
+
+
+def test_heading_path_skips_code_blocks():
+    from app.services.links.context import heading_path
+    text = "# DB\n## WAL\n```\n# 주석\n```\n### 오해\n문장이다.\n## 체크포인트\n끝.\n"
+    assert heading_path(text, text.index("문장이다")) == "DB > WAL > 오해"
+    assert heading_path(text, text.index("끝.")) == "DB > 체크포인트"
+    assert heading_path("본문뿐", 0) == ""

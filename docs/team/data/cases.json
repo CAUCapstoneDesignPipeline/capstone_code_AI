@@ -1,0 +1,244 @@
+{
+ "version": "derive-cases-1",
+ "aliases": {
+  "binary_heap": [
+   "binary_min_heap"
+  ],
+  "indexed_binary_min_heap": [
+   "indexed_binary_heap",
+   "indexed_min_heap"
+  ],
+  "linked_list_queue": [
+   "queue_linked_list",
+   "linked_queue"
+  ],
+  "array_stack": [
+   "stack"
+  ],
+  "sorted_array_priority_queue": [
+   "sorted_array_pq",
+   "sorted_array"
+  ]
+ },
+ "cases": [
+  {
+   "id": "dijkstra-indexed-heap",
+   "split": "dev",
+   "scene": "정상 입력",
+   "notes": [
+    "dijkstra",
+    "indexed-heap"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "algorithm": "dijkstra",
+     "structure": "indexed_binary_min_heap",
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "algorithm": "dijkstra",
+     "structure": "indexed_binary_min_heap",
+     "status": "conclusion",
+     "result": "O((V + E) log V)"
+    }
+   ]
+  },
+  {
+   "id": "decrease-key-cost-missing",
+   "split": "dev",
+   "scene": "필수 전제 삭제: 키 감소 비용이 없으면 비용 도출만 보류, 독립 결론은 남는다",
+   "notes": [
+    "dijkstra",
+    "indexed-heap-no-cost",
+    "bfs",
+    "queue-linked-list"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "algorithm": "dijkstra",
+     "structure": "indexed_binary_min_heap",
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "algorithm": "dijkstra",
+     "structure": "indexed_binary_min_heap",
+     "status": "held"
+    },
+    {
+     "rule": "R1",
+     "algorithm": "bfs",
+     "structure": "linked_list_queue",
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "algorithm": "bfs",
+     "structure": "linked_list_queue",
+     "status": "conclusion",
+     "result": "O(V + E)"
+    }
+   ]
+  },
+  {
+   "id": "third-note-duplicate",
+   "split": "dev",
+   "scene": "제3 문서에 같은 결론: 새 결론으로 내지 않는다",
+   "notes": [
+    "dijkstra",
+    "indexed-heap",
+    "shortest-path-summary"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "algorithm": "dijkstra",
+     "structure": "indexed_binary_min_heap",
+     "status": "known"
+    },
+    {
+     "rule": "R2",
+     "algorithm": "dijkstra",
+     "structure": "indexed_binary_min_heap",
+     "status": "known",
+     "result": "O((V + E) log V)"
+    }
+   ]
+  },
+  {
+   "id": "plain-heap-no-decrease-key",
+   "split": "dev",
+   "scene": "자료 구조가 필요한 연산을 제공하지 않는다",
+   "notes": [
+    "dijkstra",
+    "plain-binary-heap"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "algorithm": "dijkstra",
+     "structure": "binary_heap",
+     "status": "rejected"
+    }
+   ]
+  },
+  {
+   "id": "heap-contradiction",
+   "split": "dev",
+   "scene": "노트끼리 모순: 한 노트는 키 감소를 지원한다, 다른 노트는 지원하지 않는다",
+   "notes": [
+    "dijkstra",
+    "plain-binary-heap",
+    "heap-cheatsheet"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "algorithm": "dijkstra",
+     "structure": "binary_heap",
+     "status": "rejected"
+    },
+    {
+     "rule": "R1",
+     "algorithm": "dijkstra",
+     "structure": "fibonacci_heap",
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "algorithm": "dijkstra",
+     "structure": "fibonacci_heap",
+     "status": "conclusion",
+     "result": "O(V log V + E)",
+     "case": "amortized"
+    }
+   ]
+  },
+  {
+   "id": "stack-negative",
+   "split": "dev",
+   "scene": "음성: 스택은 우선순위 큐가 아니다",
+   "notes": [
+    "dijkstra",
+    "stack"
+   ],
+   "expect": []
+  },
+  {
+   "id": "bfs-linked-queue",
+   "split": "dev",
+   "scene": "정상 입력 (다른 규칙 대상)",
+   "notes": [
+    "bfs",
+    "queue-linked-list"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "algorithm": "bfs",
+     "structure": "linked_list_queue",
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "algorithm": "bfs",
+     "structure": "linked_list_queue",
+     "status": "conclusion",
+     "result": "O(V + E)"
+    }
+   ]
+  },
+  {
+   "id": "dijkstra-fibonacci-amortized",
+   "split": "dev",
+   "scene": "상각 비용",
+   "notes": [
+    "dijkstra",
+    "fibonacci-heap"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "algorithm": "dijkstra",
+     "structure": "fibonacci_heap",
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "algorithm": "dijkstra",
+     "structure": "fibonacci_heap",
+     "status": "conclusion",
+     "result": "O(V log V + E)",
+     "case": "amortized"
+    }
+   ]
+  },
+  {
+   "id": "wrong-premise-sorted-array",
+   "split": "dev",
+   "needs": "sound",
+   "scene": "노트의 전제가 틀림 (정렬 배열 삽입은 O(1)이 아니다): R2 는 규칙을 통과하지만 soundness 판정에서 버린다. R1(쓸 수는 있다)은 맞는 결론",
+   "notes": [
+    "dijkstra",
+    "sorted-array-pq"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "algorithm": "dijkstra",
+     "structure": "sorted_array_priority_queue",
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "algorithm": "dijkstra",
+     "structure": "sorted_array_priority_queue",
+     "status": "rejected"
+    }
+   ]
+  }
+ ]
+}

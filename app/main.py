@@ -8,6 +8,8 @@
   POST /internal/v1/explanations                 generateExplanation — A-B-C 경로의 근거 기반 설명 (새 지식 제안)
   POST /internal/v1/verifications/explanations   verifyExplanation — 설명의 주장별 판정
   POST /internal/v1/note-links     findNoteLinks — 노트 사이 연결·경로 후보 (계약에 없는 AI 쪽 제안)
+  POST /internal/v1/facts          extractFacts — 노트 하나의 계산용 사실 (계약에 없는 AI 쪽 제안)
+  POST /internal/v1/derivations    deriveConclusions — 여러 노트의 사실 → 조건부 결론 R1·R2 (계약에 없는 AI 쪽 제안)
   GET  /internal/v1/health/live    getAiLiveness
   GET  /internal/v1/health/ready   getAiReadiness
 
@@ -22,7 +24,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
-from app.api.v1 import embeddings, extract, health, links, reasoning
+from app.api.v1 import derive, embeddings, extract, health, links, reasoning
 from app.api.v1.deps import UUID_RE
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES, Settings
 from app.core.errors import AiError, error_response, install_handlers, new_request_id
@@ -62,7 +64,8 @@ def explain_llm_config():
 
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
-               explanation_judge=None) -> FastAPI:
+               explanation_judge=None, merge_judge=None, concept_filter=None, fact_extractor=None,
+               soundness_judge=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -82,10 +85,39 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 cfg = role_llm_config("relation", "low")     # 문장 속 관계 유형 고르기는 짧은 판단이라 effort low
                 if cfg is None:
                     raise ValueError("관계 LLM 제공자가 없다 (AI_RELATION_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
-                st.typer = RelationTyper(make_llm(cfg), settings.relation_cache)
+                llm = make_llm(cfg)
+                st.typer = RelationTyper(llm, settings.relation_cache)
+                if st.concept_filter is None:          # 개념 거르기도 같은 관계 LLM (짧은 판단, effort low)
+                    from app.services.concepts.filter_llm import ConceptFilter
+                    st.concept_filter = ConceptFilter(
+                        llm, settings.relation_cache / "concepts" if settings.relation_cache else None)
                 log.info("관계 판정 LLM: %s · %s", cfg.provider, cfg.model)
             except Exception as e:      # 설정이 틀리면 hybrid profile 만 준비되지 않은 상태로 둔다
                 log.error("관계 판정 LLM 을 만들지 못했다: %s", e)
+        if st.fact_extractor is None and settings.relation_llm:
+            from app.services.derive.extract_llm import FactExtractor
+            from app.services.llm import make_llm
+            try:
+                cfg = role_llm_config("facts", "medium")       # 문장 → 구조화 사실: 관계 고르기보다 판단이 길다
+                if cfg is None:
+                    raise ValueError("사실 추출 LLM 제공자가 없다 (AI_FACTS_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
+                st.fact_extractor = FactExtractor(make_llm(cfg), settings.relation_cache / "facts"
+                                                  if settings.relation_cache else None)
+                log.info("사실 추출 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
+            except Exception as e:      # facts-llm-1 만 준비되지 않은 상태로 둔다
+                log.error("사실 추출 LLM 을 만들지 못했다: %s", e)
+        if st.soundness_judge is None and settings.verify_llm:
+            from app.services.derive.sound_llm import SoundnessJudge
+            from app.services.llm import make_llm
+            try:
+                cfg = role_llm_config("sound", "medium")       # 결론이 맞는 지식인가: 짧지만 지식 판단이라 medium
+                if cfg is None:
+                    raise ValueError("soundness LLM 제공자가 없다 (AI_SOUND_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
+                st.soundness_judge = SoundnessJudge(make_llm(cfg), settings.verify_cache / "soundness"
+                                                    if settings.verify_cache else None)
+                log.info("soundness 판정 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
+            except Exception as e:      # derive-sound-1 만 준비되지 않은 상태로 둔다
+                log.error("soundness 판정 LLM 을 만들지 못했다: %s", e)
         if st.explainer is None and settings.explain_llm:
             from app.services.llm import make_llm
             from app.services.reasoning.explain_llm import ExplainLLM
@@ -97,10 +129,11 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 log.info("설명 생성 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
             except Exception as e:      # explain-llm-8 만 준비되지 않은 상태로 둔다
                 log.error("설명 생성 LLM 을 만들지 못했다: %s", e)
-        if (st.edge_judge is None or st.explanation_judge is None) and settings.verify_llm:
+        if (st.edge_judge is None or st.explanation_judge is None or st.merge_judge is None) and settings.verify_llm:
             from app.services.llm import make_llm
             from app.services.reasoning.entailment_llm import EdgeJudge
             from app.services.reasoning.explanation_llm import ExplanationJudge
+            from app.services.reasoning.identity_llm import MergeJudge
             try:
                 cfg = role_llm_config("verify", "low")
                 if cfg is None:
@@ -109,8 +142,10 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 st.edge_judge = st.edge_judge or EdgeJudge(llm, settings.verify_cache)
                 st.explanation_judge = st.explanation_judge or ExplanationJudge(
                     llm, settings.verify_cache / "explanations" if settings.verify_cache else None)
-                log.info("검증 LLM (간선·설명): %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
-            except Exception as e:      # edges-llm-1, explanation-hybrid-2 만 준비되지 않은 상태로 둔다
+                st.merge_judge = st.merge_judge or MergeJudge(
+                    llm, settings.verify_cache / "merges" if settings.verify_cache else None)
+                log.info("검증 LLM (간선·설명·병합): %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
+            except Exception as e:      # edges-llm-1, explanation-hybrid-2, merge-hybrid-1 만 준비되지 않은 상태로 둔다
                 log.error("검증 LLM 을 만들지 못했다: %s", e)
         for pid in settings.embedding_profiles:
             if pid in st.embedders:
@@ -132,6 +167,10 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.explainer = explainer
     app.state.edge_judge = edge_judge
     app.state.explanation_judge = explanation_judge
+    app.state.merge_judge = merge_judge
+    app.state.concept_filter = concept_filter
+    app.state.fact_extractor = fact_extractor
+    app.state.soundness_judge = soundness_judge
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()
@@ -152,7 +191,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
         return response
 
     install_handlers(app)
-    for router in (extract.router, embeddings.router, reasoning.router, links.router, health.router):
+    for router in (extract.router, embeddings.router, reasoning.router, links.router, derive.router, health.router):
         app.include_router(router, prefix=API_PREFIX)
     if settings.dev_ui:                 # 개발용 playground. 로컬 노트를 읽으므로 배포에서는 켜지 않는다
         from pathlib import Path

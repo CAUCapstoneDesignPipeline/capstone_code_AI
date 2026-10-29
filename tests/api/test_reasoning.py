@@ -454,3 +454,46 @@ def test_llm_edge_check_missing_verdict_is_502():
         r = post(c, "/verifications/edges", base("edges-llm-1", policy=POLICY, edges=[EDGE],
                                                  generationProvenance=[STAMP]))
         assert r.status_code == 502 and code(r) == "INVALID_MODEL_OUTPUT"
+
+
+def test_hybrid_merge_asks_llm_only_where_rules_cannot_decide(tmp_path):
+    from app.services.reasoning.identity_llm import MergeJudge
+    fake = FakeLLM({"verdicts": [{"pair": "P1", "decision": "same", "confidence": 0.9,
+                                  "reason": "두 노트 모두 같은 중복 실행을 말합니다."},
+                                 {"pair": "P2", "decision": "different", "confidence": 0.95,
+                                  "reason": "재시도는 동작이고 오류는 결과입니다."}]})
+    other = dict(PAIR, pairId="pair-2", similarity=0.4,
+                 left=dict(PAIR["left"], conceptId=CA, label="재시도", surface="재시도"),
+                 right=dict(PAIR["right"], conceptId=CC, label="오류", surface="오류"))
+    app = create_app(Settings(service_token=TOKEN, concept_idf=Path("does-not-exist.json")),
+                     extractor=ConceptExtractor(ExtractConfig()), merge_judge=MergeJudge(fake, tmp_path))
+    with TestClient(app) as c:
+        r = post(c, "/merge-decisions", base("merge-hybrid-1", pairs=[PAIR, other]))
+        assert r.status_code == 200, r.text
+        got = {d["pairId"]: d["decision"] for d in r.json()["decisions"]}
+        assert got == {"pair-1": "same", "pair-2": "different"}
+        assert r.json()["meta"]["provider"] == "local+anthropic" and r.json()["meta"]["promptVersion"] == "merge-llm-1"
+        assert "중복은 오류를 만든다." in fake.calls[0][1]                    # 근거 문장을 보여 준다
+        r = post(c, "/merge-decisions", base("merge-hybrid-1", pairs=[PAIR, other]))
+        assert r.status_code == 200 and len(fake.calls) == 1                 # 같은 쌍은 캐시에서
+        det = post(c, "/merge-decisions", base("merge-det-1", pairs=[other]))
+        assert det.json()["decisions"][0]["decision"] == "different" and len(fake.calls) == 1
+
+
+def test_hybrid_merge_unavailable_without_llm(client):
+    r = post(client, "/merge-decisions", base("merge-hybrid-1", pairs=[PAIR]))
+    assert r.status_code == 503
+
+
+def test_llm_edge_check_with_heading_path():
+    c, fake = edge_client([{"edge": "X1", "outcome": "entailed", "confidence": 0.9,
+                            "reason": "근거가 재시도가 중복을 만든다고 말합니다."}])
+    with c:
+        r = post(c, "/verifications/edges", base("edges-llm-2", policy=POLICY, edges=[EDGE],
+                                                 generationProvenance=[STAMP]))
+        assert r.status_code == 200, r.text
+        assert r.json()["meta"]["promptVersion"] == "edges-llm-2"
+        system, user, _ = fake.calls[0]
+        assert "근거 (위치: 지식 🧠): **재시도**는 중복을 만든다." in user and "제목 경로" in system
+        post(c, "/verifications/edges", base("edges-llm-1", policy=POLICY, edges=[EDGE], generationProvenance=[STAMP]))
+        assert "위치:" not in fake.calls[1][1]                               # edges-llm-1 은 그대로

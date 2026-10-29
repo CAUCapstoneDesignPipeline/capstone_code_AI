@@ -177,3 +177,21 @@ def test_no_concepts_from_indented_code_block():
     ex = ConceptExtractor(ExtractConfig())
     labels = {m.surface.lower() for m in ex.extract("n", text)}
     assert "ssh" in labels and not labels & {"bandit0", "password", "game"}
+
+
+def test_heading_numbers_and_frame_suffixes_are_trimmed():
+    ex = ConceptExtractor(ExtractConfig())
+    text = "# 1. Classification Problem\n## Policy Iteration 비교\n## Page Table\n키 배송 문제가 있다.\n"
+    got = {c.surface for c in ex.candidates(text)}
+    assert {"Classification Problem", "Policy Iteration", "Page Table"} <= got
+    assert not {"1. Classification Problem", "Policy Iteration 비교"} & got
+
+
+def test_possessive_names_sentences_and_frame_words():
+    ex = ConceptExtractor(ExtractConfig())
+    text = ("# Banker's Algorithm\n## More is better\n## 핵심 통찰\n## Dirty Read 불가\n"
+            "## 3가지 핵심 설계 결정\n## Chain of Trust\n")
+    got = {c.surface for c in ex.candidates(text)}
+    assert "Banker's Algorithm" in got and "s Algorithm" not in got
+    assert not {"More is better", "Dirty Read 불가", "핵심 통찰", "3가지 핵심 설계 결정"} & got
+    assert {"Dirty Read", "설계 결정"} <= got
