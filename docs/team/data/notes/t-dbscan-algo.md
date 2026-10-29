@@ -1,0 +1,5 @@
+These are my notes on DBSCAN from the clustering lecture. The algorithm takes a set of N points and two parameters, eps and minPts, and it grows clusters one core point at a time. The whole thing hangs on a single primitive that the lecture called the region query: given a point p, return every point of the dataset that lies within distance eps of p. DBSCAN issues exactly one region query for each point, so N region queries in total, and it uses no other operation on any data structure.
+
+Answering a region query by scanning all the points every time is slow, and the professor said the whole reason to put a spatial index underneath DBSCAN is to speed up this one step. The index would contain all N points of the dataset. Everything else the algorithm does, like labelling points as noise or border and pushing neighbours onto the seed list, adds up to O(N) over the whole run.
+
+Side note to self: eps is hard to choose, the k-distance plot was the trick for that. Also I should look at OPTICS later, it is supposed to fix the problem of varying density.

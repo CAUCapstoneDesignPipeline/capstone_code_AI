@@ -1,0 +1,67 @@
+{
+  "version": "derive-test-1",
+  "cases": [
+    {
+      "id": "huffman",
+      "split": "test",
+      "auto_only": true,
+      "scene": "영어 노트 한 쌍에서 연산 이름이 교과서식(insert/extract-min)이 아니라 'push'/'pop the smallest'로 쓰여도 R1·R2 결론이 나오고, 변수명이 k이며 합계 (2k-1)+2(k-1)번의 연산 x log k + O(k)가 O(k log k)로 정리되는지 확인한다.",
+      "notes": ["t-huffman-algo", "t-huffman-heap"],
+      "expect": [
+        {"rule": "R1", "notes": ["t-huffman-algo", "t-huffman-heap"], "status": "conclusion"},
+        {"rule": "R2", "notes": ["t-huffman-algo", "t-huffman-heap"], "status": "conclusion", "result": "O(k log k)"}
+      ]
+    },
+    {
+      "id": "inlj",
+      "split": "test",
+      "auto_only": true,
+      "scene": "LaTeX 수식($O(\\log n)$, $\\sum$)으로 쓴 DB 노트에서 B+tree 인덱스 조회를 쓰는 index nested-loop join의 비용이 N, M 변수로 N lookups x log M + 바깥 비용 O(N)+O(N) = O(N log M)이 되는지 확인한다.",
+      "notes": ["t-inlj-join", "t-inlj-bptree"],
+      "expect": [
+        {"rule": "R1", "notes": ["t-inlj-join", "t-inlj-bptree"], "status": "conclusion"},
+        {"rule": "R2", "notes": ["t-inlj-join", "t-inlj-bptree"], "status": "conclusion", "result": "O(N log M)"}
+      ]
+    },
+    {
+      "id": "hjoin",
+      "split": "test",
+      "auto_only": true,
+      "scene": "비용이 마크다운 표로 적힌 해시 테이블 노트에서 probe 연산의 비용 칸이 비어 있으므로, R1(해시 테이블이 해시 조인에 쓰일 수 있음)은 성립하지만 R2는 시스템이 외부 지식으로 O(1)을 채우지 않고 held로 보류해야 하는지 확인한다.",
+      "notes": ["t-hjoin-algo", "t-hjoin-hashtable"],
+      "expect": [
+        {"rule": "R1", "notes": ["t-hjoin-algo", "t-hjoin-hashtable"], "status": "conclusion"},
+        {"rule": "R2", "notes": ["t-hjoin-algo", "t-hjoin-hashtable"], "status": "held"}
+      ]
+    },
+    {
+      "id": "dbscan",
+      "split": "test",
+      "auto_only": true,
+      "scene": "글머리표 없는 산문 노트에서 DBSCAN이 필요로 하는 region query(반경 질의)를 k-d tree 노트가 'does NOT implement'라고 명시했으므로 R1이 rejected이고, 따라서 R2 결론은 나오지 않아야 하는지 확인한다.",
+      "notes": ["t-dbscan-algo", "t-dbscan-index"],
+      "expect": [
+        {"rule": "R1", "notes": ["t-dbscan-algo", "t-dbscan-index"], "status": "rejected"}
+      ]
+    },
+    {
+      "id": "lru",
+      "split": "test",
+      "auto_only": true,
+      "scene": "LRU 캐시 노트와 해시 맵 노트에서 도출할 수 있는 결론(O(q), 평균)을 세 번째 요약 노트가 이미 같은 내용으로 적어 두었으므로 R1과 R2 모두 known으로 처리되는지, 평균 경우 표기가 유지되는지 확인한다.",
+      "notes": ["t-lru-cache", "t-lru-hashmap", "t-lru-summary"],
+      "expect": [
+        {"rule": "R1", "notes": ["t-lru-cache", "t-lru-hashmap"], "status": "known"},
+        {"rule": "R2", "notes": ["t-lru-cache", "t-lru-hashmap"], "status": "known", "result": "O(q)", "case": "average"}
+      ]
+    },
+    {
+      "id": "topo",
+      "split": "test",
+      "auto_only": true,
+      "scene": "스택(push/pop)을 쓰는 위상 정렬 노트와 add/might_contain만 제공하는 블룸 필터 노트, 무관한 DP 노트를 섞었을 때 제공 연산이 겹치지 않으므로 어떤 결론도 나오지 않아야 하는지(음성 사례) 확인한다.",
+      "notes": ["t-topo-dfs", "t-topo-bloom", "t-topo-misc"],
+      "expect": []
+    }
+  ]
+}

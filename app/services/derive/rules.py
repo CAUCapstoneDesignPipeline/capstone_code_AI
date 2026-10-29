@@ -55,6 +55,7 @@ class Derivation:
     automation: str = "extracted"       # extracted | manual | mixed
     explanation: str = ""
     soundness: object = None            # sound_llm.SoundOut (derive-sound-1)
+    role_label: str = ""
 
     @property
     def rule_version(self) -> str:
@@ -65,10 +66,16 @@ class _Index:
     def __init__(self, facts: list[Fact]):
         self.by_id = {f.fact_id: f for f in facts}
         self.label: dict[str, str] = {}
+        self.role_label: dict[str, str] = {}
+        self.op_label: dict[str, str] = {}
         self.needs, self.uses, self.size, self.extra, self.requires = {}, {}, {}, {}, {}
         self.implements, self.op_cost, self.stated = {}, {}, {}
         for f in facts:
             self.label.setdefault(f.subject_key, f.subject)
+            if f.role and f.role_label:
+                self.role_label.setdefault(f.role, f.role_label)
+            if f.op and f.op_label:
+                self.op_label.setdefault(f.op, f.op_label)
             if f.kind == "needs_op" and not f.negated:
                 self.needs.setdefault((f.subject_key, f.role), []).append(f)
             elif f.kind == "uses" and not f.negated:
@@ -88,14 +95,20 @@ class _Index:
                 if f.other:
                     self.label.setdefault(f.other_key, f.other)
 
+    def role_name(self, key: str) -> str:
+        return self.role_label.get(key) or ROLES.get(key) or key.replace("_", " ")
+
+    def op_name(self, key: str) -> str:
+        return self.op_label.get(key) or OPS.get(key) or key.replace("_", " ")
+
     def structures(self) -> set[str]:
         return {k for k, _ in self.implements} | {k for k, _ in self.op_cost}
 
 
 def _ops(facts) -> list[str]:
-    """연산을 어휘 순서(삽입 → 꺼내기 → 키 바꾸기 …)로. 설명이 동작 순서대로 읽힌다."""
+    """연산을 어휘 순서(삽입 → 꺼내기 → 키 바꾸기 …)로, 어휘 밖의 연산은 key 순으로 뒤에. 설명이 동작 순서대로 읽힌다."""
     order = list(OPS)
-    return sorted({f.op for f in facts}, key=order.index)
+    return sorted({f.op for f in facts}, key=lambda o: (order.index(o) if o in order else len(order), o))
 
 
 def _did(*parts) -> str:
@@ -134,16 +147,18 @@ def _cite(f: Fact, titles: dict[str, str]) -> str:
 
 
 def r1(ix: _Index, a: str, role: str, s: str, titles: dict[str, str]) -> Derivation | None:
-    a_label, s_label, role_name = ix.label.get(a, a), ix.label.get(s, s), ROLES.get(role, role)
+    a_label, s_label, role_name = ix.label.get(a, a), ix.label.get(s, s), ix.role_name(role)
     needs = ix.needs.get((a, role), [])
     impl = [f for f in ix.implements.get((s, role), []) if not f.negated]
     impl_no = [f for f in ix.implements.get((s, role), []) if f.negated]
     ops = _ops(needs)
     provided = {op: [f for f in ix.op_cost.get((s, op), []) if not f.negated] for op in ops}
     refused = {op: [f for f in ix.op_cost.get((s, op), []) if f.negated and not f.expr] for op in ops}
-    # 후보: s 가 그 역할의 구현이라고 노트에 있거나, 필요한 연산 둘 이상을 모두 말한다.
-    # 연산 하나("찾기")만 겹치는 것으로는 역할의 계약을 지킨다고 볼 수 없다 (실제 노트: 배열 ↔ 조인의 순서 있는 집합)
-    if not impl and not impl_no and not (len(ops) >= 2 and all(provided[op] or refused[op] for op in ops)):
+    # 후보: s 가 그 역할의 구현이라고 노트에 있거나, 필요한 연산 둘 이상을 모두 말하거나, 필요한 연산을 제공하지 않는다고 적혀 있다.
+    # 연산 하나("찾기")만 겹치는 것으로는 역할의 계약을 지킨다고 볼 수 없다 (실제 노트: 배열 ↔ 조인의 순서 있는 집합).
+    # 하지만 "그 연산은 없다" 는 한 연산만으로도 기각 근거다
+    if not impl and not impl_no and not any(refused[op] for op in ops) \
+            and not (len(ops) >= 2 and all(provided[op] for op in ops)):
         return None
     reasons, missing, status = [], [], "conclusion"
     if impl_no and impl:
@@ -155,12 +170,12 @@ def r1(ix: _Index, a: str, role: str, s: str, titles: dict[str, str]) -> Derivat
     for op in ops:
         if provided[op] and refused[op]:
             status = "rejected"
-            reasons.append(f"노트끼리 {josa(s_label, '이')} {OPS[op]} 연산을 제공하는지 서로 다르게 말해요")
+            reasons.append(f"노트끼리 {josa(s_label, '이')} {ix.op_name(op)} 연산을 제공하는지 서로 다르게 말해요")
         elif refused[op]:
             status = "rejected"
-            reasons.append(f"노트에 {josa(s_label, '은')} {OPS[op]} 연산을 제공하지 않는다고 적혀 있어요")
+            reasons.append(f"노트에 {josa(s_label, '은')} {ix.op_name(op)} 연산을 제공하지 않는다고 적혀 있어요")
         elif not provided[op] and status != "rejected":
-            missing.append(f"{josa(s_label, '이')} {OPS[op]} 연산을 제공하는지")
+            missing.append(f"{josa(s_label, '이')} {ix.op_name(op)} 연산을 제공하는지")
     if not ops:
         missing.append(f"{josa(a_label, '이')} {role_name}에서 어떤 연산을 쓰는지")
     if missing and status != "rejected":
@@ -172,7 +187,7 @@ def r1(ix: _Index, a: str, role: str, s: str, titles: dict[str, str]) -> Derivat
         slots = [ix.uses.get((a, role), [])] + ([impl] if impl else [])
     slots = [s_ for s_ in slots if s_]
     chosen = _pick(slots)
-    if impl and status == "conclusion":
+    if impl and status != "rejected":          # 구현이라는 근거도 전제다 (보류여도 어느 노트의 말인지 남긴다)
         chosen.append(_pick([impl])[0])
     if status == "rejected":
         chosen += [f for op in ops for f in refused[op]] + impl_no
@@ -193,30 +208,65 @@ def r1(ix: _Index, a: str, role: str, s: str, titles: dict[str, str]) -> Derivat
     cost = {f.op: f for f in chosen if f.kind == "op_cost"}
     steps = []
     if ops:
-        steps.append(Step(f"{josa(a_label, '은')} {role_name}에서 " + ", ".join(OPS[o] for o in ops) + " 연산을 써요 "
+        steps.append(Step(f"{josa(a_label, '은')} {role_name}에서 " + ", ".join(ix.op_name(o) for o in ops) + " 연산을 써요 "
                           + " ".join(sorted({_cite(f, titles) for f in by_op.values()})), [f.fact_id for f in by_op.values()]))
     if cost:
-        steps.append(Step(f"{josa(s_label, '은')} " + ", ".join(OPS[o] for o in ops if o in cost) + " 연산을 모두 제공해요 "
+        steps.append(Step(f"{josa(s_label, '은')} " + ", ".join(ix.op_name(o) for o in ops if o in cost) + " 연산을 모두 제공해요 "
                           + " ".join(sorted({_cite(f, titles) for f in cost.values()})), [f.fact_id for f in cost.values()]))
     if status in ("conclusion", "known"):
         steps.append(Step(f"그래서 {conclusion}. 가장 빠르거나 가장 좋은 구현이라는 뜻은 아니에요.", []))
     d = Derivation(_did("R1", a, role, s, *sorted(f.fact_id for f in chosen)), "R1", status, reasons, (a, a_label),
                    (s, s_label), role, conclusion, sorted({f.fact_id for f in chosen}),
                    sorted({f.note for f in chosen}), steps=steps, conditions=_conditions(ix, [a, s]), missing=missing,
-                   duplicate_of=dup if status == "known" else [], automation=_automation(chosen) if chosen else "extracted")
+                   role_label=role_name, duplicate_of=dup if status == "known" else [], automation=_automation(chosen) if chosen else "extracted")
     d.explanation = explain(d)
     return d
 
 
-def _best_cost(facts: list[Fact]) -> Fact | None:
-    """비용 식이 있는 사실 중 최악 비용을 먼저, 같은 경우는 원문 순서로."""
+def _phases(facts: list[Fact]) -> list[Fact]:
+    """한 연산의 횟수 사실들. 같은 노트에 단계마다 횟수가 따로 적혔으면("k번 넣고, 병합마다 k-1번 넣는다") 합친다:
+    하나만 고르면 전체 횟수보다 작게 잡는다. 다른 노트가 적은 횟수는 같은 알고리즘의 다른 말이라 가장 앞 노트의 것만 쓴다.
+    합은 어느 쪽이든 상한이다 (같은 횟수를 되풀이해 적었다면 느슨해질 뿐 틀리지 않는다)."""
+    first = sorted(facts, key=lambda f: (f.note, f.evidence.start, f.fact_id))[0].note
+    out, seen = [], set()
+    for f in sorted((f for f in facts if f.note == first), key=lambda f: (f.evidence.start, f.fact_id)):
+        if (f.expr, f.evidence.start) not in seen:
+            seen.add((f.expr, f.evidence.start))
+            out.append(f)
+    return out
+
+
+def _cost_for(facts: list[Fact], target: str) -> Fact | None:
+    """연산 비용 사실 하나. target 은 어느 비용으로 합칠지: worst | average | amortized | any (보류 사유를 가리는 용도).
+    worst: 최악이라 적힌 것, 없으면 경우를 적지 않은 것. average·amortized: 그 경우로 적힌 것, 없으면 경우를 적지 않은 것,
+    그것도 없으면 최악 (최악 상한은 평균·상각 상한이기도 하다). 같은 경우는 원문 순서."""
     with_expr = [f for f in facts if f.expr]
-    order = {"worst": 0, None: 1, "average": 2, "amortized": 3}
-    return sorted(with_expr, key=lambda f: (order.get(f.case, 4), f.note, f.evidence.start, f.fact_id))[0] if with_expr else None
+    prefer = {"worst": ("worst", None), "average": ("average", None, "worst"),
+              "amortized": ("amortized", None, "worst")}.get(target)
+    if prefer is None:                                       # any
+        prefer = ("worst", None, "average", "amortized")
+    for c in prefer:
+        hit = [f for f in with_expr if f.case == c]
+        if hit:
+            return sorted(hit, key=lambda f: (f.note, f.evidence.start, f.fact_id))[0]
+    return None
 
 
-def r2(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str, str]) -> Derivation:
-    a_label, s_label, role_name = base.algorithm[1], base.structure[1], ROLES.get(role, role)
+def r2_all(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str, str]) -> list[Derivation]:
+    """R2 를 비용 경우(최악·평균·상각)마다 하나씩. 노트가 같은 연산의 비용을 여러 경우로 적었으면 경우마다 따로 결론을 낸다
+    (해시 테이블: 평균 O(1), 최악 O(n) → 평균 O(M + N), 최악 O((M + N) N)). 모든 연산의 비용을 낼 수 없는 경우는 건너뛰고,
+    어느 경우도 안 되면 보류 하나."""
+    ops = [f.op for f in ix.needs.get((a, role), [])]
+    seen = {f.case for op in set(ops) for f in ix.op_cost.get((s, op), []) if not f.negated and f.expr and f.case}
+    order = ("worst", "average", "amortized")
+    targets = [c for c in order if c in seen] or ["worst"]
+    out = [r2(ix, a, role, s, base, titles, t) for t in targets]
+    done = [d for d in out if d.status != "held"]
+    return done or [r2(ix, a, role, s, base, titles, "any")]
+
+
+def r2(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str, str], target: str = "any") -> Derivation:
+    a_label, s_label, role_name = base.algorithm[1], base.structure[1], ix.role_name(role)
     ops = _ops(ix.needs.get((a, role), []))
     missing, unreadable = [], []
     counts, costs = {}, {}
@@ -225,12 +275,12 @@ def r2(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str
         if with_count:
             counts[op] = with_count
         else:
-            missing.append(f"{josa(a_label, '이')} {OPS[op]} 연산을 몇 번 하는지")
-        c = _best_cost([f for f in ix.op_cost.get((s, op), []) if not f.negated])
+            missing.append(f"{josa(a_label, '이')} {ix.op_name(op)} 연산을 몇 번 하는지")
+        c = _cost_for([f for f in ix.op_cost.get((s, op), []) if not f.negated], target)
         if c:
             costs[op] = c
         else:
-            missing.append(f"{s_label}의 {OPS[op]} 연산 비용")
+            missing.append(f"{s_label}의 {ix.op_name(op)} 연산 비용")
     size = [f for f in ix.size.get((a, role), [])]
     extra = [f for f in ix.extra.get(a, []) if f.role in (None, role)]
 
@@ -245,8 +295,8 @@ def r2(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str
                 parsed[f.fact_id] = None
         return parsed[f.fact_id]
 
-    count_f = {op: _pick([fs])[0] for op, fs in counts.items()}
-    for f in (*count_f.values(), *costs.values()):
+    count_f = {op: _phases(fs) for op, fs in counts.items()}
+    for f in (*(f for fs in count_f.values() for f in fs), *costs.values()):
         read(f)
     needs_size = any(SIZE_VAR in bigo.variables(parsed[c.fact_id]) for c in costs.values() if parsed.get(c.fact_id))
     size_f = _pick([size])[0] if size else None
@@ -268,7 +318,7 @@ def r2(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str
         if unreadable:
             reasons.append("식을 읽지 못했어요: " + ", ".join(unreadable))
 
-    chosen = [*count_f.values(), *costs.values(), *([size_f] if size_f and needs_size else []),
+    chosen = [*(f for fs in count_f.values() for f in fs), *costs.values(), *([size_f] if size_f and needs_size else []),
               *([extra_f] if extra_f else [])]
     steps, result, case = [], None, None
     if status == "conclusion":
@@ -278,25 +328,27 @@ def r2(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str
             per = parsed[costs[op].fact_id]
             if bound is not None:
                 per = bigo.substitute(per, SIZE_VAR, bound)
-            term = bigo.mul(parsed[count_f[op].fact_id], per)
+            term = bigo.mul(bigo.add(*(parsed[f.fact_id] for f in count_f[op])), per)
             terms.append(term)
-            shown.append((op, count_f[op].expr, bigo.show(per), bigo.show(term)))
+            shown.append((op, " + ".join(f.expr for f in count_f[op]), bigo.show(per), bigo.show(term)))
         ops_total = bigo.add(*terms)
         total = bigo.simplify(bigo.add(ops_total, parsed[extra_f.fact_id]))
         result = bigo.big_o(total)
         cases = {costs[op].case for op in ops}
-        case = "amortized" if "amortized" in cases else "average" if "average" in cases else "worst"
+        case = target if target != "any" else ("amortized" if "amortized" in cases else "average" if "average" in cases
+                                               else "worst")
         steps.append(Step(f"{josa(a_label, '은')} {role_name}에서 " + ", ".join(
-            f"{josa(OPS[op], '을')} 최대 {c}번" for op, c, _, _ in shown) + " 해요 "
-            + " ".join(sorted({_cite(f, titles) for f in count_f.values()})), [f.fact_id for f in count_f.values()]))
-        cost_of = lambda op: f"{josa(OPS[op], '은')} {_CASE_WORD.get(costs[op].case, '')}O({costs[op].expr})"
+            f"{josa(ix.op_name(op), '을')} 최대 {c}번" for op, c, _, _ in shown) + " 해요 "
+            + " ".join(sorted({_cite(f, titles) for fs in count_f.values() for f in fs})),
+            [f.fact_id for fs in count_f.values() for f in fs]))
+        cost_of = lambda op: f"{josa(ix.op_name(op), '은')} {_CASE_WORD.get(costs[op].case, '')}O({costs[op].expr})"
         steps.append(Step(f"{s_label}에서 " + ", ".join(cost_of(op) for op in ops[:-1])
                           + (", " if len(ops) > 1 else "") + josa(cost_of(ops[-1]), "예요")
                           + f" (n 은 {role_name} 크기) " + " ".join(sorted({_cite(f, titles) for f in costs.values()})),
                           [costs[op].fact_id for op in ops]))
         if bound is not None:
             steps.append(Step(f"{role_name} 크기 n 은 최대 {size_f.expr}라서 (n ≤ {size_f.expr}) 각 연산의 비용에 넣으면 "
-                              + josa(", ".join(f"{OPS[op]} O({per})" for op, _, per, _ in shown), "예요") + " " + _cite(size_f, titles),
+                              + josa(", ".join(f"{ix.op_name(op)} O({per})" for op, _, per, _ in shown), "예요") + " " + _cite(size_f, titles),
                               [size_f.fact_id], ", ".join(f"O({per})" for _, _, per, _ in shown)))
         steps.append(Step("횟수와 비용을 곱해 더하면 " + " + ".join(f"O({t})" for *_, t in shown)
                           + f" = {josa(bigo.big_o(ops_total), '예요')}", [], bigo.big_o(ops_total)))
@@ -331,10 +383,10 @@ def r2(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str
         conditions.append(("상한이에요. 실제 실행이 이보다 빠를 수 있고, 가장 빠른 구현이라는 뜻은 아니에요", None))
         if case == "amortized":
             conditions.append(("연산 비용 중 상각 비용이 있어서 연산 하나하나가 아니라 전체 합에 대한 상한이에요", None))
-    d = Derivation(_did("R2", a, role, s, *sorted(f.fact_id for f in chosen)), "R2", status, reasons, base.algorithm,
+    d = Derivation(_did("R2", a, role, s, target, *sorted(f.fact_id for f in chosen)), "R2", status, reasons, base.algorithm,
                    base.structure, role, conclusion, sorted({f.fact_id for f in chosen} | set(base.premises)),
                    sorted({f.note for f in chosen} | set(base.notes)), steps=steps, conditions=conditions,
-                   missing=missing, result=result, case=case, depends_on=base.derivation_id, duplicate_of=dup,
+                   missing=missing, result=result, case=case, role_label=role_name, depends_on=base.derivation_id, duplicate_of=dup,
                    automation=_automation([*chosen, *(ix.by_id[x] for x in base.premises)]))
     d.explanation = explain(d)
     return d
@@ -368,5 +420,5 @@ def derive(facts: list[Fact], titles: dict[str, str] | None = None) -> list[Deri
                 continue
             out.append(d1)
             if d1.status in ("conclusion", "known") and ix.needs.get((a, role)):
-                out.append(r2(ix, a, role, s, d1, titles))
+                out += r2_all(ix, a, role, s, d1, titles)
     return out

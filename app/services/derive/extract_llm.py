@@ -1,10 +1,10 @@
-"""노트 → 계산용 사실 (profile facts-llm-1). LLM 이 노트를 읽고 사실과 그 근거 원문(quote)을 고른다.
+"""노트 → 계산용 사실 (profile facts-llm-2). LLM 이 노트를 읽고 사실과 그 근거 원문(quote)을 고른다.
 
 권한과 검사
   - 노트에 쓰여 있는 것만 사실이 된다. 모델이 아는 것(교과서 상식)으로 빠진 전제를 채우지 않는다 (프롬프트 + 아래 검사)
   - quote 는 원문에 글자 그대로 있어야 한다. 없으면 그 사실을 버린다 (위치는 여기서 찾는다: UTF-16)
-  - 연산·역할·종류는 닫힌 어휘 (enum). 모양이 틀린 사실은 버리고 이유를 센다
-  - 이미 있는 주체 이름(knownSubjects)을 주면 같은 대상은 같은 subjectKey 를 쓴다 (노트 사이 결론 비교에 필요)
+  - 종류는 닫힌 어휘 (enum). 역할·연산은 key 의 모양(영문 소문자·밑줄)만 본다 (새 key 를 만들 수 있다). 모양이 틀린 사실은 버리고 이유를 센다
+  - 이미 쓰인 주체·역할·연산 key(knownSubjects·knownRoles·knownOps)를 주면 같은 대상은 같은 key 를 쓴다 (노트 사이 결론 비교에 필요)
 모델이 거절하면(보안 실습 노트 등) 사실 없음으로 두고 캐시한다. 다른 모델로 바꾸지 않는다.
 """
 
@@ -16,9 +16,9 @@ from pathlib import Path
 from app.services.llm import LLMError
 
 from .cases import locate
-from .facts import CASES, KINDS, OPS, ROLES, Fact, FactEvidence, check_fact
+from .facts import CASES, KINDS, OPS, ROLES, Fact, FactEvidence, canon_op, canon_role, check_fact
 
-PROMPT_VERSION = "facts-llm-1"
+PROMPT_VERSION = "facts-llm-2"
 
 SYSTEM = f"""너는 컴퓨터 과학 공부 노트에서 '계산에 쓸 사실'을 뽑는다. 사실마다 그 사실을 말하는 원문 구절(quote)을 붙인다.
 
@@ -38,6 +38,13 @@ quote 는 노트에서 글자 하나 바꾸지 않고 그대로 복사한 연속
 - requires: subject 가 성립하려면 필요한 조건 (condition 에 한 문장: "간선 가중치가 음수가 아님")
 - stated_result: 노트가 이미 쓴 결론 "알고리즘 subject 를 자료 구조 other 로 구현하면 expr" (expr 없으면 '쓸 수 있다' 만)
 
+역할(role)과 연산(op)은 영문 소문자·밑줄 key 다. 아래 목록에 뜻이 맞는 것이 있으면 그 key 를 쓰고, 이미 쓰인 key 목록에 있으면 그것을 쓴다.
+목록에 없으면 새 key 를 만들고 roleLabel·opLabel 에 한국어 이름을 쓴다 (목록에 있는 key 는 label 을 비운다).
+역할은 알고리즘이 의존하는 구성 요소다. 자료 구조만이 아니다: DB 인덱스("index", 연산 "lookup"), 해시 테이블, 캐시, 공간 인덱스, 정렬 루틴, 부분 문제 풀이도 된다.
+연산은 그 구성 요소에 하는 한 가지 일이다. 노트가 같은 일을 다르게 불러도("가장 작은 것 꺼내기", "pop-min", "extract min") 같은 key 로 맞춘다.
+키로 찾기는 lookup·probe·get 이 아니라 search 로, 넣기는 put·add 가 아니라 insert 로 쓴다.
+한 문장이 "앞이나 뒤에서 빼기"처럼 여러 변형 중 어느 쪽이든 쓴다고 하면 변형마다 사실 하나 (같은 횟수 상한, 예: pop_front 와 pop_back 각각).
+같은 연산에 최악·평균·상각 비용이 따로 적혀 있으면 case 마다 사실 하나씩 (한 줄에 여러 개면 quote 는 같은 줄).
 식(expr) 쓰는 법: O() 없이. 정점 수 V, 간선 수 E, 자료 구조 자신의 크기는 n 으로 맞춘다 (노트가 m, |V| 로 써도). log, α(n), ^ 를 쓴다.
 subjectKey: 대상의 영어 정규 이름, 소문자와 밑줄 ("dijkstra", "indexed_binary_min_heap", "bfs").
   '이미 있는 이름' 목록에 같은 대상이 있으면 그 key 를 그대로 쓴다. 비슷하지만 다른 대상(인덱스 없는 이진 힙 ≠ 인덱스 있는 이진 힙)이면 새 key.
@@ -45,11 +52,12 @@ subject 는 그 대상의 온전한 이름으로, 노트(제목·본문)에 쓴 
   가리킴 말이나 줄인 말이 아니라 제목 등에 나온 온전한 이름 ("인덱스 있는 이진 최소 힙", "이진 힙").
   이름만 쓴다: 제목의 예제 설명·괄호 속 덧말은 빼고 ("미로 문제 Backtracking (건전한 유망 함수)" → "백트래킹").
   알고리즘이 특정 예제 풀이라면 그 알고리즘 이름이 아니라 예제 이름 ("N-Queens 백트래킹")으로 쓴다.
-표의 한 행이 여러 연산을 말하면 연산마다 사실 하나 (quote 는 같은 행).
+표의 한 행이 여러 연산을 말하면 연산마다 사실 하나 (quote 는 같은 행). 영어 노트도 같은 방식이다: subject 는 노트에 쓴 영어 이름 그대로.
+LaTeX 식($O(\\log n)$, $|V|$)은 식으로 옮겨 쓴다 ("log n", "V"). 합·점화식처럼 이 종류로 옮길 수 없는 것은 뽑지 않는다.
 알고리즘·자료 구조 계산과 상관없는 내용은 뽑지 않는다. 뽑을 것이 없으면 빈 목록.
-쓰지 않는 칸: role·op·case 는 "none", expr·condition·other·otherKey 는 빈 문자열.
-역할: {", ".join(ROLES)}
-연산: {", ".join(OPS)}"""
+쓰지 않는 칸: role·op·case 는 "none", expr·condition·other·otherKey·roleLabel·opLabel 은 빈 문자열.
+자주 쓰는 역할 key: {", ".join(ROLES)}
+자주 쓰는 연산 key: {", ".join(OPS)}"""
 
 
 @dataclass
@@ -73,13 +81,13 @@ class FactExtractor:
     def model(self) -> str:
         return self.llm.model
 
-    def _key(self, body: str, known: list[str]) -> str:
+    def _key(self, body: str, known: list[list[str]]) -> str:
         return hashlib.sha256(json.dumps([self.provider, self.model, PROMPT_VERSION, SYSTEM, body, known],
                                          ensure_ascii=False).encode()).hexdigest()
 
     def extract(self, note_id: str, note_version: int, body: str, body_sha: str,
-                known_subjects: list[str] = ()) -> Extracted:
-        known = sorted(set(known_subjects))
+                known_subjects: list[str] = (), known_roles: list[str] = (), known_ops: list[str] = ()) -> Extracted:
+        known = [sorted(set(known_subjects)), sorted(set(known_roles) - set(ROLES)), sorted(set(known_ops) - set(OPS))]
         key = self._key(body, known)
         raw = self._cache_get(key)
         provider, model = self.provider, self.model
@@ -99,19 +107,20 @@ class FactExtractor:
             provider, model = raw.get("provider", provider), raw.get("model", model)
         return self._ground(raw, note_id, note_version, body, body_sha, provider, model)
 
-    def _user(self, body: str, known: list[str]) -> str:
-        head = ("이미 있는 이름 (subjectKey): " + ", ".join(known) + "\n\n") if known else ""
-        return f"{head}<노트>\n{body}\n</노트>"
+    def _user(self, body: str, known: list[list[str]]) -> str:
+        names = ("subjectKey", "역할 key", "연산 key")
+        head = "".join(f"이미 쓰인 {n}: {', '.join(k)}\n" for n, k in zip(names, known) if k)
+        return f"{head}{chr(10) if head else ''}<노트>\n{body}\n</노트>"
 
     def _schema(self) -> dict:
         s = lambda **kw: {"type": "string", **kw}
         return {"type": "object", "additionalProperties": False, "required": ["facts"],
                 "properties": {"facts": {"type": "array", "items": {
                     "type": "object", "additionalProperties": False,
-                    "required": ["kind", "subject", "subjectKey", "role", "op", "expr", "case", "negated", "condition",
-                                 "other", "otherKey", "quote"],
+                    "required": ["kind", "subject", "subjectKey", "role", "roleLabel", "op", "opLabel", "expr", "case",
+                                 "negated", "condition", "other", "otherKey", "quote"],
                     "properties": {"kind": s(enum=list(KINDS)), "subject": s(), "subjectKey": s(),
-                                   "role": s(enum=["none", *ROLES]), "op": s(enum=["none", *OPS]), "expr": s(),
+                                   "role": s(), "roleLabel": s(), "op": s(), "opLabel": s(), "expr": s(),
                                    "case": s(enum=["none", *CASES]), "negated": {"type": "boolean"},
                                    "condition": s(), "other": s(), "otherKey": s(), "quote": s()}}}}}
 
@@ -130,7 +139,8 @@ class FactExtractor:
                     drop("quote_not_in_note")
                     continue
                 blank = lambda v: None if v in ("", "none", None) else v.strip()
-                content = (d["kind"], d["subjectKey"], blank(d["role"]), blank(d["op"]), blank(d["expr"]),
+                role, op = canon_role(blank(d["role"])), canon_op(blank(d["op"]))
+                content = (d["kind"], d["subjectKey"], role, op, blank(d["expr"]),
                            blank(d["case"]), bool(d["negated"]), blank(d["condition"]), blank(d["otherKey"]), quote)
                 if content in seen:
                     drop("duplicate")
@@ -139,7 +149,8 @@ class FactExtractor:
                 fid = "f-" + hashlib.sha256(json.dumps([body_sha, *content], ensure_ascii=False).encode()).hexdigest()[:16]
                 f = Fact(fid, d["kind"], d["subject"].strip() or d["subjectKey"], d["subjectKey"].strip(),
                          FactEvidence(note_id, note_version, body_sha, span[0], span[1], quote),
-                         role=blank(d["role"]), op=blank(d["op"]), expr=blank(d["expr"]), case=blank(d["case"]),
+                         role=role, op=op, role_label=blank(d.get("roleLabel")),
+                         op_label=blank(d.get("opLabel")), expr=blank(d["expr"]), case=blank(d["case"]),
                          negated=bool(d["negated"]), condition=blank(d["condition"]), other=blank(d["other"]),
                          other_key=blank(d["otherKey"]), origin="extracted")
             except (KeyError, TypeError, AttributeError):

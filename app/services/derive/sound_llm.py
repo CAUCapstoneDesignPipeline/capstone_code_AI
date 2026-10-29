@@ -6,7 +6,7 @@
 판정만 한다. 빠진 전제를 채우거나 결론을 고치지 않는다 (사용자 노트 밖 지식은 판정에만 쓴다).
 
 결합: 충실하지 않은 전제가 있거나 unsound 면 rejected, uncertain 이면 held (화면에 내지 않는다), sound 면 그대로 conclusion.
-사실 추출(facts-llm-1)과 다른 프롬프트라서 계약 §5 독립성을 지킨다. 결론마다 내용 hash 로 캐시한다.
+사실 추출(facts-llm-2)과 다른 프롬프트라서 계약 §5 독립성을 지킨다. 결론마다 내용 hash 로 캐시한다.
 """
 
 import hashlib

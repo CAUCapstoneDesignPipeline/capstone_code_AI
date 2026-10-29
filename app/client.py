@@ -430,12 +430,14 @@ async def _explain(client, note, p: _Prep, policy, explain_profile, verify_profi
 MAX_DERIVE_DOCS = 20
 
 
-async def extract_facts(client: AiClient, note: dict, known_subjects: list[str] = (),
-                        profile: str = "facts-llm-1") -> dict:
+async def extract_facts(client: AiClient, note: dict, known_subjects: list[str] = (), profile: str = "facts-llm-2",
+                        known_roles: list[str] = (), known_ops: list[str] = ()) -> dict:
     """노트 하나 → /facts 응답. BE 는 (noteId, noteVersion) 마다 저장해 두고 원문이 바뀔 때만 다시 부른다."""
     ctx = client.context(note)
     return await client.call("/facts", {"context": ctx, "profileVersion": profile, "note": note,
-                                        "knownSubjects": sorted(set(known_subjects))[:500]})
+                                        "knownSubjects": sorted(set(known_subjects))[:500],
+                                        "knownRoles": sorted(set(known_roles))[:200],
+                                        "knownOps": sorted(set(known_ops))[:200]})
 
 
 def related_notes(trigger: str, facts_by_note: dict[str, list[dict]], limit: int = MAX_DERIVE_DOCS) -> list[str]:
@@ -452,6 +454,11 @@ def related_notes(trigger: str, facts_by_note: dict[str, list[dict]], limit: int
     return [trigger] + [n for s, n in scored if s][:limit - 1]
 
 
+def _card_rank(d: dict) -> tuple:
+    """같은 (알고리즘, 자료 구조, 역할) 의 결론 중 카드로 보일 것: R2 가 R1 보다, 비용 경우는 최악 → 평균 → 상각 순."""
+    return (d["rule"] != "R2", {"worst": 0, "average": 1, "amortized": 2}.get(d["case"], 0))
+
+
 def pick_insights(derivations: list[dict], k: int = 5) -> list[dict]:
     """보여 줄 결론 카드 (최대 k 개). (알고리즘, 자료 구조, 역할) 마다 하나: R2 결론이 있으면 R2 (R1 은 그 안의 단계),
     없으면 R1. 순서: R2 → 전제를 낸 노트 수 → 이름."""
@@ -460,32 +467,43 @@ def pick_insights(derivations: list[dict], k: int = 5) -> list[dict]:
         if d["status"] != "conclusion":
             continue
         key = (d["algorithm"]["key"], d["structure"]["key"], d["role"])
-        if key not in by or (d["rule"] == "R2" and by[key]["rule"] == "R1"):
+        if key not in by or _card_rank(d) < _card_rank(by[key]):
             by[key] = d
     cards = sorted(by.values(), key=lambda d: (d["rule"] != "R2", -len(d["noteIds"]), d["conclusion"]))
     return cards[:k]
 
 
 async def derive_insights(client: AiClient, note: dict, others: list[dict], facts_cache: dict | None = None,
-                          facts_profile: str = "facts-llm-1", derive_profile: str = "derive-sound-1",
+                          facts_profile: str = "facts-llm-2", derive_profile: str = "derive-sound-1",
                           k: int = 5) -> dict:
     """note 를 포함한 조건부 결론. facts_cache: noteId → (bodySha256, /facts 응답) — BE 의 저장된 사실 흉내.
     노트마다 사실을 뽑고(캐시에 없을 때만), 관련 노트를 골라 /derivations 를 한 번 부른다."""
     cache = facts_cache if facts_cache is not None else {}
     notes = {n["noteId"]: n for n in (note, *others)}
-    known: set[str] = {f["subjectKey"] for _, r in cache.values() for f in r["facts"]}
+    known = {"subjectKey": set(), "role": set(), "op": set()}
+
+    def learn(facts):
+        for f in facts:
+            known["subjectKey"].add(f["subjectKey"])
+            known["role"].add(f["role"])
+            known["op"].add(f["op"])
+        known["role"].discard(None)
+        known["op"].discard(None)
+
+    learn(f for _, r in cache.values() for f in r["facts"])
 
     async def facts_of(n):
         hit = cache.get(n["noteId"])
         if hit and hit[0] == n["bodySha256"]:
             return hit[1]
-        r = await extract_facts(client, n, sorted(known), facts_profile)
+        r = await extract_facts(client, n, sorted(known["subjectKey"]), facts_profile, sorted(known["role"]),
+                                sorted(known["op"]))
         cache[n["noteId"]] = (n["bodySha256"], r)
         return r
 
     # 트리거 노트를 먼저 (그 이름을 다른 노트가 따라 쓰게), 나머지는 동시에
     first = await facts_of(note)
-    known |= {f["subjectKey"] for f in first["facts"]}
+    learn(first["facts"])
     rest = await asyncio.gather(*(facts_of(n) for n in others))
     got = {note["noteId"]: first, **{n["noteId"]: r for n, r in zip(others, rest)}}
     facts_by_note = {nid: r["facts"] for nid, r in got.items()}

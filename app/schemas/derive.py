@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints
 
-from app.services.derive.facts import CASES, KINDS, OPS, ROLES
+from app.services.derive.facts import CASES, KEY_RE, KINDS
 
 from .common import Closed, Context, EndOffset, NoteVersion, Offset, Quote, Sha256, Uuid, Version
 from .extract import NoteSnapshot, ResponseMeta
@@ -20,8 +20,9 @@ ShortText = Annotated[str, StringConstraints(min_length=1, max_length=300)]
 Text = Annotated[str, StringConstraints(min_length=1, max_length=4000)]
 
 Kind = Literal[KINDS]
-Role = Literal[tuple(ROLES)]
-Op = Literal[tuple(OPS)]
+Role = Annotated[str, StringConstraints(pattern=f"^{KEY_RE}$")]       # 열린 key (자주 쓰는 것은 facts.ROLES·OPS)
+Op = Annotated[str, StringConstraints(pattern=f"^{KEY_RE}$")]
+Label = Annotated[str, StringConstraints(min_length=1, max_length=80)]
 Case = Literal[CASES]
 
 
@@ -41,6 +42,8 @@ class Fact(Closed):
     subjectKey: Key
     role: Role | None
     op: Op | None
+    roleLabel: Label | None
+    opLabel: Label | None
     expr: ShortText | None
     case: Case | None
     negated: bool
@@ -56,6 +59,8 @@ class FactsRequest(Closed):
     profileVersion: Version
     note: NoteSnapshot
     knownSubjects: Annotated[list[Key], Field(max_length=500)] = []
+    knownRoles: Annotated[list[Key], Field(max_length=200)] = []
+    knownOps: Annotated[list[Key], Field(max_length=200)] = []
 
 
 class Dropped(Closed):
@@ -109,6 +114,7 @@ class Derivation(Closed):
     algorithm: Subject
     structure: Subject
     role: Role
+    roleLabel: Label
     conclusion: Text
     result: ShortText | None
     case: Case | None
