@@ -65,11 +65,13 @@ def main():
                 time.sleep(2)
             else:
                 raise AssertionError("model/readiness timeout")
+            ready_seconds = time.monotonic() - started
             assert profile.id in ready["profileVersions"]
             assert call("/internal/v1/health/live", bearer="wrong-token")[0] == 401
             assert call("/dev/")[0] == 404
             context = {k: str(uuid.uuid4()) for k in ["analysisJobId", "stageExecutionId", "userId", "noteId"]}
             context.update(noteVersion=1, inputRevision=1, graphRevision=1, pipelineVersion="pipeline-smoke-1")
+            embedding_started = time.monotonic()
             status, result = call("/internal/v1/embeddings", {"context": context,
                 "profileVersion": profile.id, "expectedDimensions": 1024,
                 "items": [{"itemId": "synthetic-queue", "text": "큐는 FIFO 자료구조다."}]})
@@ -79,7 +81,9 @@ def main():
             print(json.dumps({"architecture": platform.machine(), "uid": os.getuid(),
                               "profile": profile.id, "modelRevision": profile.revision,
                               "readiness": True, "embeddingDimensions": len(vector),
-                              "providerCalled": False, "coldReadySeconds": round(time.monotonic()-started, 2)}))
+                              "providerCalled": False, "coldReadySeconds": round(ready_seconds, 2),
+                              "embeddingSeconds": round(time.monotonic()-embedding_started, 2),
+                              "startupAndEmbeddingSeconds": round(time.monotonic()-started, 2)}))
         finally:
             process.terminate()
             try:

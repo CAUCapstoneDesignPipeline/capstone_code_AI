@@ -12,16 +12,16 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from manifest import canonical, digest, validate
+from manifest import canonical, digest, match, validate
 from release import atomic_json
 
 
 class HostDriver:
-    def __init__(self, host, root=Path("/var/lib/capstone-ai"), revision=None):
+    def __init__(self, host, root=Path("/var/lib/capstone-ai"), revision=None, control=Path("/run/capstone-ai-control")):
         self.host, self.root = host, Path(root)
         self.revision = revision or Path("/opt/capstone-ai/REVISION").read_text().strip()
         self.releases = self.root / "releases"
-        self.control = self.root / "control"
+        self.control = Path(control)
         self.control.mkdir(parents=True, exist_ok=True)
         os.chmod(self.control, 0o755)  # container can stat drain flags, never secret files
 
@@ -52,6 +52,16 @@ class HostDriver:
             raw = self.command(["gcloud", "storage", "cat", f"gs://{idf['bucket']}/{idf['object']}#{idf['generation']}"])
             if len(raw) > 32 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != idf["sha256"]:
                 raise ValueError("IDF hash or size mismatch")
+            idf_document = json.loads(raw)
+            if set(idf_document) != {"df", "n_docs", "version", "config_version"}:
+                raise ValueError("IDF must include pinned extractor configuration")
+            match(idf_document["config_version"], r"[0-9a-f]{12}", "IDF config version")
+            match(idf_document["version"], r"[0-9a-f]{12}", "IDF corpus version")
+            count = idf_document["n_docs"]
+            if type(count) is not int or count < 1 or not isinstance(idf_document["df"], dict):
+                raise ValueError("invalid IDF corpus")
+            if any(not isinstance(k, str) or type(v) is not int or not 0 <= v <= count for k, v in idf_document["df"].items()):
+                raise ValueError("invalid IDF document frequencies")
             self.write_private(stage / "idf.json", raw)
             os.chown(stage / "idf.json", 10001, 10001)
             secrets = {}
@@ -91,6 +101,10 @@ class HostDriver:
                 raise ValueError("wrong architecture or image user")
             if image["Config"]["Labels"].get("org.opencontainers.image.revision") != manifest["sourceSha"]:
                 raise ValueError("image source label mismatch")
+            config_version = self.command(["docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
+                manifest["image"], "-c", "from app.services.concepts.config import ExtractConfig; print(ExtractConfig().version())"]).decode().strip()
+            if idf_document["config_version"] != config_version:
+                raise ValueError("IDF extractor configuration does not match image")
             env = {"AI_SERVICE_TOKEN": secrets["serviceToken"], "AI_MAX_INFLIGHT": "2", "AI_DEV_UI": "0",
                    "AI_EMBEDDING_PROFILES": "embeddings-bge-m3-1", "AI_CONCEPT_IDF": "/run/ai/idf.json",
                    "HF_HOME": "/var/cache/ai/huggingface", "AI_DRAIN_FILE": "/run/ai/control/runtime-drain",

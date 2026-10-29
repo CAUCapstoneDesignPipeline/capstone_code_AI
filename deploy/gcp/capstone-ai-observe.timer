@@ -1,0 +1,10 @@
+[Unit]
+Description=Observe private AI readiness and TLS every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=capstone-ai-observe.service
+
+[Install]
+WantedBy=timers.target

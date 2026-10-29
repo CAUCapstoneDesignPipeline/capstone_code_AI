@@ -168,6 +168,8 @@ leaf SAN/체인/키 일치 및 잔여 유효기간 14일을 preflight에서 검�
   GCS `state.json`의 `{current,previous}`를 읽은 generation으로만 교체한다. stale expected release는 기동 전에 거부한다.
 - root 전용 release directory에 IDF·숫자 version secret·leaf TLS·Compose 설정을 준비하고 검증한다.
   현재 release는 준비 실패에 영향받지 않는다. config·model·IDF·secret·TLS가 하나의 복원 단위다.
+- 비밀없는 drain marker는 Nginx worker가 접근할 수 있는 `/run/capstone-ai-control`(0755)에만 둔다.
+  secret release root `/var/lib/capstone-ai`의 0700은 유지한다.
 - Nginx와 runtime의 새 요청을 drain한 뒤 기존 프로세스를 최대 180초 동안 종료한다.
   private IP:8443만 Nginx가 받고 Docker는 `127.0.0.1:8000`에만 publish한다.
   AI 내부 처리 115초, provider≤90초, BE 예산130초, Nginx160초, uvicorn graceful150초, Docker stop180초다.
@@ -193,7 +195,10 @@ leaf SAN/체인/키 일치 및 잔여 유효기간 14일을 preflight에서 검�
 기존 알고리즘 변경 없이 원문·관계·설명·검증 응답 캐시를 비활성화한다. public 모델 파일만 고정 revision으로
 별도 mount에 보존한다. 모델 cache의 용량·현행/이전 revision 보존 및 삭제는 운영 인수 시 정한다.
 로그는 SDK 예외·원문·credential을 출력하지 않도록 runtime diagnostic만 남기며 Nginx access log는 끈다.
-Docker 로그는 10 MiB×3으로 회전하고 Ops Agent는 host metrics만 수집한다.
+Docker 로그는 10 MiB×3으로 회전한다. Ops Agent 기본 syslog 수집을 명시적으로 끄고 host metrics와
+`observe.py`가 5분마다 만드는 비식별 readiness/TLS 만료 상태만 전송한다. provider는 호출하지 않는다.
+health JSONL은 5 MiB/daily, 14개 회전한다. `state=degraded` 또는 `tlsExpiring=true`의 log-based alert와
+수신자 연결은 실제 GCP 인수 항목이다. [Ops Agent 설정](https://docs.cloud.google.com/stackdriver/docs/solutions/agents/ops-agent/configuration)을 따른다.
 
 실제 인수에는 cold/warm RSS·latency, 동시2요청·429·timeout·drain, TLS 만료 알림·CA 갱신, model cache 용량,
 앱 VM에서 인증 ready/profile 및 잘못된 CA/token, 외부 8000/8443 차단, AI→SQL 거부, 재부팅/rollback,

@@ -37,15 +37,17 @@ curl -fsSL https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh 
 printf '%s  %s\n' d8c492ff1a37036694ae3cd57ac31d241209a0b31c42ec6c6c713b4a97bcfd35 "$staging/ops-agent.sh" | sha256sum -c -
 bash "$staging/ops-agent.sh" --also-install --version "$OPS_AGENT_VERSION"
 install -d -m 0700 /etc/capstone-ai /var/lib/capstone-ai /var/lib/capstone-ai/releases /var/lib/capstone-ai/operations
-install -d -m 0755 /opt/capstone-ai /var/lib/capstone-ai/control
+install -d -m 0755 /opt/capstone-ai /run/capstone-ai-control
 install -m 0600 "$config" /etc/capstone-ai/host.json
-for file in manifest.py release.py host_driver.py; do install -m 0644 "$source_root/deploy/gcp/$file" "/opt/capstone-ai/$file"; done
+for file in manifest.py release.py host_driver.py observe.py; do install -m 0644 "$source_root/deploy/gcp/$file" "/opt/capstone-ai/$file"; done
 install -m 0755 "$source_root/deploy/gcp/metadata-guard.sh" /opt/capstone-ai/metadata-guard.sh
 printf '%s\n' "$revision" > /opt/capstone-ai/REVISION
-install -m 0644 "$source_root/deploy/gcp/capstone-ai.service" "$source_root/deploy/gcp/capstone-ai-metadata.service" /etc/systemd/system/
+install -m 0644 "$source_root/deploy/gcp/capstone-ai.service" "$source_root/deploy/gcp/capstone-ai-metadata.service" "$source_root/deploy/gcp/capstone-ai-observe.service" "$source_root/deploy/gcp/capstone-ai-observe.timer" /etc/systemd/system/
+install -m 0644 "$source_root/deploy/gcp/health-logrotate" /etc/logrotate.d/capstone-ai-health
 install -m 0600 "$source_root/deploy/gcp/ops-agent.yaml" /etc/google-cloud-ops-agent/config.yaml
 systemctl daemon-reload
 systemctl enable --now docker nginx capstone-ai-metadata
 systemctl enable capstone-ai
+systemctl enable --now capstone-ai-observe.timer
 systemctl restart google-cloud-ops-agent
 echo 'Installed tools; no AI release started. Submit an approved manifest separately.'

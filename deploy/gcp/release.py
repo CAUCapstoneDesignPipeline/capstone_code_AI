@@ -144,7 +144,7 @@ class Coordinator:
                 self.recover_record(record)
                 raise RuntimeError("deployment failed; inspect sanitized operation journal") from None
 
-    def recover_record(self, record):
+    def recover_record(self, record, reopen=True):
         self.driver.drain(True)
         observed, _ = self.cloud.read("state.json")
         observed = observed or {"current": None, "previous": None}
@@ -166,25 +166,30 @@ class Coordinator:
             self.journal(record["operationId"], record)
             raise RuntimeError("unexpected GCS state; maintenance retained")
         self.journal(record["operationId"], record)
-        self.driver.drain(False)
+        if reopen:
+            self.driver.drain(False)
 
-    def recover(self):
+    def recover(self, reopen=True):
         for path in sorted((self.root / "operations").glob("*.json")):
             record = json.loads(path.read_bytes())
             if record["phase"] not in {"succeeded", "reverted", "failed-no-baseline", "preparation-failed"}:
-                self.recover_record(record)
+                self.recover_record(record, reopen=reopen)
 
     def boot(self):
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         with (self.root / "deployment.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             self.driver.drain(True)
-            self.recover()
-            state, _ = self.cloud.read("state.json")
-            if state and state["current"]:
-                self.driver.activate(state["current"])
-                self.driver.health(state["current"])
-                self.driver.drain(False)
+            try:
+                self.recover(reopen=False)
+                state, _ = self.cloud.read("state.json")
+                if state and state["current"]:
+                    self.driver.activate(state["current"])
+                    self.driver.health(state["current"])
+                    self.driver.drain(False)
+            except Exception:
+                self.driver.drain(True)
+                raise
 
 
 def main():

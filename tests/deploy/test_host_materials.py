@@ -35,15 +35,16 @@ def material_driver(tmp_path, monkeypatch, tls):
     m["configRevision"] = digest(host)
     m["secrets"] = {k:v+"/versions/1" for k,v in host["secretResources"].items()}
     m["tls"]["caSha256"] = hashlib.sha256(tls["caCertificate"].encode()).hexdigest()
-    raw = b'{"synthetic":true}'
+    raw = json.dumps({'df':{'synthetic':1},'n_docs':1,'version':'b'*12,'config_version':'a'*12}).encode()
     m["idf"]["sha256"] = hashlib.sha256(raw).hexdigest()
-    driver = HostDriver(host, tmp_path, "a"*40)
+    driver = HostDriver(host, tmp_path, "a"*40, control=tmp_path/"public-control")
     actual = driver.command
     def command(argv, data=None, timeout=120):
         if argv[:3] == ["gcloud","storage","cat"]: return raw
         if argv[:4] == ["gcloud","secrets","versions","access"]:
             name=argv[argv.index("--secret")+1]
             return json.dumps(tls).encode() if name=="ai-tls" else b"synthetic-not-a-real-secret-value"
+        if argv[:2] == ["docker","run"]: return b"aaaaaaaaaaaa\n"
         if argv[:3] == ["docker","image","inspect"]:
             return json.dumps([{"Architecture":"amd64","Config":{"User":"10001:10001","Labels":{"org.opencontainers.image.revision":m["sourceSha"]}}}]).encode()
         if argv[0] in {"gcloud","docker"}: return b"synthetic-token"
@@ -75,4 +76,16 @@ def test_bad_material_rejected_before_runtime_mutation(tmp_path,monkeypatch,tls,
     elif field=="wrong-profile": m["model"]["revision"]="0"*40
     else: m["secrets"]["providerKey"]=m["secrets"]["providerKey"].rsplit("/",1)[0]+"/latest"
     with pytest.raises((ValueError,RuntimeError)): driver.prepare(m)
+    assert not (tmp_path/"releases/r2").exists()
+
+
+def test_idf_configuration_is_checked_in_exact_image_before_activation(tmp_path,monkeypatch,tls):
+    driver,m=material_driver(tmp_path,monkeypatch,tls)
+    command=driver.command
+    def changed_image(argv,data=None,timeout=120):
+        if argv[:2]==["docker","run"]: return b"bbbbbbbbbbbb\n"
+        return command(argv,data,timeout)
+    monkeypatch.setattr(driver,"command",changed_image)
+    with pytest.raises(ValueError,match="extractor configuration"):
+        driver.prepare(m)
     assert not (tmp_path/"releases/r2").exists()

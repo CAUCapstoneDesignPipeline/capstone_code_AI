@@ -262,3 +262,33 @@ def test_cloud_404_is_only_absent_state(monkeypatch):
         raise urllib.error.HTTPError("https://storage.googleapis.com",404,"missing",{},None)
     monkeypatch.setattr("urllib.request.urlopen",fail)
     assert cloud.read("state.json")==(None,0)
+
+
+@pytest.mark.parametrize("failure",["cloud-second-read","second-activate","second-health"])
+def test_boot_recovery_never_opens_gate_before_all_checks(setup,monkeypatch,failure):
+    c,store,driver=setup
+    record={"operationId":"crashed","phase":"committing","before":{"current":"r1","previous":"r0"},
+        "after":{"current":"r2","previous":"r1"},"target":"r2","generation":1}
+    c.journal("crashed",record)
+    store.value=record["after"]
+    openings=[]
+    actual_drain=driver.drain
+    def drain(enabled):
+        if not enabled: openings.append(True)
+        actual_drain(enabled)
+    monkeypatch.setattr(driver,"drain",drain)
+    obj,method=(store,"read") if failure=="cloud-second-read" else (driver,"activate" if failure=="second-activate" else "health")
+    actual=getattr(obj,method)
+    calls=[]
+    def fail_second(*args):
+        calls.append(True)
+        if len(calls)==2: raise RuntimeError("synthetic failure")
+        return actual(*args)
+    monkeypatch.setattr(obj,method,fail_second)
+    with pytest.raises(RuntimeError): c.boot()
+    assert driver.draining and not openings
+
+
+def test_reusable_validates_tool_pin_before_checkout():
+    text=(Path(__file__).parents[2]/".github/workflows/gcp-deploy-reusable.yml").read_text()
+    assert text.index('test "$TOOL_SHA" = "$GCP_AI_DEPLOY_TOOL_SHA"') < text.index('- uses: actions/checkout@')

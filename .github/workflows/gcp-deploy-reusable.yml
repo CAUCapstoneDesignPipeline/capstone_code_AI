@@ -44,6 +44,13 @@ jobs:
       OPERATION_ID: ${{ inputs.operation_id }}
       EXPECTED_RELEASE: ${{ inputs.expected_release }}
     steps:
+      - name: Check approved immutable tool before any checkout
+        shell: bash
+        run: |
+          [[ "$TOOL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GCP_AI_DEPLOY_TOOL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$TOOL_SHA" = "$GCP_AI_DEPLOY_TOOL_SHA"
+          [[ "$MANIFEST_SHA" =~ ^[0-9a-f]{40}$ ]]
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ inputs.deploy_tool_sha }}

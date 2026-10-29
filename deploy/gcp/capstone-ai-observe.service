@@ -1,0 +1,9 @@
+[Unit]
+Description=Sanitized private AI readiness and TLS expiry observation
+After=capstone-ai.service
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/capstone-ai/observe.py
+TimeoutStartSec=30
