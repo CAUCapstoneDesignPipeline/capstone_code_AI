@@ -119,3 +119,93 @@ docker run --rm --platform linux/amd64 --entrypoint python \
 
 CPU smoke는 BGE-M3 모델 다운로드·적재를 수행한다. local arm64 빌드나 hash embedder 테스트를
 이 검사로 대체하지 않는다. 비밀값·IDF·개인 노트·캐시는 build context 허용 목록 밖에 둔다.
+
+## Private GCP runtime 및 release (#7)
+
+`deploy/gcp/install.sh`는 Ubuntu 24.04 amd64 전용 설치 코드다. 실제 실행에는 별도 VM 설치 승인이 필요하다.
+`host.example.json`을 Terraform output으로 채우고 `validate_host()` 검사와 SHA256을 검토한다.
+`GCP_CLI_PACKAGE_VERSION`(apt exact version), `OPS_AGENT_VERSION`을 승인 계획에 고정한다.
+설치기는 Google 공식 key/installer bytes의 조회 시 SHA256을 검증하고 서명된 저장소를 사용한다.
+이 작업은 프로젝트 생성·secret 값 등록·CA 발급·provider/model 선정·제품 AI 공개를 수행하지 않는다.
+
+### 서로 다른 네 가지 고정 기준
+
+1. **이미지 source SHA**: CI가 검증·발행한 AI 코드와 image digest. BE 코드는 별개다.
+2. **설치 tool SHA**: `install.sh reviewed-host.json <40hex>`의 clean checkout commit.
+   `/opt/capstone-ai/REVISION`과 manifest `bootstrapRevision`이 일치해야 한다.
+3. **manifest 문서 SHA**: `GCP_RELEASE_MANIFEST_SHA`로 승인된 별도 commit을 checkout한다.
+   tool commit 안에 그 commit 자신을 참조하는 manifest를 넣지 않는다.
+4. **설정 revision**: `host.json`의 key 정렬·compact UTF-8 JSON SHA256 (`manifest.digest(host)`).
+   host 주소·bucket·secret 자원·내부 SAN 변경은 설정과 새 manifest를 함께 검토한다.
+
+manifest v1은 `deploy/gcp/manifest.py`로 검증한다. 필수 필드:
+
+| 필드 | 고정 값/조건 |
+| --- | --- |
+| `schemaVersion`, `kind` | `1`, `ai` |
+| `releaseId`, `sourceSha`, `image` | 제한된 release ID, 전체 commit, 서울 `capstone-ai/ai@sha256:…` |
+| `bootstrapRevision`, `configRevision` | 설치 tool commit, host 설정 canonical SHA256 |
+| `model` | `embeddings-bge-m3-1`, `BAAI/bge-m3`, 기존 고정 revision |
+| `profiles` | 준비되어야 할 전체 profile; dev profile 금지 |
+| `idf` | AI artifact bucket/object, 양의 숫자 generation, SHA256, 일치 source SHA |
+| `provider` | `name`, relation/facts/explain/verify/sound별 명시 `models`·`efforts`, timeout≤90초 |
+| `flags` | relation/explain/verify 명시 boolean. 켜진 profile은 readiness와 대조 |
+| `secrets` | serviceToken/providerKey/tlsBundle 전체 resource와 숫자 version |
+| `tls` | zonal 내부 DNS SAN, public CA PEM SHA256 |
+| `cache` | `responses: disabled`, `modelScope: pinned-revision` |
+
+승인된 IDF/provider/CA가 없으면 실제 manifest를 만들거나 허위 준비 완료로 표시하지 않는다.
+`host.example.json`의 `REPLACE_…`는 실행 검증에서 거부된다. IDF가 배포 source/config와 맞는지 실제 extractor의
+readiness도 확인한다. TLS secret JSON은 `certificate`(leaf PEM), `privateKey`(leaf key), `caCertificate`(public CA)
+세 필드만 받는다. CA 개인키는 이 JSON·VM·이미지·state에 넣지 않는다. 서명 담당자·갱신 책임은 별도 결정한다.
+leaf SAN/체인/키 일치 및 잔여 유효기간 14일을 preflight에서 검사한다.
+
+### 배포·취소·재부팅·복구
+
+- AI 전용 release bucket의 `releases/<releaseId>.json`, `operations/<operationId>.json`은 generation 0
+  create-only. 같은 내용 재실행은 허용하고 같은 ID의 다른 내용은 거부한다.
+- host는 `flock`으로 직렬화하고, 변경 전에 fsync한 operation journal을 남긴다.
+  GCS `state.json`의 `{current,previous}`를 읽은 generation으로만 교체한다. stale expected release는 기동 전에 거부한다.
+- root 전용 release directory에 IDF·숫자 version secret·leaf TLS·Compose 설정을 준비하고 검증한다.
+  현재 release는 준비 실패에 영향받지 않는다. config·model·IDF·secret·TLS가 하나의 복원 단위다.
+- Nginx와 runtime의 새 요청을 drain한 뒤 기존 프로세스를 최대 180초 동안 종료한다.
+  private IP:8443만 Nginx가 받고 Docker는 `127.0.0.1:8000`에만 publish한다.
+  AI 내부 처리 115초, provider≤90초, BE 예산130초, Nginx160초, uvicorn graceful150초, Docker stop180초다.
+  keep-alive160초를 처리 제한으로 사용하지 않는다.
+- 새 컨테이너의 인증 ready/profile·TLS SAN·잘못된 토큰401 검증 후 CAS한다.
+  CAS 응답 유실은 cloud state를 다시 읽어 실제 결과를 확인한다. 해석 불가 상태는 maintenance를 유지한다.
+- 실패 시 알려진 이전 manifest 전체를 복원한다. 최초 배포 실패는 중지+maintenance다.
+  GCP AI 배포 실패가 앱 `aiEnabled=false`나 CRUD를 바꾸지 않는다.
+- IAP는 detached systemd operation만 제출한다. Actions 취소가 host 작업을 죽이지 않는다.
+  재실행은 같은 operation ID와 같은 request를 사용하고 journal을 확인한다. runner 성공은 durable phase `succeeded`일 때만 기록한다.
+- 재부팅 및 Docker 재시작은 `capstone-ai.service`가 미완료 journal·GCS state를 먼저 reconcile한다.
+  컨테이너 restart policy는 `no`라서 검증 전 자동 재기동하지 않는다. SQL/DB rollback은 존재하지 않는다.
+- rollback 요청은 state의 `previous`만 허용한다. installed tool/config revision이 달라 호환 검증에 실패하면
+  tool/config 복구도 포함한 별도 계획이 필요하며, 예전 이미지만 무조건 기동하지 않는다.
+
+### 권한·캐시·관측
+
+`capstone-ai-metadata.service`는 Docker FORWARD에서 IPv4/IPv6 metadata를 차단한다. host의 ADC는 INPUT/OUTPUT
+경로를 유지한다. 실제 VM에서 container→metadata 거부, host→ADC 정상, AI→SQL/앱 secret 거부를 각각 시험해야 한다.
+실제 환경 검증 없이 이 규칙 존재만으로 격리를 완료했다고 보고하지 않는다.
+
+현재 AI 결과 캐시 키에는 확정된 사용자 scope/삭제/TTL 계약이 없다. 운영 entrypoint `app.gcp_runtime`는
+기존 알고리즘 변경 없이 원문·관계·설명·검증 응답 캐시를 비활성화한다. public 모델 파일만 고정 revision으로
+별도 mount에 보존한다. 모델 cache의 용량·현행/이전 revision 보존 및 삭제는 운영 인수 시 정한다.
+로그는 SDK 예외·원문·credential을 출력하지 않도록 runtime diagnostic만 남기며 Nginx access log는 끈다.
+Docker 로그는 10 MiB×3으로 회전하고 Ops Agent는 host metrics만 수집한다.
+
+실제 인수에는 cold/warm RSS·latency, 동시2요청·429·timeout·drain, TLS 만료 알림·CA 갱신, model cache 용량,
+앱 VM에서 인증 ready/profile 및 잘못된 CA/token, 외부 8000/8443 차단, AI→SQL 거부, 재부팅/rollback,
+Ops Agent 수신/알림을 포함한다. readiness는 provider를 호출하지 않는다. 실제 provider smoke는 승인된
+합성 fixture·호출 수/비용 한도 안에서 별도 수행하고 비용 미측정을 0으로 보고하지 않는다.
+
+### 원격 게시 및 실행 전 필요한 설정
+
+- `image-publish`와 `ai-production` environment의 reviewer 및 develop deployment 정책.
+- 숫자 owner/repo ID, develop, environment, exact caller `gcp-deploy.yml`, SHA로 고정한 reusable claim을
+  대조한 AI WIF. publisher와 deployer는 다른 SA이며 앱 release bucket/앱 secret/SQL 권한이 없다.
+- `GCP_AI_DEPLOY_TOOL_SHA`, `GCP_RELEASE_MANIFEST_SHA`, AI 전용 `GCP_VM_NAME`·`RELEASE_BUCKET`,
+  project/zone/WIF/deployer SA. `GCP_DEPLOY_ENABLED` 기본 비활성. 이 설정 및 workflow 실행은 별도 승인 대상이다.
+- 로컬-only commit은 Actions checkout할 수 없다. 원격 게시 후 ref 접근을 검증하고 WIF를 활성화한다.
+- 이 배포는 private AI 서버 인수다. BE 기능 계약 승인이나 운영 사용자 대상 AI 공개를 대신하지 않는다.

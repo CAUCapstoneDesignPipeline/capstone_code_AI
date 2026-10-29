@@ -50,4 +50,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=6 CMD ["python", "/opt/healthcheck.py"]
 # 프로세스 1개: 형태소 분석기·임베딩 모델을 프로세스마다 올리지 않는다. 동시성은 AI_MAX_INFLIGHT 로 조절한다.
 # keep-alive 는 BE 호출 제한(130s)보다 길게 둔다 (내부 Nginx read timeout 160s 와 맞춤)
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1 --timeout-keep-alive 160 --timeout-graceful-shutdown 150"]
+CMD ["sh", "-c", "exec uvicorn app.gcp_runtime:app --host 0.0.0.0 --port ${PORT} --workers 1 --no-access-log --timeout-keep-alive 160 --timeout-graceful-shutdown 150"]

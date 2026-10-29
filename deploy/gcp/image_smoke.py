@@ -36,7 +36,7 @@ def main():
                "AI_EMBEDDING_PROFILES": profile.id, "AI_RELATION_LLM": "0", "AI_VERIFY_LLM": "0",
                "AI_EXPLAIN_LLM": "0", "AI_DEV_UI": "0", "AI_MAX_INFLIGHT": "2"}
         # Suppress process output: SDK diagnostics may contain provider configuration.
-        process = subprocess.Popen(["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000",
+        process = subprocess.Popen(["uvicorn", "app.gcp_runtime:app", "--host", "127.0.0.1", "--port", "8000",
                                     "--workers", "1", "--no-access-log"], env=env,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         def call(path, payload=None, bearer=token):

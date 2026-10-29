@@ -1,0 +1,10 @@
+# Metrics only. Do not collect app/SDK bodies, raw IDF, secret files, or Docker env.
+metrics:
+  receivers:
+    hostmetrics:
+      type: hostmetrics
+      collection_interval: 60s
+  service:
+    pipelines:
+      host:
+        receivers: [hostmetrics]

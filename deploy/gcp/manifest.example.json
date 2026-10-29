@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "kind": "ai",
+  "releaseId": "replace-with-reviewed-release-id",
+  "sourceSha": "REPLACE_WITH_PUBLISHED_SOURCE_SHA",
+  "image": "REPLACE_WITH_IMMUTABLE_AR_IMAGE_DIGEST",
+  "bootstrapRevision": "REPLACE_WITH_INSTALLED_TOOL_COMMIT",
+  "configRevision": "REPLACE_WITH_CANONICAL_HOST_CONFIG_SHA256",
+  "model": {
+    "profile": "embeddings-bge-m3-1",
+    "name": "BAAI/bge-m3",
+    "revision": "5617a9f61b028005a4858fdac845db406aefb181"
+  },
+  "profiles": [
+    "extract-det-3",
+    "embeddings-bge-m3-1"
+  ],
+  "idf": {
+    "bucket": "REPLACE_WITH_AI_ARTIFACT_BUCKET",
+    "object": "idf/synthetic.json",
+    "generation": "REPLACE_WITH_NUMERIC_GENERATION",
+    "sha256": "REPLACE_WITH_IDF_SHA256",
+    "sourceSha": "REPLACE_WITH_PUBLISHED_SOURCE_SHA"
+  },
+  "provider": {
+    "name": "REPLACE_WITH_APPROVED_PROVIDER",
+    "models": {
+      "relation": "REPLACE_WITH_APPROVED_MODEL",
+      "facts": "REPLACE_WITH_APPROVED_MODEL",
+      "explain": "REPLACE_WITH_APPROVED_MODEL",
+      "verify": "REPLACE_WITH_APPROVED_MODEL",
+      "sound": "REPLACE_WITH_APPROVED_MODEL"
+    },
+    "efforts": {
+      "relation": "medium",
+      "facts": "medium",
+      "explain": "medium",
+      "verify": "medium",
+      "sound": "medium"
+    },
+    "timeoutSeconds": 90
+  },
+  "flags": {
+    "relation": false,
+    "explain": false,
+    "verify": false
+  },
+  "secrets": {
+    "serviceToken": "projects/REPLACE/secrets/REPLACE/versions/REPLACE",
+    "providerKey": "projects/REPLACE/secrets/REPLACE/versions/REPLACE",
+    "tlsBundle": "projects/REPLACE/secrets/REPLACE/versions/REPLACE"
+  },
+  "tls": {
+    "serverName": "capsnote-prod-ai.asia-northeast3-a.c.capsnote.internal",
+    "caSha256": "REPLACE_WITH_PUBLIC_CA_PEM_SHA256"
+  },
+  "cache": {
+    "responses": "disabled",
+    "modelScope": "pinned-revision"
+  }
+}

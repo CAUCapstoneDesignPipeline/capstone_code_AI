@@ -1,0 +1,75 @@
+name: gcp-ai-deploy-reusable
+on:
+  workflow_call:
+    inputs:
+      operation:
+        type: string
+        required: true
+      manifest_path:
+        type: string
+        required: true
+      expected_release:
+        type: string
+        required: true
+      operation_id:
+        type: string
+        required: true
+      deploy_tool_sha:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: gcp-ai-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.repository == 'CAUCapstoneDesignPipeline/capstone_code_AI' && github.ref == 'refs/heads/develop' && github.event_name == 'workflow_dispatch' && vars.GCP_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: ai-production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_ZONE: ${{ vars.GCP_ZONE }}
+      GCP_VM_NAME: ${{ vars.GCP_VM_NAME }}
+      RELEASE_BUCKET: ${{ vars.RELEASE_BUCKET }}
+      GCP_AI_DEPLOY_TOOL_SHA: ${{ vars.GCP_AI_DEPLOY_TOOL_SHA }}
+      MANIFEST_SHA: ${{ vars.GCP_RELEASE_MANIFEST_SHA }}
+      TOOL_SHA: ${{ inputs.deploy_tool_sha }}
+      MANIFEST: ${{ inputs.manifest_path }}
+      OPERATION: ${{ inputs.operation }}
+      OPERATION_ID: ${{ inputs.operation_id }}
+      EXPECTED_RELEASE: ${{ inputs.expected_release }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.deploy_tool_sha }}
+          path: tool
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ vars.GCP_RELEASE_MANIFEST_SHA }}
+          path: release
+          persist-credentials: false
+      - name: Validate caller, tool, resources and manifest before WIF
+        working-directory: release
+        run: |
+          test "$(git -C ../tool rev-parse HEAD)" = "$TOOL_SHA"
+          test "$(git rev-parse HEAD)" = "$MANIFEST_SHA"
+          [[ "$MANIFEST_SHA" =~ ^[0-9a-f]{40}$ ]]
+          python3 ../tool/deploy/gcp/submit.py --manifest "$MANIFEST" --operation "$OPERATION" \
+            --operation-id "$OPERATION_ID" --expected-release "$EXPECTED_RELEASE" \
+            --tool-sha "$TOOL_SHA" --preflight-only
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+      - name: Submit immutable operation and wait for durable result
+        working-directory: release
+        run: |
+          python3 ../tool/deploy/gcp/submit.py --manifest "$MANIFEST" --operation "$OPERATION" \
+            --operation-id "$OPERATION_ID" --expected-release "$EXPECTED_RELEASE" --tool-sha "$TOOL_SHA"
