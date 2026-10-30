@@ -11,7 +11,6 @@ HEADING, BOLD, TABLE = "heading", "bold", "table"
 
 _MASK_PATTERNS = [
     re.compile(r"\A---[ \t]*\n.*?\n(?:---|\.\.\.)[ \t]*(?=\n|\Z)", re.S),   # 맨 앞 YAML frontmatter (title·tags·date)
-    re.compile(r"^(```|~~~).*?^\1[^\n]*$", re.S | re.M),   # 코드 블록
     re.compile(r"\$\$.*?\$\$", re.S),                       # 블록 수식
     re.compile(r"(?<!\\)\$[^$\n]+?\$"),                     # 인라인 수식
     re.compile(r"`[^`\n]+`"),                               # 인라인 코드
@@ -26,9 +25,39 @@ def nfc(text: str) -> str:
     return unicodedata.normalize("NFC", text)
 
 
+_FENCE_OPEN = re.compile(r"[ \t]*(`{3,}|~{3,})([^\n]*)")
+
+
+def fenced_blocks(text: str) -> list[tuple[int, int]]:
+    """코드 블록 [start, end) 목록 (CommonMark fenced code block).
+    - 여는 줄: 들여쓰기(목록 안 코드 블록 포함) 뒤 ``` 이나 ~~~ 3개 이상. ``` 의 info 문자열에는 ` 가 없어야 한다
+    - 닫는 줄: 같은 문자가 여는 것 이상 길이로, 뒤에는 공백만
+    - 닫히지 않으면 문서 끝까지 코드 블록이다"""
+    out, pos, open_at, fence = [], 0, None, ""
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        if open_at is None:
+            m = _FENCE_OPEN.fullmatch(body)
+            if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                open_at, fence = pos, m.group(1)
+        else:
+            t = body.strip()
+            if t and set(t) == {fence[0]} and len(t) >= len(fence):
+                out.append((open_at, pos + len(body)))
+                open_at = None
+        pos += len(line)
+    if open_at is not None:
+        out.append((open_at, len(text)))
+    return out
+
+
 def mask(text: str) -> str:
     """개념 후보에서 뺄 구간을 같은 길이의 공백으로 덮는다. 줄바꿈은 남겨 줄 구조를 유지한다."""
     chars = list(text)
+    for a, b in fenced_blocks(text):                        # 코드 블록 (들여쓴 것·닫히지 않은 것 포함)
+        for i in range(a, b):
+            if chars[i] != "\n":
+                chars[i] = " "
     for pat in _MASK_PATTERNS:
         for m in pat.finditer(text):
             for i in range(m.start(), m.end()):
