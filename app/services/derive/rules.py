@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from . import bigo
 from .facts import OPS, ROLES, SIZE_VAR, Fact
 from .korean import josa
+from .plain import OP_GLOSS, ROLE_GLOSS, cost_gloss
 
 _CASE_WORD = {"amortized": "상각 ", "average": "평균 "}
 RULE_VERSIONS = {"R1": "r1-implementation-1", "R2": "r2-cost-1"}
@@ -56,6 +57,7 @@ class Derivation:
     explanation: str = ""
     soundness: object = None            # sound_llm.SoundOut (derive-sound-1)
     role_label: str = ""
+    ops: list[tuple[str, str, str | None]] = field(default_factory=list)   # (연산 key, 이름, R2 의 비용 식) — 쉬운 풀이용
 
     @property
     def rule_version(self) -> str:
@@ -218,7 +220,8 @@ def r1(ix: _Index, a: str, role: str, s: str, titles: dict[str, str]) -> Derivat
     d = Derivation(_did("R1", a, role, s, *sorted(f.fact_id for f in chosen)), "R1", status, reasons, (a, a_label),
                    (s, s_label), role, conclusion, sorted({f.fact_id for f in chosen}),
                    sorted({f.note for f in chosen}), steps=steps, conditions=_conditions(ix, [a, s]), missing=missing,
-                   role_label=role_name, duplicate_of=dup if status == "known" else [], automation=_automation(chosen) if chosen else "extracted")
+                   role_label=role_name, duplicate_of=dup if status == "known" else [], automation=_automation(chosen) if chosen else "extracted",
+                   ops=[(op, ix.op_name(op), None) for op in ops])
     d.explanation = explain(d)
     return d
 
@@ -387,22 +390,82 @@ def r2(ix: _Index, a: str, role: str, s: str, base: Derivation, titles: dict[str
                    base.structure, role, conclusion, sorted({f.fact_id for f in chosen} | set(base.premises)),
                    sorted({f.note for f in chosen} | set(base.notes)), steps=steps, conditions=conditions,
                    missing=missing, result=result, case=case, role_label=role_name, depends_on=base.derivation_id, duplicate_of=dup,
-                   automation=_automation([*chosen, *(ix.by_id[x] for x in base.premises)]))
+                   automation=_automation([*chosen, *(ix.by_id[x] for x in base.premises)]),
+                   ops=[(op, ix.op_name(op), costs[op].expr if op in costs else None) for op in ops])
     d.explanation = explain(d)
     return d
 
 
+_CASE_GLOSS = {
+    "amortized": "상각 시간은 연산 하나하나가 아니라 여러 번을 모아 나눈 평균이에요. 가끔 느린 연산이 있어도 전체로 보면 이 안에 들어와요.",
+    "average": "평균 시간은 여러 입력에서 걸리는 시간의 평균이에요. 운이 나쁜 입력에서는 이보다 오래 걸릴 수 있어요.",
+}
+
+
+def _glossary(d: Derivation) -> list[str]:
+    """용어 풀이: 쓰는 역할·연산·비용 식이 무슨 뜻인지. 어휘 밖의 것은 풀이 없이 건너뛴다."""
+    lines = []
+    if d.role in ROLE_GLOSS:
+        lines.append(f"{josa(d.role_label, '은')} {josa(ROLE_GLOSS[d.role], '예요')}")
+    for key, label, _ in d.ops:
+        if key in OP_GLOSS:
+            lines.append(f"{josa(label, '은')} {josa(OP_GLOSS[key], '예요')}")
+    done = set()
+    for _, label, expr in d.ops:
+        if expr and expr not in done and (g := cost_gloss(expr)):
+            done.add(expr)
+            lines.append(f"O({expr})이라는 건 {g}")
+    if d.result:
+        try:
+            names = sorted(bigo.variables(bigo.parse(d.result[2:-1])) - {SIZE_VAR})
+        except bigo.ParseError:
+            names = []
+        if names:
+            lines.append(f"{d.result} 안의 {', '.join(names)}는 노트가 크기를 나타내려고 쓴 문자예요")
+    return lines
+
+
 def explain(d: Derivation) -> str:
-    """사용자에게 보이는 친절한 설명 (해요체). 단계마다 어느 노트에서 온 사실인지 적는다."""
-    lines = [s.text for s in d.steps]
+    """사용자에게 보이는 친절한 설명 (해요체): 한 줄 요약 → 쓰인 말 풀이 → 차근차근 → 조건.
+    단계마다 어느 노트에서 온 사실인지 적는다. 풀이(plain.py)는 용어·표기의 뜻일 뿐 결론의 근거가 아니다."""
+    out = []
+    ok = d.status in ("conclusion", "known")
+    if d.status == "known":
+        out.append(f"이미 노트에 적혀 있는 내용이라 새 결론으로 내지 않았어요: {d.conclusion}.")
+    elif ok:
+        if d.rule == "R1":
+            out.append(f"{d.conclusion}. 쉽게 말하면, {d.algorithm[1]}의 {d.role_label} 자리에 "
+                       f"{josa(d.structure[1], '을')} 그대로 끼워 쓸 수 있다는 뜻이에요.")
+        else:
+            out.append(f"{d.conclusion}. 쉽게 말하면, 노트에 적힌 횟수와 비용을 모두 더했더니 "
+                       f"걸리는 시간이 {josa(d.result, '을')} 넘지 않는다는 뜻이에요.")
+            if d.case in _CASE_GLOSS:
+                out.append(_CASE_GLOSS[d.case])
+    elif d.status == "held":
+        out.append(f"아직 확정하지 못한 결론이에요: {d.conclusion}.")
+    else:
+        out.append(f"이 결론은 버렸어요: {d.conclusion}.")
+
+    words = _glossary(d) if ok else []
+    if words:
+        out.append("먼저 나오는 말부터 짧게 풀어 볼게요.\n" + "\n".join("- " + w for w in words))
+
+    if d.steps:
+        head = "왜 그런지 차근차근 볼게요." if ok else "지금까지 노트에서 확인된 것은 이래요."
+        out.append(head + "\n" + "\n".join(f"{i}. {s.text}" for i, s in enumerate(d.steps, 1)))
+
     if d.status == "held":
-        lines.append("아직 결론을 내지 않았어요. " + "; ".join(d.reasons))
+        out.append("그래서 지금은 결론을 내지 않았어요. " + "; ".join(d.reasons)
+                   + ". 노트에 이 내용이 적히면 바로 결론을 낼 수 있어요.")
     elif d.status == "rejected":
-        lines.append("이 결론은 버렸어요. " + "; ".join(d.reasons))
+        out.append("그 까닭은 이래요. " + "; ".join(d.reasons) + ".")
+    if ok and d.soundness is not None and d.soundness.verdict == "sound":
+        out.append("한 번 더 검사했는데 맞는 결론이었어요. " + d.soundness.reason)
+
     conds = [c for c, _ in d.conditions]
-    if conds and d.status in ("conclusion", "known"):
-        lines.append("이 결론이 성립하는 조건: " + " / ".join(conds))
-    return "\n".join(lines)
+    if conds and ok:
+        out.append("이 결론이 성립하는 조건이에요.\n" + "\n".join("- " + c for c in conds))
+    return "\n\n".join(out)
 
 
 def derive(facts: list[Fact], titles: dict[str, str] | None = None) -> list[Derivation]:

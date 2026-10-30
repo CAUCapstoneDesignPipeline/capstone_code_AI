@@ -136,7 +136,7 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 | `premiseFactIds` · `noteIds` | 전제 사실, 전제를 낸 노트. **이 노트의 원문이 바뀌면 BE 는 결론을 재검토 상태로** |
 | `dependsOn` | R2 가 기대는 R1 결론 id |
 | `duplicateOfFactIds` | `known` 일 때 이미 같은 결론을 쓴 사실 |
-| `explanation` | 사용자에게 보일 설명 (단계마다 어느 노트에서 온 사실인지) |
+| `explanation` | 사용자에게 보일 쉬운 설명 (해요체, 문단은 빈 줄로 나뉜다): 한 줄 요약("쉽게 말하면 …") → 쓰인 역할·연산·O(...) 풀이 → 차근차근(`steps` 그대로, 단계마다 어느 노트에서 온 사실인지) → 성립 조건. 보류·기각이면 무엇이 빠졌는지·왜 버렸는지. 풀이는 용어와 표기의 뜻일 뿐 결론의 근거가 아니다 (결정적, `plain.py`) |
 | `soundness` | `derive-sound-1`: LLM 판정 (sound/unsound/uncertain, 충실하지 않은 전제) |
 
 `noveltyScope.noteIds` 는 "이미 있는 결론인가" 를 찾아본 노트(요청 문서)다. 그 밖의 노트는 보지 않았으므로 화면 문구는

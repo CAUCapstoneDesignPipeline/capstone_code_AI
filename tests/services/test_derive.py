@@ -55,6 +55,35 @@ def _case(cid):
     return next(c for c in load_cases() if c["id"] == cid)
 
 
+def test_explanation_is_friendly_and_defines_terms():
+    got, _ = run_case(_case("dijkstra-fibonacci-amortized"))
+    r2 = next(d for d in got if d.rule == "R2")
+    e = r2.explanation
+    assert e.startswith(r2.conclusion + ". 쉽게 말하면,") and "차근차근" in e
+    assert "삽입은 새 원소를 넣는 일이에요" in e and "O(log n)이라는 건 n이 아주 커져도" in e   # 용어·표기 풀이
+    assert "상각 시간은 연산 하나하나가 아니라" in e
+    assert all(s.text in e for s in r2.steps)                                         # 계산 단계는 그대로 들어간다
+    assert "이 결론이 성립하는 조건이에요." in e
+
+
+def test_explanation_of_held_and_rejected_says_what_is_missing():
+    got, _ = run_case(_case("decrease-key-cost-missing"))
+    held = next(d for d in got if d.status == "held")
+    assert held.explanation.startswith("아직 확정하지 못한 결론이에요") and "키 줄이기 연산 비용" in held.explanation
+    assert "쉽게 말하면" not in held.explanation and "먼저 나오는 말" not in held.explanation
+    got, _ = run_case(_case("plain-heap-no-decrease-key"))
+    assert got[0].explanation.startswith("이 결론은 버렸어요") and "그 까닭은 이래요." in got[0].explanation
+
+
+@pytest.mark.parametrize("expr, want", [
+    ("1", "입력이 커져도 걸리는 시간이 거의 그대로라는 뜻이에요"), ("log n", "n이 아주 커져도 아주 천천히만 늘어난다는 뜻이에요"),
+    ("V", "V에 비례해서 늘어난다는 뜻이에요"), ("V^2", "V가 두 배가 되면 대략 네 배가 된다는 뜻이에요"),
+    ("(V + E) log V", None), ("foo(n)", None)])
+def test_cost_gloss(expr, want):
+    from app.services.derive.plain import cost_gloss
+    assert cost_gloss(expr) == want
+
+
 def test_dijkstra_explanation_cites_both_notes():
     got, facts = run_case(_case("dijkstra-indexed-heap"))
     r2 = next(d for d in got if d.rule == "R2")
