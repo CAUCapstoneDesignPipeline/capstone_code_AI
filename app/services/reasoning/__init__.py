@@ -31,6 +31,8 @@ class ReasoningProfile:
     prompt: str
     files: tuple[str, ...]
     requires: tuple[str, ...] = ()   # 이 profile 이 쓰는 서버 구성 요소 (app.state 속성): extractor, typer, explainer, edge_judge, explanation_judge
+    # 설명 검증: 단계 근거가 아닌 단계 노트의 요청 근거를 문맥 근거로 받아 보조 전제를 인정하는가 (아니면 경로 밖 근거)
+    context_evidence: bool = False
 
     @property
     def revision(self) -> str:
@@ -57,10 +59,11 @@ REASONING_PROFILES = {p.id: p for p in (
                      ("reasoning/explain_llm.py", "reasoning/explain.py", "reasoning/text.py"), ("explainer",)),
     ReasoningProfile("explanation-det-2", "explanation", "rules-explanation-check", "explanation-rules-1", _EX),
     # det-2 + 문맥 근거만 인용하는 보조 전제를 받는다
-    ReasoningProfile("explanation-det-3", "explanation", "rules-explanation-check", "explanation-rules-2", _EX),
+    ReasoningProfile("explanation-det-3", "explanation", "rules-explanation-check", "explanation-rules-2", _EX,
+                     context_evidence=True),
     # det-3 + LLM 이 주장의 근거 뒷받침과 결론의 구체성·새로움을 본다. 구체적이지 않거나 새롭지 않은 결론은 fail
-    ReasoningProfile("explanation-hybrid-1", "explanation", "llm", "explanation-llm-1",
-                     (*_EX, "reasoning/explanation_llm.py"), ("explanation_judge",)),
+    ReasoningProfile("explanation-hybrid-2", "explanation", "llm", "explanation-llm-2",
+                     (*_EX, "reasoning/explanation_llm.py"), ("explanation_judge",), context_evidence=True),
     # 노트 사이 연결·경로 후보. 계약 v0.1.0 에는 없는 AI 쪽 제안 operation (경로·순위는 계약상 BE 책임)
     ReasoningProfile("links-det-1", "links", "kiwi-tfidf-adamic-adar", "links-det-1", _LINKS, ("extractor",)),
     # 같은 방법에 관계를 LLM 으로 보탠다 (extract-hybrid-2 의 관계와 같다). 규칙만으로는 관계가 적어 경로가 거의 없다

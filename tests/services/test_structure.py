@@ -4,8 +4,6 @@ import pytest
 
 from app.services.concepts import ConceptExtractor, ExtractConfig
 from app.services.relations import extract_relations
-from app.services.relations.extract import _py_offsets
-from app.services.relations.structure import structural_candidates
 
 POLICY = [(c, c, "x") for c in ("is_a", "part_of", "requires", "contrasts_with", "related_to")]
 

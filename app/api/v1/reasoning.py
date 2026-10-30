@@ -255,8 +255,8 @@ async def verify_explanations(request: Request):
               for cl in req.explanation.claims]
 
     bodies = [d.body for d in req.documents]
-    det2 = profile.id == "explanation-det-2"             # det-2 는 단계 근거가 아닌 인용을 모두 경로 밖으로 본다
-    context_ids = None if det2 else frozenset(_context_ids(req, ev, s1, s2))
+    # 문맥 근거를 받지 않는 profile(det-2)은 단계 근거가 아닌 인용을 모두 경로 밖으로 본다
+    context_ids = frozenset(_context_ids(req, ev, s1, s2)) if profile.context_evidence else None
     judge = request.app.state.explanation_judge if "explanation_judge" in profile.requires else None
     if judge is None and profile.requires:
         raise AiError("SERVICE_UNAVAILABLE", retry_after=30)

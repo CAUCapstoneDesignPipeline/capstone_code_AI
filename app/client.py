@@ -8,7 +8,7 @@
       3. /verifications/edges       A→B, B→C 간선이 근거에 정말 쓰여 있는가 (edges-llm-1: LLM 이 근거를 읽고 판정)
       4. /explanations              근거 기반 설명 = 새 지식 제안 (A —합성 유형→ C). 항상 LLM 이 쓴다 (explain-llm-8).
                                     단계 근거와 함께 문맥 근거(/note-links 단계의 context)를 보내 결론이 인용해 풀어 쓴다
-      5. /verifications/explanations 설명의 주장별 판정 (explanation-hybrid-1: 근거 뒷받침·구체성·새로움을 LLM 이 본다)
+      5. /verifications/explanations 설명의 주장별 판정 (explanation-hybrid-2: 근거 뒷받침·구체성·새로움을 LLM 이 본다)
       6. 판정 결합 (계약 §5 표): 하나라도 탈락이면 제외, 애매·가정·규칙 없음이면 가설, 아니면 후보.
          제외된 제안은 보여 주지 않는다 (screened.rejected 에 이유만 남긴다)
 
@@ -116,7 +116,7 @@ async def suggest_knowledge(client: AiClient, note: dict, candidates: list[dict]
                             min_confidence: float = 0.0, max_paths: int = 6, pool: int = 12,
                             embedding_profile: tuple[str, int] | None = None,
                             explain_profile: str = "explain-llm-8", links_profile: str = "links-hybrid-1",
-                            edges_profile: str = "edges-llm-1", verify_profile: str = "explanation-hybrid-1",
+                            edges_profile: str = "edges-llm-1", verify_profile: str = "explanation-hybrid-2",
                             taxonomy_codes: frozenset[str] = TAXONOMY_CODES) -> dict:
     """note 와 연결된 노트·새 지식 제안. 단계를 나눠 싼 검사부터 하고 비싼 LLM 설명은 살아남은 경로에만 쓴다.
 

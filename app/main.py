@@ -110,7 +110,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 st.explanation_judge = st.explanation_judge or ExplanationJudge(
                     llm, settings.verify_cache / "explanations" if settings.verify_cache else None)
                 log.info("검증 LLM (간선·설명): %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
-            except Exception as e:      # edges-llm-1, explanation-hybrid-1 만 준비되지 않은 상태로 둔다
+            except Exception as e:      # edges-llm-1, explanation-hybrid-2 만 준비되지 않은 상태로 둔다
                 log.error("검증 LLM 을 만들지 못했다: %s", e)
         for pid in settings.embedding_profiles:
             if pid in st.embedders:

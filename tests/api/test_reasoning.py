@@ -328,17 +328,32 @@ def test_hybrid_explanation_check(out, overall, conclusion):
     with c:
         r = post(c, "/explanations", with_context("explain-llm-8", path=PATH, policy=POLICY))
         v = post(c, "/verifications/explanations", with_context(
-            "explanation-hybrid-1", path=PATH, policy=POLICY, explanation=r.json()["explanation"],
+            "explanation-hybrid-2", path=PATH, policy=POLICY, explanation=r.json()["explanation"],
             generationProvenance=provenance(r.json()["meta"])))
         assert v.status_code == 200, v.text
         body = v.json()
         assert body["overall"] == overall and body["meta"]["model"] == "claude-opus-5-5"
         assert next(x for x in body["claimVerdicts"] if x["claimRef"] == "conclusion-1")["outcome"] == conclusion
         assert "오류는 장애 보고서에 남는다." in judge.calls[0][1] and "explanation-llm" not in judge.calls[0][1]
-        same = provenance(dict(r.json()["meta"], promptVersion="explanation-llm-1"))  # 같은 모델+같은 prompt
+        same = provenance(dict(r.json()["meta"], promptVersion="explanation-llm-2"))  # 같은 모델+같은 prompt
         bad = post(c, "/verifications/explanations", with_context(
-            "explanation-hybrid-1", path=PATH, policy=POLICY, explanation=r.json()["explanation"], generationProvenance=same))
+            "explanation-hybrid-2", path=PATH, policy=POLICY, explanation=r.json()["explanation"], generationProvenance=same))
         assert bad.status_code == 422 and code(bad) == "UNSUPPORTED_PROFILE"
+
+
+def test_hybrid_novelty_sees_uncited_evidence():
+    """결론이 인용하지 않은 문맥 근거도 새로움 판정에 보인다 (그 문장을 바꿔 쓴 결론을 잡도록)."""
+    c, judge = judge_client(GOOD, judged(n=4))
+    with c:
+        r = post(c, "/explanations", with_context("explain-llm-8", path=PATH, policy=POLICY))
+        assert all(E3 not in cl["evidenceIds"] for cl in r.json()["explanation"]["claims"])
+        v = post(c, "/verifications/explanations", with_context(
+            "explanation-hybrid-2", path=PATH, policy=POLICY, explanation=r.json()["explanation"],
+            generationProvenance=provenance(r.json()["meta"])))
+        assert v.status_code == 200, v.text
+        user = judge.calls[0][1]
+        assert "[E3] (노트 2, 인용 안 됨) 오류는 장애 보고서에 남는다." in user
+        assert "[E1] (노트 1) **재시도**는 중복을 만든다." in user          # 인용한 근거가 먼저, 표시 없이
 
 
 def test_hybrid_explanation_missing_claim_is_502():
@@ -346,7 +361,7 @@ def test_hybrid_explanation_missing_claim_is_502():
     with c:
         r = post(c, "/explanations", with_context("explain-llm-8", path=PATH, policy=POLICY))
         v = post(c, "/verifications/explanations", with_context(
-            "explanation-hybrid-1", path=PATH, policy=POLICY, explanation=r.json()["explanation"],
+            "explanation-hybrid-2", path=PATH, policy=POLICY, explanation=r.json()["explanation"],
             generationProvenance=provenance(r.json()["meta"])))
         assert v.status_code == 502 and code(v) == "INVALID_MODEL_OUTPUT"
 
