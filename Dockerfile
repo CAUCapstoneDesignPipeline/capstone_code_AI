@@ -21,8 +21,9 @@ COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project ${UV_EXTRAS}
 COPY app ./app
+# The dependency layer can retain an older local-project wheel when only app/ changes.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable ${UV_EXTRAS}
+    uv sync --frozen --no-dev --no-editable --reinstall-package ai ${UV_EXTRAS}
 
 # ---- 실행 ----
 FROM ${PYTHON_IMAGE}
