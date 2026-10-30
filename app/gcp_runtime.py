@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import Request
 
+from app.api.v1.deps import UUID_RE
 from app.core.config import Settings
 from app.core.errors import AiError, error_response, new_request_id
 from app.main import create_app
@@ -37,7 +38,11 @@ def production_app():
     @app.middleware("http")
     async def drain_gate(request: Request, call_next):
         if drain.exists() and (request.method == "POST" or request.url.path.endswith("/health/ready")):
-            return error_response(AiError("SERVICE_UNAVAILABLE", retry_after=30), new_request_id())
+            # This outer gate runs before create_app's request-ID middleware.
+            request_id = request.headers.get("x-request-id")
+            if not request_id or not UUID_RE.fullmatch(request_id):
+                request_id = new_request_id()
+            return error_response(AiError("SERVICE_UNAVAILABLE", retry_after=30), request_id)
         return await call_next(request)
 
     return app

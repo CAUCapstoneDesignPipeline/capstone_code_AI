@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
@@ -25,6 +26,22 @@ def test_production_runtime_disables_private_response_caches_and_dev(monkeypatch
         (tmp_path / "drain").touch()
         assert client.post("/internal/v1/facts", json={}).status_code == 503
         assert client.get("/internal/v1/health/ready").status_code == 503
+        # Maintenance is still an API error: preserve the caller's correlation ID
+        # so a BE retry can match the response to the original request.
+        for request_id in [headers["X-Request-Id"], headers["X-Request-Id"].upper()]:
+            for method, path in [("POST", "/internal/v1/facts"), ("GET", "/internal/v1/health/ready")]:
+                response = client.request(method, path, headers={**headers, "X-Request-Id": request_id})
+                assert response.status_code == 503
+                assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+                assert response.headers["Retry-After"] == "30"
+                assert response.headers["X-Request-Id"] == response.json()["error"]["requestId"] == request_id
+        for request_id in ["", "not-a-uuid"]:
+            response = client.post("/internal/v1/facts", headers={**headers, "X-Request-Id": request_id})
+            generated = response.json()["error"]["requestId"]
+            assert response.status_code == 503
+            assert response.headers["X-Request-Id"] == generated
+            assert generated != request_id
+            UUID(generated)
         (tmp_path / "drain").unlink()
         # Still unavailable without IDF, never false-success after drain.
         assert client.get("/internal/v1/health/ready", headers={"Authorization":"Bearer synthetic-runtime-token",
