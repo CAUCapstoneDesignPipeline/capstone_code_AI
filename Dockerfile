@@ -43,7 +43,8 @@ ENV PATH=/opt/venv/bin:$PATH \
     AI_RELATION_CACHE=/var/cache/ai/relations \
     AI_EXPLAIN_CACHE=/var/cache/ai/explanations \
     AI_VERIFY_CACHE=/var/cache/ai/verifications \
-    AI_DEV_UI=0
+    AI_DEV_UI=0 \
+    AI_MAX_INFLIGHT=1
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=6 CMD ["python", "/opt/healthcheck.py"]
