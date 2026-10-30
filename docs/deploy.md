@@ -1,7 +1,8 @@
 # AI 서버 배포 (Docker)
 
-배포 구조는 `docs` 저장소의 [architecture/server-architecture.md](../../docs/architecture/server-architecture.md)를 따른다:
-같은 EC2 host 의 별도 컨테이너, BE worker 만 `ai` Docker network 로 `8000` 에 접근, host port 는 publish 하지 않는다.
+기존 AWS 구성은 [서버 아키텍처](../../capstone_docs/architecture/server-architecture.md)의 같은 EC2 host 별도 컨테이너 예시다. GCP 목표는 [GCP 계획](../../capstone_docs/development/gcp-infrastructure-plan.md)의 서울 private AI VM `e2-highmem-2`(2 vCPU·16 GiB)다. 두 환경의 네트워크·비밀 주입 방식을 혼용하지 않는다.
+
+GCP 운영 경로는 `deploy/gcp/host_driver.py`가 release별 Compose를 생성하고 host 설치·수동 workflow가 이를 실행한다. 이 경로에 CPU 1.5·메모리 10GiB·동시성 1을 적용했다. 아래 AWS 예시는 별도이며 실제 GCP 배포·모델 부하 인수는 아직 수행하지 않았다.
 
 ## 이미지
 
@@ -12,7 +13,8 @@ docker build -t capstone-ai --build-arg SOURCE_REVISION=$(git rev-parse HEAD) .
 - 의존성은 `uv.lock` 그대로 설치한다 (`uv sync --frozen --no-dev`). Python 3.11, non-root(uid 10001), 약 690 MB (대부분 Kiwi 형태소 모델).
 - 이미지에 **넣지 않는 것**: `data/`(노트·IDF·캐시), `.env`·API 키, 개발용 playground(`app/dev`). `.dockerignore` 가 허용 목록이다.
 - 임베딩 모델(e5)을 쓰려면 `--build-arg UV_EXTRAS="--extra embeddings"` (torch 포함, 이미지가 커진다). 기본은 넣지 않는다.
-- 프로세스 1개(uvicorn worker 1). 동시 요청 수는 `AI_MAX_INFLIGHT` (기본 8, 넘으면 429 `AI_BUSY`). 요청 대부분이 LLM 응답을 기다리는 시간이라 CPU 보다 크게 둔다.
+- 운영 이미지의 시작값은 uvicorn worker 1개·`AI_MAX_INFLIGHT=1`이다. 초과 요청은 429 `AI_BUSY`로 거부한다. 컨테이너 CPU 1.5개·메모리 10 GiB는 실행 옵션/Compose에서 지정하며 Dockerfile만으로 강제되지 않는다.
+- 로컬 개발은 `.env.example`의 동시성4와 코드의 미설정 기본8을 유지한다. 운영에서는 개발 환경 파일을 그대로 전달하지 않는다.
 - `HEALTHCHECK` 는 `/internal/v1/health/live` 를 서비스 토큰으로 부른다 (`deploy/healthcheck.py`).
 
 ## 실행할 때 주는 것
@@ -44,6 +46,7 @@ uv run ai concepts build-idf --notes <참고 노트 폴더> --out /srv/capstone/
 
 ```bash
 docker run -d --name capstone-ai -p 127.0.0.1:8000:8000 \
+  --cpus=1.5 --memory=10g -e AI_MAX_INFLIGHT=1 \
   -e AI_SERVICE_TOKEN -e ANTHROPIC_API_KEY \
   -v /srv/capstone/ai/idf.json:/run/ai/idf.json:ro -v capstone-ai-cache:/var/cache/ai \
   capstone-ai
@@ -52,13 +55,17 @@ docker run -d --name capstone-ai -p 127.0.0.1:8000:8000 \
 `-e NAME` 처럼 값 없이 넘기면 셸 환경의 값이 들어가고 명령 기록에 남지 않는다. `.env` 전체를 `--env-file` 로 넘기지 않는다
 (다른 서비스의 비밀값까지 컨테이너에 들어간다).
 
-## Compose (운영 host 예시)
+## Compose (기존 AWS host 예시, 실행하지 않음)
 
 ```yaml
 services:
   ai:
     image: <ECR>/capstone-ai@sha256:<digest>      # digest 로 고정해 재현·rollback
+    cpus: 1.5
+    mem_limit: 10g
     environment:
+      AI_MAX_INFLIGHT: "1"
+      AI_DEV_UI: "0"
       AI_SERVICE_TOKEN: ${CAPSTONE_AI_SERVICE_TOKEN}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     volumes:
@@ -72,6 +79,8 @@ networks:
 volumes:
   ai-cache: {}
 ```
+
+GCP 운영 Compose는 별도 구현·검토가 필요하다. AR digest, loopback8000과 private TLS8443, Secret Manager의 승인된 숫자 version, metadata 차단·health·rollback을 연결해야 한다. 실제 배포 전 1.5 CPU/10 GiB 제한 아래 모델 적재·동시2요청·429·timeout·OOM을 측정한다. 제품 AI는 BE 통합 및 별도 활성화 인수 전까지 off를 유지한다. 이 문서의 명령은 이번 로컬 설정 작업에서 실행하지 않았다.
 
 배포 순서는 아키텍처 문서대로 **AI readiness 확인 → BE** 다. readiness 는 `GET /internal/v1/health/ready`
 (Bearer + `X-Request-Id`)가 200 이고 `profileVersions` 에 BE manifest 의 profile 이 모두 있으면 된다. readiness 는 LLM 을

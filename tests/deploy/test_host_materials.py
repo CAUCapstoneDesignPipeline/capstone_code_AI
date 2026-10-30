@@ -63,6 +63,9 @@ def test_material_pins_tls_idf_and_secret_files(tmp_path,monkeypatch,tls):
     compose=json.loads((target/"compose.json").read_bytes())
     assert compose["services"]["ai"]["ports"] == ["127.0.0.1:8000:8000"]
     assert compose["services"]["ai"]["restart"] == "no"
+    assert compose["services"]["ai"]["cpus"] == 1.5
+    assert compose["services"]["ai"]["mem_limit"] == "10g"
+    assert compose["services"]["ai"]["environment"]["AI_MAX_INFLIGHT"] == "1"
     assert "ca.key" not in {p.name for p in target.iterdir()}
     driver.prepare(m)  # local immutable material reuse for rollback
 

@@ -105,7 +105,7 @@ class HostDriver:
                 manifest["image"], "-c", "from app.services.concepts.config import ExtractConfig; print(ExtractConfig().version())"]).decode().strip()
             if idf_document["config_version"] != config_version:
                 raise ValueError("IDF extractor configuration does not match image")
-            env = {"AI_SERVICE_TOKEN": secrets["serviceToken"], "AI_MAX_INFLIGHT": "2", "AI_DEV_UI": "0",
+            env = {"AI_SERVICE_TOKEN": secrets["serviceToken"], "AI_MAX_INFLIGHT": "1", "AI_DEV_UI": "0",
                    "AI_EMBEDDING_PROFILES": "embeddings-bge-m3-1", "AI_CONCEPT_IDF": "/run/ai/idf.json",
                    "HF_HOME": "/var/cache/ai/huggingface", "AI_DRAIN_FILE": "/run/ai/control/runtime-drain",
                    "AI_LLM_TIMEOUT_SECONDS": str(manifest["provider"]["timeoutSeconds"])}
@@ -121,7 +121,7 @@ class HostDriver:
                 "image": manifest["image"], "platform": "linux/amd64", "user": "10001:10001",
                 "read_only": True, "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
                 "environment": {k: v.replace("$", "$$") for k, v in env.items()},
-                "ports": ["127.0.0.1:8000:8000"], "cpus": 3, "mem_limit": "10g", "pids_limit": 512,
+                "ports": ["127.0.0.1:8000:8000"], "cpus": 1.5, "mem_limit": "10g", "pids_limit": 512,
                 "stop_grace_period": "180s", "restart": "no", "tmpfs": ["/tmp:size=512m,mode=1777"],
                 "volumes": [f"{target}/idf.json:/run/ai/idf.json:ro", f"{self.control}:/run/ai/control:ro",
                             f"{self.root}/model-cache:/var/cache/ai"],
