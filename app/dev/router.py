@@ -5,6 +5,7 @@
   GET /dev/notes         노트 폴더(AI_NOTES_DIR, 기본 data/private/notes)의 노트 id 목록
   GET /dev/notes/{id}    노트 원문 (NFC)
   GET /dev/index         노트 전체 색인을 미리 만든다 (노트 사이 연결용)
+  POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
   GET/POST/DELETE /dev/llm   관계 판정 LLM (extract-hybrid-1) 을 실행 중에 고르거나 끈다.
@@ -251,6 +252,74 @@ async def links(q: LinksQuery, request: Request):
                          "quoteA": quote(l.note_a, b.evidence_a), "quoteB": quote(l.note_b, b.evidence_b)}
                         for b in l.bridges],
         } for l in result],
+    }
+
+
+# ---- 키워드 (노드) 와 개념 ----
+
+class KeywordsQuery(BaseModel):
+    noteId: str | None = None   # 이 노트에 개념을 넣은 키워드만. 없으면 전체
+    text: str | None = None     # 붙여넣은 글이나 편집한 원문. 이 글을 노트로 더해서 만든다
+    q: str = ""                 # 키워드 이름·별칭에 들어 있는 글자
+    minPages: int = 1           # 이 수 이상의 페이지(노트)에 걸친 키워드만
+    limit: int = 60
+    minConfidence: float = 0.0
+
+
+def _keyword_set(state, corpus, min_confidence: float):
+    """(키워드들, conceptId → {note, confidence}). 같은 색인·기준이면 만들어 둔 것을 다시 쓴다."""
+    from app.client import uid
+    from app.services.links import build_keywords
+
+    cached = getattr(state, "keywords_cache", None)
+    if cached and cached[0] is corpus and cached[1] == min_confidence:
+        return cached[2]
+    built = build_keywords(corpus, lambda n: uid("note", n), uid, min_confidence)
+    state.keywords_cache = (corpus, min_confidence, built)
+    return built
+
+
+@router.post("/keywords")
+async def keywords(q: KeywordsQuery, request: Request):
+    """노드 = 키워드, 키워드 안에 개념(설명 + 소스 페이지) 여러 개 (docs/knowledge-graph.md). 응답의 키워드는
+    app/schemas/knowledge.py 의 Keyword 로 검증된 것이고, 화면용으로 노트 이름·신뢰도를 덧붙였다. LLM 호출 없음."""
+    state = request.app.state
+    if state.extractor is None:
+        raise HTTPException(503, "추출기가 준비되지 않았다")
+    t0 = time.monotonic()
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    note_id = _nfc(q.noteId) if q.noteId else None
+    if q.text is not None:
+        if not q.text.strip() or len(q.text) > 50000:
+            raise HTTPException(400, "글이 비었거나 50,000자를 넘는다")
+        note_id = note_id if note_id in corpus.notes else FREE_ID
+        text = _nfc(q.text)
+        if note_id not in corpus.notes or corpus.notes[note_id].text != text:
+            corpus = await run_in_threadpool(_with_text, state, corpus, note_id, text)
+    elif note_id is not None and note_id not in corpus.notes:
+        raise HTTPException(404, "노트를 찾지 못했다")
+    mc = max(0.0, min(q.minConfidence, 1.0))
+    all_keywords, meta = await run_in_threadpool(_keyword_set, state, corpus, mc)
+    needle = _nfc(q.q).strip().lower()
+
+    def wanted(k) -> bool:
+        if len(k.note_ids()) < max(1, q.minPages):
+            return False
+        if needle and not any(needle in s.lower() for s in (k.name, *k.aliases)):
+            return False
+        return note_id is None or any(meta[c.conceptId]["note"] == note_id for c in k.concepts)
+
+    picked = [k for k in all_keywords if wanted(k)]
+    return {
+        "note": note_id, "notes": len(corpus.notes), "total": len(picked), "all": len(all_keywords),
+        "ms": int((time.monotonic() - t0) * 1000),
+        "keywords": [{
+            **k.model_dump(exclude={"concepts"}), "pages": len(k.note_ids()),
+            "concepts": [{"conceptId": c.conceptId, "origin": c.origin, "note": meta[c.conceptId]["note"],
+                          "confidence": meta[c.conceptId]["confidence"], "explanation": c.explanation,
+                          "startOffset": c.sources[0].span.startOffset, "endOffset": c.sources[0].span.endOffset}
+                         for c in k.concepts],
+        } for k in picked[:max(1, min(q.limit, 200))]],
     }
 
 

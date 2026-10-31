@@ -214,7 +214,7 @@ async def main():
 asyncio.run(main())
 ```
 
-화면으로는 `uv run python run_playground.py [--notes 폴더]` → **지식 제안** 버튼. 지식 제안은 항상 LLM 이 쓰므로 `.env` 에
+화면으로는 `uv run python run_playground.py [--notes 폴더]` → **지식 제안 (이전 방식)** 버튼. 지식 제안은 항상 LLM 이 쓰므로 `.env` 에
 `ANTHROPIC_API_KEY` 가 있어야 한다 (설정: `AI_EXPLAIN_LLM_PROVIDER` / `_MODEL` / `_EFFORT`). 노트 폴더는 아무 `.md`/`.txt` 폴더나 된다.
 
 조건부 결론은 `derive_insights(client, note, others, facts_cache)` (노트마다 `/facts` 한 번, `/derivations` 한 번).

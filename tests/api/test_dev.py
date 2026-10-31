@@ -151,3 +151,50 @@ def test_whole_collection_graph_and_edge_detail(tmp_path, monkeypatch):
         assert d["bridges"][0]["quoteA"] and any(p["rule"] == "is_a" for p in d["paths"])
         assert c.post("/dev/graph/edge", json={"a": "TCP", "b": "회귀"}).status_code == 404
         assert c.post("/dev/graph", json={"noteId": "TCP"}).status_code == 200      # 기존 그래프도 그대로
+
+
+def test_keywords_group_concepts_across_pages(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    for name, body in {**NET_NOTES, "회귀": "# 회귀\n\n선형 회귀는 오차를 줄인다.\n"}.items():
+        (tmp_path / f"{name}.md").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        every = c.post("/dev/keywords", json={}).json()
+        assert every["notes"] == 3 and every["total"] == every["all"] >= 1
+        shared = c.post("/dev/keywords", json={"minPages": 2}).json()
+        k = next(k for k in shared["keywords"] if k["name"] == "전송 프로토콜")      # 두 노트가 같은 키워드에 개념을 넣었다
+        assert k["pages"] == 2 and {x["note"] for x in k["concepts"]} == {"TCP", "전송 계층"}
+        assert all(x["origin"] == "extracted" and x["explanation"] and x["conceptId"] for x in k["concepts"])
+        assert all(len(x["concepts"]) >= 1 and x["pages"] >= 2 for x in shared["keywords"])
+        mine = c.post("/dev/keywords", json={"noteId": "회귀"}).json()               # 이 노트에 개념을 넣은 키워드만
+        assert mine["keywords"] and all(any(x["note"] == "회귀" for x in k["concepts"]) for k in mine["keywords"])
+        assert c.post("/dev/keywords", json={"q": "전송 프로"}).json()["keywords"][0]["name"] == "전송 프로토콜"
+        assert c.post("/dev/keywords", json={"q": "없는말"}).json()["keywords"] == []
+        assert c.post("/dev/keywords", json={"noteId": "nope"}).status_code == 404
+        assert c.post("/dev/keywords", json={"text": "  "}).status_code == 400
+
+
+def test_keywords_include_pasted_text(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    for name, body in NET_NOTES.items():
+        (tmp_path / f"{name}.md").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        r = c.post("/dev/keywords", json={"text": "**전송 프로토콜**은 신뢰성을 다루는 규약이다. 포트로 프로세스를 구분한다.",
+                                          "noteId": None, "minPages": 2}).json()
+        assert r["note"] == dev.FREE_ID
+        k = next(k for k in r["keywords"] if k["name"] == "전송 프로토콜")
+        assert dev.FREE_ID in {x["note"] for x in k["concepts"]} and k["pages"] == 3
+
+
+def test_keyword_groups_never_merge_unrelated_concepts_of_one_note():
+    from app.services.links.keywords import _Groups
+    g = _Groups()
+    a, b, c = ("n1", "dp"), ("n1", "decision"), ("n2", "dp")
+    for x in (a, b, c):
+        g.add(x)
+    ok = lambda x, y: False                                   # n1 의 두 개념은 서로 별칭이 아니다
+    assert g.union(a, c, ok) and g.find(a) == g.find(c)
+    assert not g.union(b, c, ok) and g.find(b) != g.find(c)   # c 는 이미 a 와 한 묶음이라 b 와는 합칠 수 없다

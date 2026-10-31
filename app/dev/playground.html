@@ -119,9 +119,13 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .side h3 { font-size: 15px; margin: 0 0 4px; overflow-wrap: anywhere; }
 .side h4 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); }
 .side .note { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
-.side .chain { font-size: 13px; margin: 6px 0; }
-.side .rule { font-size: 11px; padding: 0 6px; border-radius: 99px; background: var(--soft); color: var(--muted); }
-.side .rule.yes { background: var(--accent-soft); color: var(--accent); }
+.kwTools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
+.kwTools input[type="search"] { border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; background: var(--bg); min-width: 180px; }
+.kwTools label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.kw .alias { color: var(--muted); font-size: 12px; font-weight: 400; }
+.kw .cardHead b { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.kw li .quote { border-left-color: var(--line); }
+.kw li.cur .quote { border-left-color: var(--accent); }
 .empty { color: var(--muted); padding: 40px 0; text-align: center; }
 .error { color: var(--err); white-space: pre-wrap; }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%;
@@ -147,9 +151,10 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
   <main>
     <div class="bar">
       <div class="api" role="group" aria-label="API">
-        <button data-mode="concepts" aria-pressed="false">개념 추출</button>
-        <button data-mode="links" aria-pressed="false">관계 연결</button>
-        <button data-mode="suggest" aria-pressed="false">지식 제안</button>
+        <button data-mode="concepts" aria-pressed="false" title="노트에서 개념 후보를 뽑는다 (/extract)">개념 추출</button>
+        <button data-mode="keywords" aria-pressed="false" title="노드 = 키워드, 그 안에 개념(설명 + 소스 페이지)">키워드</button>
+        <button data-mode="links" aria-pressed="false" title="같은 키워드에 개념을 넣은 두 페이지를 선 하나로 잇는다">문서 연결</button>
+        <button data-mode="suggest" aria-pressed="false" title="두 노트의 관계를 이어 합성 규칙으로 만드는 이전 방식. 키워드 개념 + 외부 지식 방식은 아직 없다">지식 제안 (이전 방식)</button>
       </div>
       <label class="thr">유효 개념 신뢰도 ≥
         <input type="range" id="thr" min="0.25" max="1" step="0.01" value="0.35"><b id="thrVal">0.35</b></label>
@@ -163,7 +168,8 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const FREE = "\u0000free";
 const S = { cfg: null, notes: [], note: null, text: "", free: "", mode: null, thr: 0.35, concepts: null, links: null, sel: null, edge: null, run: 0,
-            scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 } };
+            scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 },
+            kw: null, kq: "", kscope: "note", kmulti: false };
 const name = (id) => (id === FREE ? "직접 입력" : id);
 const valid = (c) => c.confidence >= S.thr;
 
@@ -187,7 +193,7 @@ $("#search").addEventListener("input", renderNotes);
 
 async function openNote(id) {
   if (S.note === FREE) S.free = $("#free")?.value ?? S.free;
-  S.note = id; S.concepts = null; S.links = null; S.suggest = null; S.sel = null;
+  S.note = id; S.concepts = null; S.links = null; S.suggest = null; S.kw = null; S.sel = null;
   S.text = id === FREE ? S.free : (await (await fetch("/dev/notes/" + encodeURIComponent(id))).json()).body;
   renderNotes(); render();
 }
@@ -213,7 +219,52 @@ $("#thr").addEventListener("input", (e) => {
   else { clearTimeout(thrTimer); thrTimer = setTimeout(run, 250); }   // 연결은 유효 개념이 바뀌었으니 다시 찾는다
 });
 
-function run() { return ({ links: () => (S.scope === "all" ? runAll() : runLinks()), suggest: runSuggest })[S.mode]?.() ?? runConcepts(); }
+function run() {
+  return ({ links: () => (S.scope === "all" ? runAll() : runLinks()), suggest: runSuggest, keywords: runKeywords })[S.mode]?.() ?? runConcepts();
+}
+
+// ---------- 키워드: 노드 하나 = 키워드, 그 안에 개념 여러 개 ----------
+async function runKeywords(quiet = false) {          // quiet: 검색어를 치는 중에는 입력칸을 다시 그리지 않는다
+  const text = currentText();
+  const own = S.kscope === "note";
+  if (own && !text.trim()) { S.kw = null; return render(); }
+  const r = ++S.run;
+  if (!quiet) { S.kw = "loading"; render(); }
+  const body = { minConfidence: S.thr, q: S.kq, minPages: S.kmulti ? 2 : 1, limit: 80,
+                 ...(own ? (S.note === FREE ? { text } : { noteId: S.note }) : {}) };
+  try {
+    const res = await fetch("/dev/keywords", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (r !== S.run) return;
+    S.kw = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+  } catch (e) { if (r === S.run) S.kw = { error: String(e) }; }
+  render();
+}
+function keywordCard(k) {
+  const mine = (c) => c.note === S.note;
+  const aliases = k.aliases.length ? ` <span class="alias">${esc(k.aliases.slice(0, 4).join(" · "))}${k.aliases.length > 4 ? " …" : ""}</span>` : "";
+  return `<div class="card kw"><div class="cardHead"><b>${esc(k.name)}${aliases}</b>
+      <span class="path">페이지 ${k.pages} · 개념 ${k.concepts.length}</span></div>
+    <ul class="steps">${k.concepts.map((c) => `<li class="${mine(c) ? "cur" : ""}">
+      <button class="linkBtn" data-open="${esc(c.note)}" title="${esc(c.note)}">${esc(shortTitle(c.note, 34))}</button>
+      <span class="path">${c.confidence == null ? "" : `신뢰도 ${c.confidence.toFixed(2)}`}</span>
+      <div class="quote">${esc(c.explanation)}</div></li>`).join("")}</ul></div>`;
+}
+function keywordsView(source) {
+  const K = S.kw, own = S.kscope === "note";
+  const tools = `<div class="scope" role="group" aria-label="범위">
+      <button data-kscope="note" aria-pressed="${own}">이 노트의 키워드</button>
+      <button data-kscope="all" aria-pressed="${!own}">전체 키워드</button></div>
+    <div class="kwTools"><input type="search" id="kq" placeholder="키워드 검색" value="${esc(S.kq)}" autocomplete="off">
+      <label><input type="checkbox" id="kmulti" ${S.kmulti ? "checked" : ""}>둘 이상의 페이지에 걸친 것만</label></div>`;
+  let out = tools;
+  if (K === "loading" || !K) out += `<p class="count"><span class="spin"></span>실행 중…</p>`;
+  else if (K.error) out += `<p class="error">${esc(K.error)}</p>`;
+  else out += `<p class="count">키워드 ${K.total}개${K.total > K.keywords.length ? ` 중 ${K.keywords.length}개` : ""} (노트 ${K.notes}개 전체 ${K.all}개)
+      · 같은 표기·별칭으로 묶은 후보다. 표기가 같아도 뜻이 다른 개념이 섞일 수 있다 · ${K.ms}ms</p>
+      ${K.keywords.map(keywordCard).join("") || `<p class="empty">조건에 맞는 키워드가 없다.</p>`}`;
+  return `<div class="col">${own ? `<h1>${esc(name(S.note))}</h1>${S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : ""}` : ""}${out}</div>`;
+}
 
 async function runSuggest() {
   const text = currentText();
@@ -279,8 +330,6 @@ async function runLinks() {
 }
 
 // ---------- 관계 연결 그래프 ----------
-const TYPE_KO = { is_a: "종류", part_of: "구성", causes: "원인", requires: "필요", used_for: "용도",
-                  contrasts_with: "대비", example_of: "예시", analogous_to: "유사" };
 const scopeToggle = () => `<div class="scope" role="group" aria-label="범위">
   <button data-scope="note" aria-pressed="${S.scope === "note"}">이 노트</button>
   <button data-scope="all" aria-pressed="${S.scope === "all"}">전체 문서</button></div>`;
@@ -410,7 +459,7 @@ function graphSvg(L) {
 
 function edgePanel(L) {
   const e = L.edges.find((x) => edgeKey(x) === S.edge);
-  if (!e) return `<p class="empty">선을 누르면 두 노트가 어떻게 이어지는지 여기에 나온다.</p>`;
+  if (!e) return `<p class="empty">선을 누르면 두 노트가 어떤 키워드를 같이 쓰는지 여기에 나온다.</p>`;
   return edgeDetail(e, L.center);
 }
 
@@ -420,18 +469,10 @@ function edgeDetail(e, center) {
       <b>${esc(b.labelA === b.labelB ? b.labelA : `${b.labelA} = ${b.labelB}`)}</b>
       <p class="note">${esc(A)}</p><div class="quote">${esc(b.quoteA || "—")}</div>
       <p class="note">${esc(B)}</p><div class="quote">${esc(b.quoteB || "—")}</div></div>`).join("");
-  const chains = e.paths.map((p) => {
-    const [s1, s2] = p.steps;
-    const step = (st) => `<div class="chain">${esc(st.from)} <span class="rule">${esc(TYPE_KO[st.type] || st.type)}</span> ${esc(st.to)}
-        <p class="note">${esc(shortTitle(st.note, 28))}</p>${st.quote ? `<div class="quote">${esc(st.quote)}</div>` : ""}</div>`;
-    return `<div class="card" style="padding:10px 12px">${step(s1)}${step(s2)}
-      <p class="note">→ <b>${esc(s1.from)}</b> 와 <b>${esc(s2.to)}</b> ${p.rule ? `<span class="rule yes">${esc(TYPE_KO[p.rule] || p.rule)}</span>` : `<span class="rule">규칙 없음</span>`}</p></div>`;
-  }).join("");
   return `<h3>${esc(A)} ↔ ${esc(B)}</h3>
     <p class="note">연결 점수 ${e.score} · ${center ? `<button class="linkBtn" data-open="${esc(e.a === center ? e.b : e.a)}">이 노트로 →</button>`
       : `<button class="linkBtn" data-focus="${esc(e.a)}">${esc(shortTitle(e.a, 14))} 중심으로 →</button> · <button class="linkBtn" data-focus="${esc(e.b)}">${esc(shortTitle(e.b, 14))} 중심으로 →</button>`}</p>
-    <h4>함께 다루는 개념 ${e.bridges.length}</h4>${concepts}
-    ${chains ? `<h4>두 노트를 가로지르는 관계 ${e.paths.length}</h4>${chains}` : `<h4>두 노트를 가로지르는 관계</h4><p class="note">한 노트의 관계가 다른 노트의 관계로 이어지는 곳은 없다.</p>`}`;
+    <h4>같은 키워드 ${e.bridges.length}</h4>${concepts}`;
 }
 
 // ---------- 전체 문서 그래프 ----------
@@ -595,6 +636,17 @@ function render() {
     }
     body.innerHTML = `<div class="col">${head}${out}</div>`;
     body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+  } else if (S.mode === "keywords") {
+    body.className = "body single";
+    body.innerHTML = keywordsView(source);
+    body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+    body.querySelectorAll("[data-kscope]").forEach((b) => b.addEventListener("click", () => { S.kscope = b.dataset.kscope; run(); }));
+    $("#kmulti")?.addEventListener("change", (e) => { S.kmulti = e.target.checked; run(); });
+    let kt;
+    $("#kq")?.addEventListener("input", (e) => {
+      S.kq = e.target.value; clearTimeout(kt);
+      kt = setTimeout(async () => { await runKeywords(true); const q = $("#kq"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }, 300);
+    });
   } else if (S.mode === "links" && S.scope === "all") {
     const G = S.all, toggle = scopeToggle();
     if (!G || G === "loading" || G.error) {
@@ -603,7 +655,7 @@ function render() {
     } else {
       body.className = "body";
       body.innerHTML = `<div class="col">${toggle}
-          <p class="count">노트 ${G.nodes.length}개 · 노트마다 가장 강한 연결 3개를 선으로 · 신뢰도 ${S.thr.toFixed(2)} 이상인 개념만 · 맨 아래 줄은 연결이 없는 노트 · 점을 끌어 옮길 수 있다</p>
+          <p class="count">노트 ${G.nodes.length}개 · 같은 키워드로 이어진 노트끼리 선 하나 (노트마다 가장 강한 3개) · 신뢰도 ${S.thr.toFixed(2)} 이상인 개념만 · 맨 아래 줄은 연결이 없는 노트 · 점을 끌어 옮길 수 있다</p>
           <div class="graphWrap allWrap">${allSvg(G)}</div></div><div class="col side">${allPanel(G)}</div>`;
       bindPanZoom(body.querySelector(".allWrap svg"));
       attachSim(body.querySelector(".allWrap svg"), G.sim);
@@ -628,7 +680,7 @@ function render() {
       body.className = "body";
       const lonely = L.nodes.length < 2;
       body.innerHTML = `<div class="col">${scopeToggle()}${head}${S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : ""}
-          <p class="count">이어진 노트 ${L.nodes.length - 1}개 · 선 ${L.edges.length}개 · 선을 누르면 두 노트가 어떻게 이어지는지 보여 준다. 노트를 누르면 가운데로 옮기고, 끌면 자리를 옮긴다.</p>
+          <p class="count">같은 키워드로 이어진 노트 ${L.nodes.length - 1}개 · 선 ${L.edges.length}개 · 두 노트가 같은 키워드에 개념을 넣으면 선 하나로 잇는다. 선을 누르면 그 키워드와 양쪽 설명을 보여 준다. 노트를 누르면 가운데로 옮기고, 끌면 자리를 옮긴다.</p>
           ${lonely ? `<p class="empty">이어진 노트가 없다. 기준을 낮춰 본다.</p>` : `<div class="graphWrap">${graphSvg(L)}</div>`}</div>
         <div class="col side">${edgePanel(L)}</div>`;
       if (!lonely) attachSim(body.querySelector(".graphWrap svg"), L.sim);
