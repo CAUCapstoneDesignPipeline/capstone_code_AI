@@ -4,7 +4,7 @@
 느슨한 표기 키). 이 기준은 후보일 뿐이다: 표기가 같아도 뜻이 다른 것 ("DP" = Dynamic Programming / Decision Problem) 은
 구분하지 못한다. 같은 뜻인지 확정하는 일은 /merge-decisions 몫이라 이 묶음에는 들어 있지 않다.
 같은 노트의 두 개념이 서로 별칭이 아니면 하나로 묶지 않는다 (한 노트가 같은 말을 서로 다른 뜻으로 쓰지는 않는다).
-개념의 설명은 노트에서 그 개념이 나오는 문장(정의문 우선)이고, 소스는 그 문장의 위치다.
+개념의 설명은 노트에서 그 개념을 풀어 쓴 문장 하나(Describer)이고, 소스는 그 문장의 위치다.
 """
 
 from collections import Counter, defaultdict
@@ -12,6 +12,7 @@ from collections.abc import Callable
 
 from app.schemas.common import Span
 from app.schemas.knowledge import Concept, Keyword, PageSource
+from app.services.concepts.describe import Describer
 from app.services.concepts.markdown import Utf16Index
 
 from .corpus import Corpus
@@ -82,13 +83,16 @@ def build_keywords(corpus: Corpus, note_uuid: Callable[[str], str], uuid_of: Cal
         clusters[groups.find(x)].append(x)
 
     indexes: dict[str, Utf16Index] = {}
+    describers: dict[str, Describer] = {}
     out, meta = [], {}
     for members in clusters.values():
         concepts, labels = [], Counter()
         seen_spans: set[tuple[str, int, int]] = set()
         for nid, c in sorted(members, key=lambda m: (-notes[m[0]].weights[m[1]], m)):
             e = notes[nid]
-            span = corpus.sentence_with(nid, c)
+            if nid not in describers:
+                describers[nid] = Describer(e.text)
+            span = describers[nid].of(e.spans.get(c, []))
             if span is None:
                 continue
             raw = e.text[span[0]:span[1]]

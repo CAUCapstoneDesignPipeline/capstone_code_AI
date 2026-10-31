@@ -198,3 +198,24 @@ def test_keyword_groups_never_merge_unrelated_concepts_of_one_note():
     ok = lambda x, y: False                                   # n1 의 두 개념은 서로 별칭이 아니다
     assert g.union(a, c, ok) and g.find(a) == g.find(c)
     assert not g.union(b, c, ok) and g.find(b) != g.find(c)   # c 는 이미 a 와 한 묶음이라 b 와는 합칠 수 없다
+
+
+def test_extract_keywords_with_descriptions(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    for name, body in NET_NOTES.items():
+        (tmp_path / f"{name}.md").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        r = c.post("/dev/extract", json={"noteId": "TCP"}).json()
+        by = {k["label"]: k for k in r["keywords"]}
+        assert "혼잡 제어" in by and all(0 <= k["confidence"] <= 1 and k["mentions"] for k in r["keywords"])
+        body = (tmp_path / "TCP.md").read_text(encoding="utf-8")
+        d = by["혼잡 제어"]["description"]
+        assert d["text"] and body[d["startOffset"]:d["endOffset"]] == d["text"]          # 설명은 원문 구간이다
+        assert "혼잡 제어" in d["text"]
+        pasted = c.post("/dev/extract", json={"text": "**WAL**은 쓰기 전에 로그를 먼저 기록하는 방식이다. 체크포인트가 있다."}).json()
+        assert pasted["note"] == dev.FREE_ID
+        assert next(k for k in pasted["keywords"] if k["label"] == "WAL")["description"]["text"].startswith("**WAL**은")
+        assert c.post("/dev/extract", json={"noteId": "nope"}).status_code == 404
+        assert c.post("/dev/extract", json={"text": " "}).status_code == 400

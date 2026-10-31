@@ -5,6 +5,7 @@
   GET /dev/notes         노트 폴더(AI_NOTES_DIR, 기본 data/private/notes)의 노트 id 목록
   GET /dev/notes/{id}    노트 원문 (NFC)
   GET /dev/index         노트 전체 색인을 미리 만든다 (노트 사이 연결용)
+  POST /dev/extract      {noteId?, text?} 노트 하나의 키워드와 키워드마다 설명 (결정적)
   POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
@@ -253,6 +254,59 @@ async def links(q: LinksQuery, request: Request):
                         for b in l.bridges],
         } for l in result],
     }
+
+
+# ---- 키워드와 설명 추출 (노트 하나) ----
+
+class ExtractQuery(BaseModel):
+    noteId: str | None = None
+    text: str | None = None
+
+
+def _extract_note(state, note_id: str, text: str) -> list[dict]:
+    from app.api.v1.extract import concept_label, select_concepts
+    from app.services.concepts.describe import Describer
+    from app.services.concepts.markdown import Utf16Index
+    from app.services.relations.extract import _py_offsets
+
+    profile = EXTRACT_PROFILES[EXTRACT_PROFILE]
+    with state.kiwi_lock:
+        selected = select_concepts(state.extractor.extract(note_id, text), profile)
+    py: dict[str, list[tuple[int, int]]] = {}
+    for o in _py_offsets(text, selected):
+        py.setdefault(o.key, []).append((o.start, o.end))
+    describer, u16 = Describer(text), Utf16Index(text)
+    out = []
+    for key, ms in selected.items():
+        span = describer.of(py.get(key, []))
+        out.append({
+            "ref": key, "label": concept_label(ms), "confidence": round(min(ms[0].score, 2.0) / 2.0, 4),   # /extract 와 같다
+            "mentions": [{"startOffset": m.span.start, "endOffset": m.span.end} for m in ms],
+            "description": None if span is None else {"text": text[span[0]:span[1]],
+                                                      "startOffset": u16(span[0]), "endOffset": u16(span[1])},
+        })
+    return out
+
+
+@router.post("/extract")
+async def extract_keywords(q: ExtractQuery, request: Request):
+    """노트 하나에서 키워드(개념 후보)와 키워드마다 설명(원문 문장 하나)을 뽑는다. 키워드·신뢰도는 /extract 와 같은 추출기·profile 이고
+    (LLM 필터 없음), 설명은 app/services/concepts/describe.py 가 고른다. LLM 호출 없음."""
+    state = request.app.state
+    if state.extractor is None:
+        raise HTTPException(503, "추출기가 준비되지 않았다")
+    if q.text is not None:
+        if not q.text.strip() or len(q.text) > 50000:
+            raise HTTPException(400, "글이 비었거나 50,000자를 넘는다")
+        note_id, text = FREE_ID, _nfc(q.text)
+    else:
+        path = _note_paths().get(_nfc(q.noteId or ""))
+        if path is None:
+            raise HTTPException(404, "노트를 찾지 못했다")
+        note_id, text = _nfc(q.noteId), _nfc(path.read_text(encoding="utf-8"))
+    t0 = time.monotonic()
+    keywords = await run_in_threadpool(_extract_note, state, note_id, text)
+    return {"note": note_id, "keywords": keywords, "ms": int((time.monotonic() - t0) * 1000)}
 
 
 # ---- 키워드 (노드) 와 개념 ----
