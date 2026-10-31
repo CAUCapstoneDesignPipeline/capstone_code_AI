@@ -219,3 +219,31 @@ def test_extract_keywords_with_descriptions(tmp_path, monkeypatch):
         assert next(k for k in pasted["keywords"] if k["label"] == "WAL")["description"]["text"].startswith("**WAL**은")
         assert c.post("/dev/extract", json={"noteId": "nope"}).status_code == 404
         assert c.post("/dev/extract", json={"text": " "}).status_code == 400
+
+
+def test_keyword_graph_links_keywords_named_in_one_sentence(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    for name, body in {**NET_NOTES, "회귀": "# 회귀\n\n선형 회귀는 오차를 줄인다.\n"}.items():
+        (tmp_path / f"{name}.md").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        g = c.post("/dev/keyword-graph", json={"noteId": "TCP", "scope": "note"}).json()
+        titles = {n["id"]: n["title"] for n in g["nodes"]}
+        assert g["mine"] >= 1 and g["mineLinked"] >= 1 and g["edges"]
+        for e in g["edges"]:
+            assert e["a"] in titles and e["b"] in titles and e["sentences"] >= 1 and e["score"] > 0
+            assert all(v["quote"] and v["note"] in ("TCP", "전송 계층") for v in e["evidence"])
+        assert all(n["concepts"] and n["title"] for n in g["nodes"])
+        assert any(n["inNote"] for n in g["nodes"])
+        pair = {tuple(sorted((titles[e["a"]], titles[e["b"]]))): e for e in g["edges"]}
+        tcp_class = pair[("TCP", "전송 프로토콜")]                       # "TCP는 전송 프로토콜의 일종이다." 한 문장에 둘만
+        assert "TCP" in tcp_class["evidence"][0]["quote"] and "전송 프로토콜" in tcp_class["evidence"][0]["quote"]
+        assert ("TCP", "혼잡 제어") in pair and ("UDP", "전송 프로토콜") in pair
+        crowded = pair[("TCP", "포트 번호")]                            # "TCP와 UDP는 … 포트 번호를 담는다." 키워드 셋이 한 문장 → 선이 약하다
+        assert crowded["score"] < tcp_class["score"]
+        every = c.post("/dev/keyword-graph", json={"noteId": "TCP", "scope": "all"}).json()
+        assert every["scope"] == "all" and all(n["pages"] >= 2 for n in every["nodes"])
+        assert c.post("/dev/keyword-graph", json={"scope": "note"}).status_code == 400
+        assert c.post("/dev/keyword-graph", json={"noteId": "nope"}).status_code == 404
+        assert c.post("/dev/keyword-graph", json={"noteId": "TCP", "scope": "x"}).status_code == 400

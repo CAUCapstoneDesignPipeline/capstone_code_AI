@@ -11,7 +11,7 @@
 """
 
 from .corpus import Corpus, build_corpus, build_entry, loose_key
-from .keywords import build_keywords
+from .keywords import build_keyword_graph, build_keywords
 from .linker import Bridge, Link, related_notes
 
-__all__ = ["Bridge", "Corpus", "Link", "build_corpus", "build_entry", "build_keywords", "loose_key", "related_notes"]
+__all__ = ["Bridge", "Corpus", "Link", "build_corpus", "build_entry", "build_keyword_graph", "build_keywords", "loose_key", "related_notes"]

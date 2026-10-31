@@ -9,6 +9,7 @@
 
 from collections import Counter, defaultdict
 from collections.abc import Callable
+from itertools import combinations
 
 from app.schemas.common import Span
 from app.schemas.knowledge import Concept, Keyword, PageSource
@@ -20,6 +21,7 @@ from .corpus import Corpus
 MAX_ALIASES = 50
 MAX_EXPLANATION = 2000
 MAX_OFFSET = 100000          # Span 의 위치 한도
+MAX_KEYWORDS_PER_SENTENCE = 8
 
 
 class _Groups:
@@ -57,6 +59,40 @@ def build_keywords(corpus: Corpus, note_uuid: Callable[[str], str], uuid_of: Cal
     """(키워드들, conceptId → {note: 노트 이름, confidence}). 키워드는 노트 수, 개념 수 순으로 정렬한다.
     note_uuid: 노트 이름 → 노트 id (UUID). uuid_of(*parts): 안정적인 UUID (app.client.uid).
     min_confidence: 이 신뢰도 이상인 개념만 쓴다."""
+    out, meta, _, _ = _build(corpus, note_uuid, uuid_of, min_confidence)
+    return out, meta
+
+
+def build_keyword_graph(corpus: Corpus, note_uuid: Callable[[str], str], uuid_of: Callable[..., str],
+                        min_confidence: float = 0.0) -> tuple[list[Keyword], dict[str, dict], dict[tuple[str, str], dict]]:
+    """build_keywords + 키워드 사이 연결. 연결 = 같은 문장에 두 키워드가 같이 나온 것 (한 문장에 키워드 8개 넘게 나오는 나열은 뺀다).
+    edges: (keywordId, keywordId) 정렬 쌍 → {score, pages, evidence: [(노트 이름, 문장 위치)]}.
+    score = 문장마다 1 / (그 문장에 나온 키워드 수 - 1) 의 합: 두 키워드만 말하는 문장이 여럿 키워드를 늘어놓은 문장보다 세다."""
+    out, meta, member_of, describers = _build(corpus, note_uuid, uuid_of, min_confidence)
+    per_sentence: dict[tuple[str, int], set[str]] = defaultdict(set)
+    for (nid, c), kid in member_of.items():
+        d = describers[nid] if nid in describers else describers.setdefault(nid, Describer(corpus.notes[nid].text))
+        for a, b in corpus.notes[nid].spans.get(c, []):
+            i = d.containing(a, b)
+            if i is not None:
+                per_sentence[(nid, i)].add(kid)
+    edges: dict[tuple[str, str], dict] = {}
+    for (nid, i), kids in sorted(per_sentence.items()):
+        if not 2 <= len(kids) <= MAX_KEYWORDS_PER_SENTENCE:
+            continue
+        sent = describers[nid].sents[i]
+        for x, y in combinations(sorted(kids), 2):
+            e = edges.setdefault((x, y), {"score": 0.0, "pages": set(), "evidence": []})
+            e["score"] += 1 / (len(kids) - 1)
+            e["pages"].add(nid)
+            e["evidence"].append((nid, sent))
+    for e in edges.values():
+        e["score"] = round(e["score"], 4)
+        e["pages"] = len(e["pages"])
+    return out, meta, edges
+
+
+def _build(corpus: Corpus, note_uuid: Callable[[str], str], uuid_of: Callable[..., str], min_confidence: float):
     notes = corpus.notes
     groups = _Groups()
     by_id: dict[str, list[tuple[str, str]]] = defaultdict(list)
@@ -84,7 +120,7 @@ def build_keywords(corpus: Corpus, note_uuid: Callable[[str], str], uuid_of: Cal
 
     indexes: dict[str, Utf16Index] = {}
     describers: dict[str, Describer] = {}
-    out, meta = [], {}
+    out, meta, member_of = [], {}, {}
     for members in clusters.values():
         concepts, labels = [], Counter()
         seen_spans: set[tuple[str, int, int]] = set()
@@ -116,7 +152,9 @@ def build_keywords(corpus: Corpus, note_uuid: Callable[[str], str], uuid_of: Cal
             continue
         name = sorted(labels, key=lambda s: (-labels[s], len(s), s))[0]
         aliases = [s for s in sorted(labels, key=lambda s: (-labels[s], s)) if s != name][:MAX_ALIASES]
-        out.append(Keyword(keywordId=uuid_of("keyword", *sorted(members)[0]), name=name, aliases=aliases,
-                           concepts=concepts[:500]))
+        kid = uuid_of("keyword", *sorted(members)[0])
+        out.append(Keyword(keywordId=kid, name=name, aliases=aliases, concepts=concepts[:500]))
+        for m in members:                                        # 설명이 없어 개념으로 못 넣은 언급도 이 키워드의 것이다
+            member_of[m] = kid
     out.sort(key=lambda k: (-len(k.note_ids()), -len(k.concepts), k.name))
-    return out, meta
+    return out, meta, member_of, describers

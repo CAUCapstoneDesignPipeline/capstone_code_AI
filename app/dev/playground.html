@@ -97,7 +97,9 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .gNode { cursor: pointer; }
 .gNode text { fill: var(--ink); font-size: 13px; }
 .gLabel { fill: var(--muted); font-size: 11px; pointer-events: none; }
+.scopes { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 10px; }
 .scope { display: inline-flex; gap: 4px; margin: 0 0 10px; }
+.scopes .scope { margin: 0; }
 .scope button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 12px; font-size: 13px; color: var(--muted); }
 .scope button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .allWrap svg { cursor: grab; touch-action: none; }
@@ -124,6 +126,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .kwTools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
 .kwTools input[type="search"] { border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; background: var(--bg); min-width: 180px; }
 .kwTools label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.alias { color: var(--muted); font-size: 12px; font-weight: 400; }
 .kw .alias { color: var(--muted); font-size: 12px; font-weight: 400; }
 .kw .cardHead b { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .kw li .quote { border-left-color: var(--line); }
@@ -155,7 +158,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
       <div class="api" role="group" aria-label="API">
         <button data-mode="concepts" aria-pressed="false" title="이 노트에서 키워드와 키워드마다 설명(원문 문장)을 뽑는다">키워드 및 설명 추출</button>
         <button data-mode="keywords" aria-pressed="false" title="노드 = 키워드, 그 안에 개념(설명 + 소스 페이지)">키워드</button>
-        <button data-mode="links" aria-pressed="false" title="같은 키워드에 개념을 넣은 두 페이지를 선 하나로 잇는다">문서 연결</button>
+        <button data-mode="links" aria-pressed="false" title="키워드가 어떻게 이어져 있는지 보여 준다 (노드 = 키워드, 선 = 같은 문장에 같이 나옴). 문서 노드로도 볼 수 있다">문서 연결</button>
         <button data-mode="suggest" aria-pressed="false" title="두 노트의 관계를 이어 합성 규칙으로 만드는 이전 방식. 키워드 개념 + 외부 지식 방식은 아직 없다">지식 제안 (이전 방식)</button>
       </div>
       <label class="thr">유효 키워드 신뢰도 ≥
@@ -171,7 +174,8 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const FREE = "\u0000free";
 const S = { cfg: null, notes: [], note: null, text: "", free: "", mode: null, thr: 0.35, concepts: null, links: null, sel: null, edge: null, run: 0,
             scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 },
-            kw: null, kq: "", kscope: "note", kmulti: false };
+            kw: null, kq: "", kscope: "note", kmulti: false,
+            glens: "keywords", kg: null, kgSel: null, kgEdge: null };
 const name = (id) => (id === FREE ? "직접 입력" : id);
 const valid = (c) => c.confidence >= S.thr;
 
@@ -195,7 +199,7 @@ $("#search").addEventListener("input", renderNotes);
 
 async function openNote(id) {
   if (S.note === FREE) S.free = $("#free")?.value ?? S.free;
-  S.note = id; S.concepts = null; S.links = null; S.suggest = null; S.kw = null; S.sel = null;
+  S.note = id; S.concepts = null; S.links = null; S.suggest = null; S.kw = null; S.kg = null; S.kgSel = null; S.kgEdge = null; S.sel = null;
   S.text = id === FREE ? S.free : (await (await fetch("/dev/notes/" + encodeURIComponent(id))).json()).body;
   renderNotes(); render();
 }
@@ -222,7 +226,8 @@ $("#thr").addEventListener("input", (e) => {
 });
 
 function run() {
-  return ({ links: () => (S.scope === "all" ? runAll() : runLinks()), suggest: runSuggest, keywords: runKeywords })[S.mode]?.() ?? runConcepts();
+  const links = () => (S.glens === "keywords" ? runKg() : S.scope === "all" ? runAll() : runLinks());
+  return ({ links, suggest: runSuggest, keywords: runKeywords })[S.mode]?.() ?? runConcepts();
 }
 
 // ---------- 키워드: 노드 하나 = 키워드, 그 안에 개념 여러 개 ----------
@@ -318,9 +323,123 @@ async function runLinks() {
 }
 
 // ---------- 관계 연결 그래프 ----------
-const scopeToggle = () => `<div class="scope" role="group" aria-label="범위">
+const scopeToggle = () => `<div class="scopes"><div class="scope" role="group" aria-label="노드">
+  <button data-lens="keywords" aria-pressed="${S.glens === "keywords"}" title="노드 = 키워드, 선 = 같은 문장에 같이 나옴">키워드 노드</button>
+  <button data-lens="pages" aria-pressed="${S.glens === "pages"}" title="노드 = 문서, 선 = 같은 키워드에 개념을 넣음">문서 노드</button></div>
+  <div class="scope" role="group" aria-label="범위">
   <button data-scope="note" aria-pressed="${S.scope === "note"}">이 노트</button>
-  <button data-scope="all" aria-pressed="${S.scope === "all"}">전체 문서</button></div>`;
+  <button data-scope="all" aria-pressed="${S.scope === "all"}">전체 ${S.glens === "keywords" ? "키워드" : "문서"}</button></div></div>`;
+$("#body").addEventListener("click", (e) => {                       // 노드 종류 바꾸기 (그래프를 다시 그려도 붙어 있게 body 에 건다)
+  const b = e.target.closest("[data-lens]");
+  if (b && b.dataset.lens !== S.glens) { S.glens = b.dataset.lens; run(); }
+});
+
+// ---------- 키워드 연결 그래프: 노드 = 키워드, 선 = 같은 문장에 같이 나온 키워드 ----------
+async function runKg() {
+  const text = currentText();
+  if (!text.trim() && S.scope === "note") { S.kg = null; return render(); }
+  const r = ++S.run;
+  S.kg = "loading"; S.kgSel = null; S.kgEdge = null; render();
+  const body = { scope: S.scope, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
+  try {
+    const res = await fetch("/dev/keyword-graph", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (r !== S.run) return;
+    S.kg = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+    S.view = { x: 0, y: 0, k: 1 };
+  } catch (e) { if (r === S.run) S.kg = { error: String(e) }; }
+  render();
+}
+
+function kgSvg(K) {
+  const own = K.scope === "note", W = own ? 760 : 1000, H = own ? 540 : 720;
+  if (!K.sim) {
+    const iso = K.nodes.filter((v) => !v.degree), isoIdx = {};
+    iso.forEach((v, i) => { isoIdx[v.id] = i; });
+    K.sim = makeSim(K.nodes, K.edges, {
+      W, H, charge: own ? 420 : 60, spring: 0.6, gravity: own ? 0.05 : 0.03,
+      len: (s) => (own ? 140 - 70 * s : 50 - 20 * s),
+      radius: (v) => (own ? 16 : 6) + 1.8 * Math.sqrt(v.degree),
+      start: (v, i) => {
+        if (v.id in isoIdx) {                                                    // 이 화면에서 연결 없는 키워드는 맨 아래 줄에 고정
+          const x = 40 + (W - 80) * (isoIdx[v.id] + 0.5) / iso.length;
+          return [x, H - 25, x, H - 25];
+        }
+        const r = (own ? 60 : 27) * Math.sqrt(i + 1), t = i * 2.39996;
+        return [W / 2 + r * Math.cos(t), (H - 60) / 2 + r * Math.sin(t) * 0.75];
+      },
+    });
+    K.sim.N.forEach((v) => { if (v.fx != null) v.pinned = true; });
+    K.sim.o.H = H - 50;
+  }
+  const max = Math.max(...K.edges.map((e) => e.score), 1e-9);
+  const sel = S.kgSel, nb = new Set();
+  if (sel) K.edges.forEach((e) => { if (e.a === sel) nb.add(e.b); if (e.b === sel) nb.add(e.a); });
+  const title = Object.fromEntries(K.nodes.map((n) => [n.id, n.title]));
+  const top = new Set([...K.nodes].sort((x, y) => y.degree - x.degree).slice(0, own ? 99 : 14).map((v) => v.id));
+  const lines = K.edges.map((e) => {
+    const k = edgeKey(e), touch = sel && (e.a === sel || e.b === sel);
+    const cls = k === S.kgEdge ? " on" : touch ? " hl" : sel ? " dim" : "";
+    const ab = `data-la="${esc(e.a)}" data-lb="${esc(e.b)}"`;
+    return `<line class="aEdge${cls}" ${ab} stroke-width="${(0.8 + 4.5 * e.score / max).toFixed(1)}"/>
+      <line class="gHit" data-aedge="${esc(k)}" ${ab}><title>${esc(title[e.a])} ↔ ${esc(title[e.b])} · 같은 문장 ${e.sentences}번</title></line>`;
+  }).join("");
+  const nodes = K.nodes.map((v) => {
+    const r = (own ? 8 : 4) + 1.6 * Math.sqrt(v.degree);
+    const cls = v.id === sel ? " sel" : v.inNote ? " cur" : sel && !nb.has(v.id) ? " dim" : "";
+    const show = v.id === sel || nb.has(v.id) || v.inNote || top.has(v.id);
+    return `<g class="aNode${cls}" data-anode="${esc(v.id)}" data-pid="${esc(v.id)}"><title>${esc(v.title)} · 페이지 ${v.pages} · 연결 ${v.degree}</title>
+      <circle r="${r.toFixed(1)}"/>${show ? `<text y="${(-r - 4).toFixed(1)}" text-anchor="middle">${esc(shortTitle(v.title, 16))}</text>` : ""}</g>`;
+  }).join("");
+  const { x, y, k } = S.view;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="키워드 연결 그래프"><g id="vp" transform="translate(${x} ${y}) scale(${k})">${lines}${nodes}</g></svg>`;
+}
+
+function kgConcepts(n) {
+  return n.concepts.map((c) => `<div class="card" style="padding:8px 12px"><button class="linkBtn" data-open="${esc(c.note)}">${esc(shortTitle(c.note, 34))}</button>
+    <div class="quote">${esc(c.explanation.replace(/\*\*|__/g, ""))}</div></div>`).join("");
+}
+
+function kgPanel(K) {
+  const t = Object.fromEntries(K.nodes.map((n) => [n.id, n]));
+  const e = S.kgEdge && K.edges.find((x) => edgeKey(x) === S.kgEdge);
+  if (e) {
+    const A = t[e.a], B = t[e.b];
+    return `<h3>${esc(A.title)} ↔ ${esc(B.title)}</h3>
+      <p class="note">같은 문장에 ${e.sentences}번 · 페이지 ${e.pages}개 · 연결 점수 ${e.score}
+        · <button class="linkBtn" data-ksel="${esc(A.id)}">${esc(shortTitle(A.title, 12))}</button> · <button class="linkBtn" data-ksel="${esc(B.id)}">${esc(shortTitle(B.title, 12))}</button></p>
+      <h4>두 키워드가 함께 나온 문장${e.sentences > e.evidence.length ? ` (${e.evidence.length}개만)` : ""}</h4>
+      ${e.evidence.map((v) => `<div class="card" style="padding:8px 12px"><button class="linkBtn" data-open="${esc(v.note)}">${esc(shortTitle(v.note, 34))}</button>
+        <div class="quote">${esc(v.quote.replace(/\*\*|__/g, ""))}</div></div>`).join("")}
+      <details><summary>${esc(A.title)} 의 개념</summary>${kgConcepts(A)}</details>
+      <details><summary>${esc(B.title)} 의 개념</summary>${kgConcepts(B)}</details>`;
+  }
+  const n = S.kgSel && t[S.kgSel];
+  if (n) {
+    const mine = K.edges.filter((x) => x.a === n.id || x.b === n.id).sort((x, y) => y.score - x.score);
+    return `<h3>${esc(n.title)}${n.aliases.length ? ` <span class="alias">${esc(n.aliases.join(" · "))}</span>` : ""}</h3>
+      <p class="note">페이지 ${n.pages} · 이 화면에서 연결 ${mine.length}</p>
+      <h4>이어진 키워드 (눌러서 근거 보기)</h4>
+      <ul class="list2">${mine.map((x) => { const o = t[x.a === n.id ? x.b : x.a]; return `<li><button data-kedge="${esc(edgeKey(x))}">${esc(shortTitle(o.title, 26))}<small>${x.sentences}번</small></button></li>`; }).join("") || `<li class="note">이 화면에서는 이어진 키워드가 없다.</li>`}</ul>
+      <h4>개념 ${n.concepts.length}</h4>${kgConcepts(n)}`;
+  }
+  return `<p class="empty">점(키워드)이나 선을 누른다. 휠로 확대, 끌어서 이동한다.</p>`;
+}
+
+function kgView(source) {
+  const K = S.kg, toggle = scopeToggle(), head = S.scope === "note" ? `<h1>${esc(name(S.note))}</h1>` : "";
+  if (!K || K === "loading" || K.error) {
+    return `<div class="col">${toggle}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
+      ${K === "loading" ? `<p class="count"><span class="spin"></span>실행 중…</p>` : K?.error ? `<p class="error">${esc(K.error)}</p>` : ""}</div>`;
+  }
+  const info = K.scope === "note"
+    ? `이 노트의 키워드 ${K.mine}개 중 ${K.mineLinked}개가 다른 키워드와 같은 문장에 나온다 · 강조한 점 = 이 노트의 키워드, 회색 = 다른 페이지에서 이어진 키워드`
+    : `전체 키워드 ${K.keywords}개 중 ${K.linkedKeywords}개가 이어져 있다 · 둘 이상의 페이지에 걸치고 연결이 센 ${K.nodes.length}개만 그린다`;
+  return `<div class="col">${toggle}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
+      <p class="count">${info} · 선 = 같은 문장에 같이 나옴 (${K.edges.length}개) · 신뢰도 ${S.thr.toFixed(2)} 이상 · ${K.ms}ms</p>
+      ${K.nodes.length ? `<div class="graphWrap allWrap">${kgSvg(K)}</div>` : `<p class="empty">이어진 키워드가 없다. 기준을 낮춰 본다.</p>`}</div>
+    <div class="col side">${kgPanel(K)}</div>`;
+}
 const edgeKey = (e) => [e.a, e.b].sort().join("\u0001");
 const shortTitle = (id, n = 16) => {
   const t = (id === FREE ? "직접 입력" : id).replace(/\s+[0-9a-f]{32}$/, "");
@@ -556,7 +675,7 @@ async function loadEdge(key) {
 function bindPanZoom(svg) {
   const vp = svg.querySelector("#vp");
   const apply = () => vp.setAttribute("transform", `translate(${S.view.x} ${S.view.y}) scale(${S.view.k})`);
-  const toSvg = (ev) => { const r = svg.getBoundingClientRect(); return [(ev.clientX - r.left) * 1000 / r.width, (ev.clientY - r.top) * 720 / r.height]; };
+  const toSvg = (ev) => { const r = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal; return [(ev.clientX - r.left) * vb.width / r.width, (ev.clientY - r.top) * vb.height / r.height]; };
   svg.addEventListener("wheel", (ev) => {
     ev.preventDefault();
     const [mx, my] = toSvg(ev), f = ev.deltaY < 0 ? 1.15 : 1 / 1.15, k = Math.min(6, Math.max(0.5, S.view.k * f));
@@ -635,6 +754,23 @@ function render() {
       S.kq = e.target.value; clearTimeout(kt);
       kt = setTimeout(async () => { await runKeywords(true); const q = $("#kq"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }, 300);
     });
+  } else if (S.mode === "links" && S.glens === "keywords") {
+    const K = S.kg, ready = K && K !== "loading" && !K.error && K.nodes.length;
+    body.className = ready ? "body" : "body single";
+    body.innerHTML = kgView(source);
+    if (ready) {
+      bindPanZoom(body.querySelector(".allWrap svg"));
+      attachSim(body.querySelector(".allWrap svg"), K.sim);
+      body.querySelectorAll("[data-anode]").forEach((el) => el.addEventListener("click", () => {
+        if (wasDragged(el)) return;
+        S.kgSel = S.kgSel === el.dataset.anode ? null : el.dataset.anode; S.kgEdge = null; render();
+      }));
+      body.querySelectorAll("[data-aedge]").forEach((el) => el.addEventListener("click", () => { S.kgEdge = el.dataset.aedge; render(); }));
+    }
+    body.querySelectorAll("[data-kedge]").forEach((b) => b.addEventListener("click", () => { S.kgEdge = b.dataset.kedge; render(); }));
+    body.querySelectorAll("[data-ksel]").forEach((b) => b.addEventListener("click", () => { S.kgSel = b.dataset.ksel; S.kgEdge = null; render(); }));
+    body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+    body.querySelectorAll("[data-scope]").forEach((b) => b.addEventListener("click", () => { S.scope = b.dataset.scope; run(); }));
   } else if (S.mode === "links" && S.scope === "all") {
     const G = S.all, toggle = scopeToggle();
     if (!G || G === "loading" || G.error) {

@@ -6,6 +6,7 @@
   GET /dev/notes/{id}    노트 원문 (NFC)
   GET /dev/index         노트 전체 색인을 미리 만든다 (노트 사이 연결용)
   POST /dev/extract      {noteId?, text?} 노트 하나의 키워드와 키워드마다 설명 (결정적)
+  POST /dev/keyword-graph {noteId?, text?, scope, limit, minConfidence} 키워드 노드와 같은 문장에 같이 나온 연결 (결정적)
   POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
@@ -321,14 +322,14 @@ class KeywordsQuery(BaseModel):
 
 
 def _keyword_set(state, corpus, min_confidence: float):
-    """(키워드들, conceptId → {note, confidence}). 같은 색인·기준이면 만들어 둔 것을 다시 쓴다."""
+    """(키워드들, conceptId → {note, confidence}, 키워드 사이 연결). 같은 색인·기준이면 만들어 둔 것을 다시 쓴다."""
     from app.client import uid
-    from app.services.links import build_keywords
+    from app.services.links import build_keyword_graph
 
     cached = getattr(state, "keywords_cache", None)
     if cached and cached[0] is corpus and cached[1] == min_confidence:
         return cached[2]
-    built = build_keywords(corpus, lambda n: uid("note", n), uid, min_confidence)
+    built = build_keyword_graph(corpus, lambda n: uid("note", n), uid, min_confidence)
     state.keywords_cache = (corpus, min_confidence, built)
     return built
 
@@ -353,7 +354,7 @@ async def keywords(q: KeywordsQuery, request: Request):
     elif note_id is not None and note_id not in corpus.notes:
         raise HTTPException(404, "노트를 찾지 못했다")
     mc = max(0.0, min(q.minConfidence, 1.0))
-    all_keywords, meta = await run_in_threadpool(_keyword_set, state, corpus, mc)
+    all_keywords, meta, _ = await run_in_threadpool(_keyword_set, state, corpus, mc)
     needle = _nfc(q.q).strip().lower()
 
     def wanted(k) -> bool:
@@ -375,6 +376,80 @@ async def keywords(q: KeywordsQuery, request: Request):
                          for c in k.concepts],
         } for k in picked[:max(1, min(q.limit, 200))]],
     }
+
+
+class KeywordGraphQuery(BaseModel):
+    noteId: str | None = None
+    text: str | None = None
+    scope: str = "note"         # note: 이 노트의 키워드와 그 이웃 · all: 전체에서 연결이 센 키워드
+    limit: int = 0              # 가져올 키워드 수 (0 = note 14 / all 200)
+    minConfidence: float = 0.0
+
+
+@router.post("/keyword-graph")
+async def keyword_graph(q: KeywordGraphQuery, request: Request):
+    """키워드를 노드로, 같은 문장에 같이 나온 키워드끼리 선으로 (app/services/links/keywords.py build_keyword_graph).
+    선마다 그 문장(근거)을, 노드마다 개념(설명 + 페이지)을 담는다. LLM 호출 없음."""
+    state = request.app.state
+    if state.extractor is None:
+        raise HTTPException(503, "추출기가 준비되지 않았다")
+    if q.scope not in ("note", "all"):
+        raise HTTPException(400, "scope 는 note 또는 all")
+    t0 = time.monotonic()
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    note_id = _nfc(q.noteId) if q.noteId else None
+    if q.text is not None:
+        if not q.text.strip() or len(q.text) > 50000:
+            raise HTTPException(400, "글이 비었거나 50,000자를 넘는다")
+        note_id = note_id if note_id in corpus.notes else FREE_ID
+        text = _nfc(q.text)
+        if note_id not in corpus.notes or corpus.notes[note_id].text != text:
+            corpus = await run_in_threadpool(_with_text, state, corpus, note_id, text)
+    elif note_id is not None and note_id not in corpus.notes:
+        raise HTTPException(404, "노트를 찾지 못했다")
+    if q.scope == "note" and note_id is None:
+        raise HTTPException(400, "note 범위에는 noteId 또는 text 가 필요하다")
+    mc = max(0.0, min(q.minConfidence, 1.0))
+    kws, meta, edges = await run_in_threadpool(_keyword_set, state, corpus, mc)
+    by_id = {k.keywordId: k for k in kws}
+    mine = {k.keywordId for k in kws if note_id and any(meta[c.conceptId]["note"] == note_id for c in k.concepts)}
+    strength: dict[str, float] = {}
+    adj: dict[str, dict[str, float]] = {}
+    for (a, b), e in edges.items():
+        for x, y in ((a, b), (b, a)):
+            strength[x] = strength.get(x, 0.0) + e["score"]
+            adj.setdefault(x, {})[y] = e["score"]
+    if q.scope == "note":
+        own = sorted((k for k in mine if k in strength), key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 14]
+        near: dict[str, float] = {}
+        for k in own:
+            for y, sc in adj[k].items():
+                if y not in own:
+                    near[y] = near.get(y, 0.0) + sc
+        chosen = own + sorted(near, key=lambda k: (-near[k], by_id[k].name))[:max(6, len(own) * 3 // 4)]
+    else:
+        pool = [k.keywordId for k in kws if k.keywordId in strength and len(k.note_ids()) >= 2]
+        chosen = sorted(pool, key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 200]
+    inside = set(chosen)
+    quote = lambda nid, sent: corpus.notes[nid].text[sent[0]:sent[1]].strip()
+    out_edges = []
+    for (a, b), e in sorted(edges.items(), key=lambda kv: -kv[1]["score"]):
+        if a in inside and b in inside:
+            ev = sorted(e["evidence"], key=lambda x: (x[0] == note_id, x[0]))[::-1][:3] if note_id else e["evidence"][:3]
+            out_edges.append({"a": a, "b": b, "score": e["score"], "pages": e["pages"], "sentences": len(e["evidence"]),
+                              "evidence": [{"note": nid, "quote": quote(nid, sent)} for nid, sent in ev]})
+    degree: dict[str, int] = {}
+    for e in out_edges:
+        degree[e["a"]] = degree.get(e["a"], 0) + 1
+        degree[e["b"]] = degree.get(e["b"], 0) + 1
+    nodes = [{
+        "id": k, "title": by_id[k].name, "aliases": by_id[k].aliases[:4], "pages": len(by_id[k].note_ids()),
+        "inNote": k in mine, "degree": degree.get(k, 0),
+        "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation} for c in by_id[k].concepts[:6]],
+    } for k in chosen]
+    return {"note": note_id, "scope": q.scope, "nodes": nodes, "edges": out_edges, "notes": len(corpus.notes),
+            "keywords": len(kws), "linkedKeywords": len(strength), "mine": len(mine),
+            "mineLinked": sum(1 for k in mine if k in strength), "ms": int((time.monotonic() - t0) * 1000)}
 
 
 def _with_text(state, corpus, note_id: str, text: str):

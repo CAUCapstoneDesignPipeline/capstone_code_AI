@@ -51,12 +51,17 @@ class Describer:
             cost += 1
         return cost
 
+    def containing(self, a: int, b: int) -> int | None:
+        """[a, b) 를 통째로 품은 문장의 번호 (self.sents 의 위치). 없으면 None."""
+        i = bisect_right(self._starts, a) - 1
+        return i if i >= 0 and self.sents[i][0] <= a and b <= self.sents[i][1] else None
+
     def of(self, spans: list[tuple[int, int]]) -> tuple[int, int] | None:
         """spans: 키워드의 언급 위치 (Python 문자). 설명 구간 (start, end) 또는 None."""
         best = None
         for a, b in sorted(spans):
-            i = bisect_right(self._starts, a) - 1
-            if i >= 0 and self.sents[i][0] <= a and b <= self.sents[i][1]:
+            i = self.containing(a, b)
+            if i is not None:
                 cand = (self._cost(self.sents[i], (a, b)), self.sents[i][0], self.sents[i])
             else:                                            # 제목(또는 문장 밖) 에서 나온 언급: 아래 첫 문장
                 j = bisect_left(self._starts, b)
