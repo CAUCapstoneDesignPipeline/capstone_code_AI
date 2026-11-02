@@ -9,6 +9,9 @@
   POST /dev/keyword-graph {noteId?, text?, scope, limit, minConfidence, levels} 키워드 노드와 증거가 있는 연결 (결정적)
   POST /dev/keyword-connect {a, b, …}  두 키워드의 직접 증거와 다른 키워드를 거치는 경로 (결정적)
   POST /dev/keyword-relation {a, b, evidence}  두 키워드가 관계가 있는지 LLM 으로 확인 (눌렀을 때만)
+  POST /dev/proposals/candidates {noteId?, text?, limit}  새 지식을 만들 요소 쌍 후보 (결정적)
+  POST /dev/proposals/screen {pairs}  후보 쌍을 LLM 으로 거른다 (눌렀을 때만)
+  POST /dev/proposals/generate {a, b}  두 요소 + 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만)
   POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
@@ -698,6 +701,174 @@ async def suggest(q: SuggestQuery, request: Request):
             st["note"] = name(st["noteId"])
     res["ms"] = int((time.monotonic() - t0) * 1000)
     res["rules"] = [f"{r['firstType']} + {r['secondType']} → {r['resultType']}" for r in playground_policy()["compositionRules"]]
+    return res
+
+
+# ---- 새 지식 제안: 키워드 A 의 요소 + 키워드 B 의 요소 + 외부 지식 ----
+
+EMBEDDING_STORE = Path("data/private/cache/element-embeddings.npz")
+
+
+def _pairing_index(state, corpus, min_confidence: float):
+    """(색인, 임베딩을 썼는지, 만든 ms). 같은 색인·기준이면 만들어 둔 것을 다시 쓴다. 임베딩은 처음에만 오래 걸리고 디스크에 남는다."""
+
+    from app.services.links.pairing import EmbeddingStore, PairingIndex, elements_from
+
+    with _BUILD_LOCK:
+        cached = getattr(state, "pairing_cache", None)
+        if cached and cached[0] is corpus and cached[1] == min_confidence:
+            return cached[2], cached[3], 0
+        t0 = time.monotonic()
+        kws, meta, _ = _keyword_set(state, corpus, min_confidence)
+        elements = elements_from(kws, meta)
+        store = getattr(state, "emb_store", None)
+        if store is None:
+            store = state.emb_store = EmbeddingStore(EMBEDDING_STORE)
+        try:
+            vectors = store.vectors([e.text for e in elements])
+        except Exception:
+            vectors = None
+        index = PairingIndex(elements, vectors)
+        built = int((time.monotonic() - t0) * 1000)
+        state.pairing_cache = (corpus, min_confidence, index, vectors is not None)
+        return index, vectors is not None, built
+
+
+def _side(e) -> dict:
+    return {"keyword": e.keyword, "keywordId": e.keyword_id, "note": e.note, "noteId": e.note_id, "conceptId": e.concept_id,
+            "text": e.text, "start": e.start, "end": e.end, "quote": e.quote, "confidence": e.confidence}
+
+
+class ProposalQuery(BaseModel):
+    noteId: str | None = None
+    text: str | None = None
+    minConfidence: float = 0.0
+    limit: int = 12
+
+
+@router.post("/proposals/candidates")
+async def proposal_candidates(q: ProposalQuery, request: Request):
+    """이 노트의 요소(키워드마다 설명 하나)와 다른 노트의 요소를 이을 후보 쌍. 신호는 공유 낱말 · 공통 키워드 언급 · 임베딩 근접이고,
+    겹칠수록 앞에 둔다 (임베딩이 있으면 코사인 0.5 미만은 버린다). 결정적이고 LLM 호출이 없다.
+    임베딩은 로컬 bge-m3 이고 처음 한 번만 오래 걸린다 (이미 받아 둔 모델만 쓴다, 없으면 임베딩 없이 돈다)."""
+    import hashlib
+
+    from app.services.links.pairing import COSINE_FLOOR
+
+    state = request.app.state
+    corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
+    if note_id is None:
+        raise HTTPException(400, "noteId 또는 text 가 필요하다")
+    mc = max(0.0, min(q.minConfidence, 1.0))
+    t0 = time.monotonic()
+    index, embedded, built_ms = await run_in_threadpool(_pairing_index, state, corpus, mc)
+    anchors = index.anchors(note_id)
+    cands, counts = await run_in_threadpool(index.candidates, anchors, 3, 1, max(1, min(q.limit, 30)))
+    return {
+        "note": note_id, "anchors": len(anchors), "elements": len(index.el), "embeddings": embedded, "cosineFloor": COSINE_FLOOR if embedded else None,
+        "channels": counts, "buildMs": built_ms, "ms": int((time.monotonic() - t0) * 1000),
+        "candidates": [{"id": hashlib.sha1(f"{c.a.concept_id}|{c.b.concept_id}".encode()).hexdigest()[:16], "a": _side(c.a), "b": _side(c.b),
+                        "channels": list(c.channels), "cos": c.cos, "shared": list(c.shared), "via": list(c.via), "score": round(c.score, 3)}
+                       for c in cands],
+    }
+
+
+def _proposal_llm(state, key: str, role: str, effort: str, timeout: float | None = None):
+    """역할별 LLM (한 번 만들어 state 에 둔다). AI_{ROLE}_LLM_* → AI_LLM_* → ANTHROPIC_API_KEY 의 anthropic 기본 모델."""
+    cache = state.__dict__.setdefault("proposal_llms", {})
+    if key not in cache:
+        from dataclasses import replace
+
+        from app.main import role_llm_config
+        from app.services.llm import make_llm
+        cfg = role_llm_config(role, effort)
+        if cfg is None:
+            raise HTTPException(503, f"{role} LLM 이 없다. .env 에 ANTHROPIC_API_KEY 를 넣거나 AI_{role.upper()}_LLM_PROVIDER 를 정한다")
+        if timeout:
+            cfg = replace(cfg, timeout=max(cfg.timeout, timeout))
+        cache[key] = (cfg, make_llm(cfg))
+    return cache[key]
+
+
+class ScreenSide(BaseModel):
+    keyword: str
+    text: str
+
+
+class ScreenPair(BaseModel):
+    id: str
+    a: ScreenSide
+    b: ScreenSide
+
+
+class ScreenQuery(BaseModel):
+    pairs: list[ScreenPair]
+
+
+@router.post("/proposals/screen")
+async def proposal_screen(q: ScreenQuery, request: Request):
+    """후보 쌍이 합쳐서 새 지식이 될 만한지 LLM 으로 거른다 (눌렀을 때만). 로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나간다)."""
+    from app.services.links.pair_screen import PairScreen
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not 1 <= len(q.pairs) <= 30:
+        raise HTTPException(400, "쌍은 1~30개")
+    state = request.app.state
+    judge = getattr(state, "pair_screen", None)
+    if judge is None:
+        _, llm = _proposal_llm(state, "screen", "pair_screen", "low")
+        judge = state.pair_screen = PairScreen(llm, Path("data/private/cache/pair-screens"))
+    pairs = [{"id": p.id, "a": {"keyword": p.a.keyword[:100], "text": p.a.text[:600]}, "b": {"keyword": p.b.keyword[:100], "text": p.b.text[:600]}}
+             for p in q.pairs]
+    try:
+        res = await run_in_threadpool(judge.screen, pairs)
+    except LLMError as e:
+        raise HTTPException(502, f"선별 LLM 오류: {e.kind}")
+    return {"results": res, "model": judge.model, "promptVersion": judge.prompt_version}
+
+
+class GenSide(BaseModel):
+    keyword: str
+    note: str
+    noteId: str
+    conceptId: str
+    text: str
+    start: int
+    end: int
+    quote: str
+
+
+class GenerateQuery(BaseModel):
+    a: GenSide
+    b: GenSide
+
+
+@router.post("/proposals/generate")
+async def proposal_generate(q: GenerateQuery, request: Request):
+    """두 요소와 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만, 검색을 하므로 20~60초). 외부 출처는 검색 결과에 실제로 나온 URL 만 남긴다.
+    로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나가고 검색어에 섞일 수 있다)."""
+    from app.client import uid
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    state = request.app.state
+    gen = getattr(state, "knowledge_generator", None)
+    if gen is None:
+        cfg, llm = _proposal_llm(state, "generate", "suggest", "medium", timeout=240)
+        if not hasattr(llm, "complete_web"):
+            raise HTTPException(503, f"웹 검색은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
+        gen = state.knowledge_generator = KnowledgeGenerator(llm, Path("data/private/cache/new-knowledge"))
+    if q.a.note == q.b.note:
+        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
+    a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
+    try:
+        res = await run_in_threadpool(gen.generate, a, b, uid("generated", q.a.conceptId, q.b.conceptId))
+    except LLMError as e:
+        raise HTTPException(502, f"생성 LLM 오류: {e.kind}")
     return res
 
 

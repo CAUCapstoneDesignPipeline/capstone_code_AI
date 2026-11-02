@@ -326,3 +326,73 @@ def test_keyword_relation_endpoint(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     with TestClient(dev_app(), client=LOCAL) as c:
         assert c.post("/dev/keyword-relation", json=body).status_code == 503
+
+
+def _no_embeddings(monkeypatch):
+    from app.services.links.pairing import EmbeddingStore
+    monkeypatch.setattr(EmbeddingStore, "vectors", lambda self, texts: None)        # 모델 파일이 없어도 돌아야 한다
+
+
+def test_proposal_candidates_pair_elements_of_different_notes(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    (tmp_path / "DB-WAL.md").write_text("# WAL\n\n**WAL**은 **트랜잭션**이 커밋되기 전에 변경 내용을 로그로 디스크에 먼저 기록하는 방식이다. "
+                                        "**체크포인트**는 장애가 났을 때 복구 시간을 줄이려고 쓰는 기록 지점이다.\n", encoding="utf-8")
+    (tmp_path / "ACID.md").write_text("# ACID\n\n**원자성**은 **트랜잭션**이 전부 반영되거나 전혀 반영되지 않는 성질이라는 뜻이다. "
+                                      "**복구**는 장애 뒤에 **트랜잭션** 로그를 다시 읽어 데이터를 되돌리는 일이다.\n", encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    _no_embeddings(monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        r = c.post("/dev/proposals/candidates", json={"noteId": "DB-WAL", "limit": 20}).json()
+        assert r["note"] == "DB-WAL" and r["anchors"] >= 1 and r["embeddings"] is False and r["cosineFloor"] is None
+        assert r["candidates"], r["channels"]
+        for x in r["candidates"]:
+            assert x["a"]["note"] == "DB-WAL" and x["b"]["note"] == "ACID" and x["a"]["keywordId"] != x["b"]["keywordId"]
+            assert x["channels"] == ["pivot"] and x["via"] == ["트랜잭션"] and x["a"]["text"] and x["b"]["conceptId"] and x["id"]
+        assert len({x["id"] for x in r["candidates"]}) == len(r["candidates"])
+        assert len({(x["a"]["text"], x["b"]["text"]) for x in r["candidates"]}) == len(r["candidates"])
+        assert c.post("/dev/proposals/candidates", json={"noteId": "nope"}).status_code == 404
+        assert c.post("/dev/proposals/candidates", json={}).status_code == 400
+        t = c.post("/dev/proposals/candidates", json={"text": "**TCP**는 **트랜잭션** 없이 신뢰성을 위해 재전송을 하는 프로토콜이다."}).json()
+        assert t["note"] == "(직접 입력)"
+
+
+def test_proposal_screen_and_generate_endpoints(tmp_path, monkeypatch):
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.links.pair_screen import PairScreen
+    from app.services.llm import LLMResult
+    from app.services.llm.anthropic_llm import WebResult
+    N1, N2 = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+
+    class Fake:
+        provider, model = "anthropic", "fake"
+        def complete_json(self, system, user, schema, name):
+            ids = [l[4:] for l in user.splitlines() if l.startswith("id: ")]
+            return LLMResult({"results": [{"id": i, "label": "useful", "conclusion": "결론"} for i in ids]}, self.provider, self.model)
+        def complete_web(self, system, user, schema, name, max_searches=3):
+            return WebResult({"status": "ok", "newKeyword": "새 키워드", "fromA": "로그를 먼저", "fromB": "전부 반영",
+                              "conclusion": "로그를 먼저 쓰기 때문에 전부 반영되거나 전혀 반영되지 않는 성질을 지킬 수 있어요.",
+                              "external": [{"url": "https://example.com/p", "title": "T", "quote": "q", "supports": "s"}], "reason": "r"},
+                             "anchored", "fake", [{"url": "https://example.com/p", "title": "T"}], 1)
+
+    side = lambda k, note, nid, cid, text: {"keyword": k, "note": note, "noteId": nid, "conceptId": cid, "text": text, "start": 0, "end": len(text), "quote": text}
+    a = side("WAL", "DB-WAL", N1, "33333333-3333-4333-8333-333333333333", "WAL은 로그를 먼저 디스크에 쓴다.")
+    b = side("Atomicity", "ACID", N2, "44444444-4444-4444-8444-444444444444", "트랜잭션은 전부 반영되거나 전혀 반영되지 않는다.")
+    app = dev_app()
+    app.state.pair_screen = PairScreen(Fake(), None)
+    app.state.knowledge_generator = KnowledgeGenerator(Fake(), None)
+    with TestClient(app, client=LOCAL) as c:
+        s = c.post("/dev/proposals/screen", json={"pairs": [{"id": "p1", "a": {"keyword": "WAL", "text": a["text"]}, "b": {"keyword": "Atomicity", "text": b["text"]}}]}).json()
+        assert s["results"]["p1"]["label"] == "useful" and s["promptVersion"] == "pairscreen-llm-1"
+        g = c.post("/dev/proposals/generate", json={"a": a, "b": b}).json()
+        assert g["status"] == "candidate" and g["concept"]["origin"] == "generated" and g["external"][0]["url"] == "https://example.com/p"
+        assert c.post("/dev/proposals/generate", json={"a": a, "b": {**b, "note": "DB-WAL"}}).status_code == 400
+        assert c.post("/dev/proposals/screen", json={"pairs": []}).status_code == 400
+    with TestClient(app, client=("10.0.0.5", 50000)) as c:                                 # 노트 내용이 밖으로 나가므로 로컬만
+        assert c.post("/dev/proposals/generate", json={"a": a, "b": b}).status_code == 403
+        assert c.post("/dev/proposals/screen", json={"pairs": [{"id": "p", "a": {"keyword": "x", "text": "y"}, "b": {"keyword": "x", "text": "y"}}]}).status_code == 403
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for k in ("AI_LLM_PROVIDER", "AI_SUGGEST_LLM_PROVIDER", "AI_PAIR_SCREEN_LLM_PROVIDER"):
+        monkeypatch.delenv(k, raising=False)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        assert c.post("/dev/proposals/generate", json={"a": a, "b": b}).status_code == 503

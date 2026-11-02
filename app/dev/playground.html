@@ -123,6 +123,14 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .side .note { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
 .desc { margin: 0 12px 9px 14px; padding-left: 8px; border-left: 3px solid var(--line); color: var(--ink); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .desc.none { color: var(--muted); }
+.sg .sgSide { margin: 8px 0; }
+.sg h4 { font-size: 13px; margin: 12px 0 4px; color: var(--muted); }
+.sg .gen { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.sg .know { margin: 8px 0; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); }
+.sg .know p { margin: 4px 0 0; }
+.sg a { color: var(--accent); }
+.act[aria-pressed="true"] { background: var(--accent); color: #fff; }
+pre.json { max-height: 260px; overflow: auto; background: var(--soft); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tag { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
 .act { border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 8px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
 .act:disabled { opacity: .4; }
@@ -175,7 +183,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
         <button data-mode="concepts" aria-pressed="false" title="이 노트에서 키워드와 키워드마다 설명(원문 문장)을 뽑는다">키워드 및 설명 추출</button>
         <button data-mode="keywords" aria-pressed="false" title="노드 = 키워드, 그 안에 개념(설명 + 소스 페이지)">키워드</button>
         <button data-mode="links" aria-pressed="false" title="키워드가 어떻게 이어져 있는지 보여 준다 (노드 = 키워드, 선 = 같은 문장에 같이 나옴). 문서 노드로도 볼 수 있다">문서 연결</button>
-        <button data-mode="suggest" aria-pressed="false" title="두 노트의 관계를 이어 합성 규칙으로 만드는 이전 방식. 키워드 개념 + 외부 지식 방식은 아직 없다">지식 제안 (이전 방식)</button>
+        <button data-mode="suggest" aria-pressed="false" title="키워드 A 의 요소 + 키워드 B 의 요소 + 인터넷 지식으로 사용자가 모르는 새 지식을 만든다">지식 제안</button>
       </div>
       <label class="thr">유효 키워드 신뢰도 ≥
         <input type="range" id="thr" min="0.25" max="1" step="0.01" value="0.35"><b id="thrVal">0.35</b></label>
@@ -217,7 +225,7 @@ $("#search").addEventListener("input", renderNotes);
 
 async function openNote(id) {
   if (S.note === FREE) S.free = $("#free")?.value ?? S.free;
-  S.note = id; S.concepts = null; S.links = null; S.suggest = null; S.kw = null; S.kg = null; S.kgSel = null; S.kgEdge = null; S.sel = null;
+  S.note = id; S.concepts = null; S.links = null; S.sg.data = null; S.kw = null; S.kg = null; S.kgSel = null; S.kgEdge = null; S.sel = null;
   S.text = id === FREE ? S.free : (await (await fetch("/dev/notes/" + encodeURIComponent(id))).json()).body;
   renderNotes(); render();
 }
@@ -291,20 +299,134 @@ function keywordsView(source) {
   return `<div class="col">${own ? `<h1>${esc(name(S.note))}</h1>${S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : ""}` : ""}${out}</div>`;
 }
 
+// ---------- 지식 제안: 키워드 A 의 요소 + 키워드 B 의 요소 + 외부 지식 → 새 지식 ----------
+const REACT_KEY = "playground-reactions-v1";
+const loadReact = () => { try { return JSON.parse(localStorage.getItem(REACT_KEY) || "{}"); } catch (e) { return {}; } };
+const saveReact = () => { try { localStorage.setItem(REACT_KEY, JSON.stringify(S.sg.react)); } catch (e) { /* 저장하지 못해도 화면은 된다 */ } };
+S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, react: loadReact(), showKnown: false, showRest: false };
+
 async function runSuggest() {
   const text = currentText();
-  if (!text.trim()) { S.suggest = null; return render(); }
+  if (!text.trim()) { S.sg.data = null; return render(); }
   const r = ++S.run;
-  S.suggest = "loading"; render();
-  const body = { k: 5, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
+  S.sg.data = "loading"; S.sg.screen = {}; S.sg.gen = {}; render();
+  const body = { limit: 12, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
   try {
-    const res = await fetch("/dev/suggest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetch("/dev/proposals/candidates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
     if (r !== S.run) return;
-    S.suggest = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
-  } catch (e) { if (r === S.run) S.suggest = { error: String(e) }; }
+    S.sg.data = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+  } catch (e) { if (r === S.run) S.sg.data = { error: String(e) }; }
   render();
 }
+async function runScreen() {
+  const D = S.sg.data;
+  if (!D || D === "loading" || D.error || S.sg.screening) return;
+  S.sg.screening = true; render();
+  const pairs = D.candidates.map((c) => ({ id: c.id, a: { keyword: c.a.keyword, text: c.a.text }, b: { keyword: c.b.keyword, text: c.b.text } }));
+  try {
+    const res = await fetch("/dev/proposals/screen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pairs }) });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { S.sg.screen = data.results; S.sg.screenModel = data.model; } else S.sg.screenError = data.detail || `HTTP ${res.status}`;
+  } catch (e) { S.sg.screenError = String(e); }
+  S.sg.screening = false; render();
+}
+const GEN_FIELDS = ["keyword", "note", "noteId", "conceptId", "text", "start", "end", "quote"];
+async function runGenerate(id) {
+  const c = S.sg.data.candidates.find((x) => x.id === id);
+  if (!c || S.sg.gen[id] === "loading") return;
+  S.sg.gen[id] = "loading"; render();
+  const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
+  try {
+    const res = await fetch("/dev/proposals/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a: pick(c.a), b: pick(c.b) }) });
+    const data = await res.json().catch(() => ({}));
+    S.sg.gen[id] = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+  } catch (e) { S.sg.gen[id] = { error: String(e) }; }
+  render();
+}
+async function generateTop(n) {
+  if (!Object.keys(S.sg.screen).length) await runScreen();
+  const ids = sgOrdered().main.filter((c) => !S.sg.gen[c.id]).slice(0, n).map((c) => c.id);
+  await Promise.all(ids.map(runGenerate));
+}
+
+const SG_LABEL = { useful: "합쳐 볼 만해요", vague: "모호", redundant: "겹침", unrelated: "관계 없음", unusable: "문장이 불완전", unsure: "판정 못 함" };
+const SG_CH = { terms: "공유 낱말", pivot: "공통 키워드", embed: "의미 비슷" };
+const pairKey = (c) => `${c.a.conceptId}|${c.b.conceptId}`;
+// 선별 결과가 있으면 useful → vague 순으로 앞에 두고, 나머지는 따로 접어 둔다. 알고 있던 내용으로 버린 쌍은 숨긴다
+function sgOrdered() {
+  const cs = S.sg.data.candidates, scr = S.sg.screen, screened = Object.keys(scr).length > 0;
+  const hidden = cs.filter((c) => S.sg.react[pairKey(c)] === "known");
+  const shown = cs.filter((c) => S.sg.react[pairKey(c)] !== "known");
+  const rank = (c) => ({ useful: 0, vague: 1 }[scr[c.id]?.label] ?? 2);
+  const sorted = [...shown].sort((x, y) => (screened ? rank(x) - rank(y) : 0));
+  return { main: screened ? sorted.filter((c) => rank(c) < 2) : sorted, rest: screened ? sorted.filter((c) => rank(c) >= 2) : [], hidden, screened };
+}
+
+const isUrl = (u) => /^https?:\/\//.test(u);
+function genBlock(c, g) {
+  if (g === "loading") return `<p class="count"><span class="spin"></span>웹을 검색해서 새 지식을 만드는 중이에요… (20~60초)</p>`;
+  if (g?.error) return `<p class="error">${esc(g.error)}</p>`;
+  const ST = { candidate: ["candidate", "후보"], held: ["hypothesis", "가설"], known: ["excluded", "이미 노트에 있어요"] }[g.status] || ["hypothesis", g.status];
+  const ext = g.external.map((e) => `<li>${isUrl(e.url) ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.title || e.url)}</a>` : esc(e.title || e.url)}
+      <div class="quote">${esc(e.quote)}</div>${e.supports ? `<p class="path">뒷받침하는 부분: ${esc(e.supports)}</p>` : ""}</li>`).join("");
+  const why = g.reasons.length ? `<p class="path">${g.reasons.map(esc).join(" · ")}${g.reason ? ` — ${esc(g.reason)}` : ""}</p>` : "";
+  const conclusion = g.conclusion ? `<div class="know"><span class="tag">새 키워드</span> <b>${esc(g.newKeyword)}</b><p>${esc(g.conclusion)}</p></div>` : "";
+  const react = S.sg.react[pairKey(c)];
+  const buttons = g.status === "candidate" ? `<p class="actions"><button class="act" data-sg="react:${c.id}:ok" aria-pressed="${react === "ok"}">이해함</button>
+      <button class="act" data-sg="react:${c.id}:known">알고 있던 내용</button>
+      <button class="act" data-sg="react:${c.id}:confused" aria-pressed="${react === "confused"}">이해가 안 됨</button></p>` : "";
+  const ok = react === "ok" && g.concept ? `<details open><summary>이해함 → 기능용 그래프에 들어갈 개념 (generated)</summary><pre class="json">${esc(JSON.stringify(g.concept, null, 2))}</pre></details>` : "";
+  const confused = react === "confused" ? `<details open><summary>챗봇에 넘길 컨텍스트</summary><pre class="json">${esc(
+    `근거 A [${c.a.keyword}] (${c.a.note})\n${c.a.text}\n\n근거 B [${c.b.keyword}] (${c.b.note})\n${c.b.text}\n\n외부 지식\n${g.external.map((e) => `- ${e.title} ${e.url}\n  ${e.quote}`).join("\n")}\n\n결론\n${g.conclusion}`)}</pre></details>` : "";
+  return `<div class="gen"><div class="cardHead"><span class="status ${ST[0]}">${ST[1]}</span><span class="path">${esc(g.model)} · 검색 ${g.searches}번${g.cached ? " · 저장된 결과" : ""}</span></div>
+    ${why}${ext ? `<h4>외부 지식</h4><ul class="steps">${ext}</ul>` : ""}${conclusion}${buttons}${ok}${confused}</div>`;
+}
+
+function sgCard(c) {
+  const scr = S.sg.screen[c.id], g = S.sg.gen[c.id];
+  const chips = [...c.channels.map((ch) => `<span class="tag" title="${esc(ch === "terms" ? "공유 낱말: " + c.shared.join(", ") : ch === "pivot" ? "둘 다 언급하는 키워드: " + c.via.join(", ") : "임베딩 코사인 " + c.cos)}">${SG_CH[ch]}${ch === "embed" && c.cos != null ? " " + c.cos : ""}</span>`),
+    scr ? `<span class="status ${scr.label === "useful" ? "candidate" : scr.label === "vague" ? "hypothesis" : "excluded"}">${SG_LABEL[scr.label]}</span>` : ""].join(" ");
+  const side = (e, w) => `<div class="sgSide"><p class="path"><b>근거 ${w}</b> · ${esc(e.keyword)} · <button class="linkBtn" data-open="${esc(e.note)}" title="${esc(e.note)}">${esc(shortTitle(e.note, 28))}</button></p>
+      <div class="quote">${esc(e.text)}</div></div>`;
+  const foot = g ? genBlock(c, g) : `<p class="actions"><button class="act" data-sg="gen:${c.id}">새 지식 만들기 (웹 검색)</button></p>`;
+  return `<div class="card sg"><div class="cardHead"><b>${esc(c.a.keyword)} × ${esc(c.b.keyword)}</b><span class="path">${chips}</span></div>
+    ${side(c.a, "A")}${side(c.b, "B")}
+    ${scr?.conclusion ? `<p class="path">선별 모델 메모: ${esc(scr.conclusion)}</p>` : ""}${foot}</div>`;
+}
+
+function suggestView(source) {
+  const D = S.sg.data;
+  const head = `<h1>${esc(name(S.note))}</h1>` + (S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : "");
+  if (!D) return head;
+  if (D === "loading") return `${head}<p class="count"><span class="spin"></span>요소 쌍 후보를 찾는 중이에요… (처음 한 번은 임베딩 때문에 1분쯤 걸려요)</p>`;
+  if (D.error) return `${head}<p class="error">${esc(D.error)}</p>`;
+  const o = sgOrdered(), ch = D.channels;
+  const stats = `이 노트의 요소 ${D.anchors}개 · 전체 요소 ${D.elements}개 → 후보 ${D.candidates.length}개 (공유 낱말 ${ch.terms || 0} · 공통 키워드 ${ch.pivot || 0} · 의미 비슷 ${ch.embed || 0}${D.embeddings ? ` · 코사인 ${D.cosineFloor} 미만은 뺌` : " · 임베딩 없음"}) · ${D.ms}ms`;
+  const tools = `<p class="actions"><button class="act" data-sg="screen" ${S.sg.screening || !D.candidates.length ? "disabled" : ""}>${S.sg.screening ? "선별하는 중…" : "LLM 선별"}</button>
+    <button class="act" data-sg="top" ${D.candidates.length ? "" : "disabled"}>상위 3개 새 지식 만들기</button>
+    <span class="note">LLM 선별은 노트 문장을, 새 지식 만들기는 노트 문장과 검색어를 모델 제공자에게 보내요 (눌렀을 때만).</span></p>`;
+  const scrNote = S.sg.screenError ? `<p class="error">${esc(S.sg.screenError)}</p>` : o.screened ? `<p class="count">선별 ${esc(S.sg.screenModel)} · 합쳐 볼 만한 쌍 ${o.main.filter((c) => S.sg.screen[c.id]?.label === "useful").length}개</p>` : "";
+  return `${head}<p class="count">${stats}</p>${tools}${scrNote}
+    ${o.main.map(sgCard).join("") || `<p class="empty">후보가 없어요. 신뢰도를 낮추거나 다른 노트를 골라 보세요.</p>`}
+    ${o.rest.length ? `<details ${S.sg.showRest ? "open" : ""} data-sg-toggle="rest"><summary>선별에서 걸러진 후보 ${o.rest.length}개</summary>${o.rest.map(sgCard).join("")}</details>` : ""}
+    ${o.hidden.length ? `<p class="note">알고 있던 내용으로 숨긴 쌍 ${o.hidden.length}개 · <button class="linkBtn" data-sg="unhide">다시 보기</button></p>` : ""}`;
+}
+
+$("#body").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-sg]");
+  if (!t) return;
+  const [k, id, kind] = t.dataset.sg.split(":");
+  if (k === "screen") runScreen();
+  else if (k === "top") generateTop(3);
+  else if (k === "gen") runGenerate(id);
+  else if (k === "unhide") { for (const x of S.sg.data.candidates) if (S.sg.react[pairKey(x)] === "known") delete S.sg.react[pairKey(x)]; saveReact(); render(); }
+  else if (k === "react") {
+    const c = S.sg.data.candidates.find((x) => x.id === id), key = pairKey(c);
+    if (S.sg.react[key] === kind && kind !== "known") delete S.sg.react[key]; else S.sg.react[key] = kind;
+    saveReact(); render();
+  }
+});
 
 async function runConcepts() {
   const text = currentText();
@@ -864,14 +986,6 @@ function bindPanZoom(svg) {
   svg.addEventListener("pointerup", () => { drag = null; });
 }
 
-// 보조 전제: 단계 근거가 아니라 같은 노트의 문맥 근거로 뒷받침한 사실 (결론이 이것을 써서 풀어 쓴다)
-function support(s) {
-  const stepEv = new Set((s.stepEvidenceIds || []).flat());
-  const extra = s.explanation.claims.filter((c) => c.kind === "premise" && !c.evidenceIds.some((x) => stepEv.has(x)));
-  if (!extra.length) return "";
-  return `<ul class="steps">${extra.map((c) => `<li>보조 전제 — ${esc(c.text)}</li>`).join("")}</ul>`;
-}
-
 // ---------- 화면 ----------
 function render() {
   const body = $("#body");
@@ -883,43 +997,9 @@ function render() {
 
   if (S.mode === "suggest") {
     body.className = "body single";
-    const G = S.suggest;
-    let out = S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : "";
-    const STATUS = { candidate: "후보", hypothesis: "가설", excluded: "제외" };
-    const OUT = { entailed: "근거 있음", contradicted: "근거가 부정", unknown: "근거 불분명", same: "같은 개념", different: "다른 개념",
-                  uncertain: "애매", pass: "통과", fail: "실패" };
-    if (G === "loading") out += `<p class="count"><span class="spin"></span>연결 찾기 → 매개 개념·간선 검증 → 설명 생성 → 설명 검증…</p>`;
-    else if (G?.error) out += `<p class="error">${esc(G.error)}</p>`;
-    else if (G) {
-      const sc = G.screened || {};
-      out += `<p class="count">이어진 노트 ${G.links.length}개 · 두 노트의 관계를 이어 만든 제안 ${G.suggestions.length}개`
-        + `${sc.merged ? ` · 같은 지식 ${sc.merged}개 합침` : ""}${sc.rejected?.length ? ` · 검증에서 뺀 제안 ${sc.rejected.length}개` : ""} · ${G.ms}ms</p>`;
-      out += G.suggestions.map((s) => {
-        const [s1, s2] = s.steps;
-        const step = (st) => `<li>${esc(st.fromLabel)} —${esc(st.typeCode)}→ ${esc(st.toLabel)} <span class="path">· ${esc(st.note)}</span>
-          ${st.evidence.map((e) => `<div class="quote">${esc(e.quote)}</div>`).join("")}</li>`;
-        const bv = s.bridgeVerdict, ev = s.edgeVerdicts, xv = s.explanationVerdict;
-        return `<div class="card"><div class="cardHead"><span class="status ${s.status}">${STATUS[s.status]}</span>
-            <button data-open="${esc(s.note)}" title="${esc(s.note)}">${esc(s.note)}</button></div>
-          <p class="know">${esc(s.knowledge)}</p>
-          <p class="path">${esc(s.explainedBy.model)} 가 씀</p>
-          <p class="path"><b>${esc(s.source)}</b> → ${esc(s.bridge)} → <b>${esc(s.target)}</b>${s.statusReasons.length && s.status !== "candidate" ? ` · ${esc(s.statusReasons.join(", "))}` : ""}</p>
-          <div class="checks"><span>매개 개념: ${OUT[bv?.decision] || "검증 못 함"}</span>
-            ${ev.map((v, i) => `<span>간선 ${i + 1}: ${OUT[v.outcome]}</span>`).join("")}<span>설명: ${OUT[xv.overall]}</span></div>
-          <details><summary>근거와 판정 이유</summary><ul class="steps">${step(s1)}${step(s2)}</ul>
-            ${support(s)}
-            <ul class="steps">${bv ? `<li>매개 개념 — ${esc(bv.reason)}</li>` : ""}${ev.map((v, i) => `<li>간선 ${i + 1} — ${esc(v.reason)}</li>`).join("")}
-              ${xv.claimVerdicts.map((c) => `<li>${esc(c.claimRef)}: ${OUT[c.outcome]} — ${esc(c.reason)}</li>`).join("")}
-              ${xv.gaps.map((g) => `<li>빈 단계${g.stepOrder ? " " + g.stepOrder : ""} — ${esc(g.reason)}</li>`).join("")}</ul></details>
-        </div>`;
-      }).join("") || `<p class="empty">제안이 없다. 한 노트의 관계(A→B)와 다른 노트의 관계(B→C)가 같은 개념 B 로 이어질 때 제안이 생긴다.</p>`;
-      if (sc.rejected?.length) out += `<details><summary>검증에서 뺀 제안</summary><ul class="steps">${sc.rejected.map((r) =>
-        `<li>${esc(r.source)} → ${esc(r.bridge)} → ${esc(r.target)} — ${esc(r.reasons.join(", "))}
-          ${r.explanationVerdict.claimVerdicts.filter((c) => c.outcome === "fail").map((c) => `<div class="quote">${esc(c.reason)}</div>`).join("")}</li>`).join("")}</ul></details>`;
-      out += `<details><summary>합성 규칙 (예시 정책)</summary><p class="path">${G.rules.map(esc).join(" · ")}</p></details>`;
-    }
-    body.innerHTML = `<div class="col">${head}${out}</div>`;
+    body.innerHTML = `<div class="col">${suggestView(source)}</div>`;
     body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+    body.querySelector("[data-sg-toggle]")?.addEventListener("toggle", (ev) => { S.sg.showRest = ev.target.open; });
   } else if (S.mode === "keywords") {
     body.className = "body single";
     body.innerHTML = keywordsView(source);
