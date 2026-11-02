@@ -21,24 +21,26 @@ from pydantic import ValidationError
 from app.schemas.common import Span
 from app.schemas.knowledge import Concept, ExternalSource, PageSource
 
-PROMPT_VERSION = "newknowledge-llm-1"
-MAX_SEARCHES = 3
+PROMPT_VERSION = "newknowledge-llm-2"      # 1: 검색 3번까지 · 출처마다 title·supports 를 모델이 씀
+MAX_EXTERNAL = 3
+MAX_SEARCHES = 1                          # 검색 한 번이 약 9초다. 한 번에 9개쯤 받으므로 두 번째는 대개 같은 내용이다
 SIMILAR = 0.85          # 결론이 노트 문장과 이만큼 같으면 새 지식이 아니다
 
 SYSTEM = """너는 공부 노트에서 뽑은 두 문장(A, B)과 웹에서 찾은 자료를 합쳐, 사용자가 아직 모르는 새 지식 하나를 만든다.
 새 지식 = A 와 B 어느 한쪽에도 쓰여 있지 않고, 둘을 합친 뒤 외부 자료로 이어야 비로소 말할 수 있는 결론이다.
 
-순서: (1) A 와 B 를 읽고 어떤 결론이 가능한지 정한다. (2) 웹 검색으로 그 결론을 이어 주거나 확인해 주는 자료를 찾는다. 검색은 필요한 만큼만 한다 (최대 3번).
+순서: (1) A 와 B 를 읽고 어떤 결론이 가능한지 정한다. (2) 웹 검색으로 그 결론을 이어 주거나 확인해 주는 자료를 찾는다. 검색은 한 번만 할 수 있으니 검색어를 신중히 고른다.
 (3) 아래 규칙대로 JSON 으로 답한다.
 
 규칙:
 - conclusion 은 쉬운 말로 쓴다. 해요체로, "~는 ~에요" 처럼 친절하게, 2~4문장. 전문 용어는 처음 나올 때 풀어 쓴다.
 - newKeyword 는 이 결론이 다루는 핵심 키워드 하나 (짧은 명사구).
 - fromA, fromB 는 결론에 쓴 부분을 A, B 문장에서 한 글자도 바꾸지 않고 그대로 옮긴 것이다 (문장 일부만 옮겨도 된다).
-- external 은 실제로 검색해서 본 페이지만 넣는다. url 은 검색 결과에 나온 그대로 쓴다. quote 는 그 페이지가 말한 내용을 한 문장으로 옮긴 것, supports 는 결론의 어느 부분을 뒷받침하는지 한 구절.
-- 노트의 두 문장과 웹 자료가 서로 맞지 않으면 status 를 conflict 로 하고 reason 에 어디가 다른지 적는다.
+- external 은 실제로 검색해서 본 페이지만 넣는다 (많아야 3개). url 은 검색 결과에 나온 그대로 쓰고, quote 는 그 페이지가 말한 내용을 한 문장으로 옮긴 것이다.
+- 노트의 두 문장과 웹 자료가 서로 맞지 않으면 status 를 conflict 로 하고 reason 에 어디가 다른지 한 문장으로 적는다.
 - 합쳐도 새로 말할 수 있는 것이 없으면 status 를 no_new_knowledge 로 한다. 노트에 이미 있는 말을 바꿔 쓰는 것은 새 지식이 아니다.
 - 지어내지 않는다. 확실하지 않으면 no_new_knowledge 다. status 가 ok 가 아니면 conclusion·newKeyword 는 빈 문자열, external 은 빈 목록이어도 된다.
+- status 가 ok 이면 reason 은 빈 문자열이다 (이유는 conclusion 에 이미 있다). 아니면 한 문장으로 쓴다.
 입력은 JSON 이다: {"A": {keyword, note, text}, "B": {keyword, note, text}}."""
 
 SCHEMA = {
@@ -49,8 +51,8 @@ SCHEMA = {
         "newKeyword": {"type": "string"}, "conclusion": {"type": "string"},
         "fromA": {"type": "string"}, "fromB": {"type": "string"},
         "external": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["url", "title", "quote", "supports"],
-            "properties": {k: {"type": "string"} for k in ("url", "title", "quote", "supports")}}},
+            "type": "object", "additionalProperties": False, "required": ["url", "quote"],
+            "properties": {k: {"type": "string"} for k in ("url", "quote")}}},
         "reason": {"type": "string"},
     },
 }
@@ -101,14 +103,14 @@ class KnowledgeGenerator:
         d = res.data
         reasons: list[str] = []
         seen = {_url(s["url"]): s["url"] for s in res.sources}
+        titles = {s["url"]: s.get("title", "") for s in res.sources}            # 제목은 모델이 쓰지 않고 검색 결과에서 가져온다
         external, dropped = [], 0
-        for e in d.get("external", []):
+        for e in d.get("external", [])[:MAX_EXTERNAL]:
             real = seen.get(_url(e.get("url", "")))
             if real is None:
                 dropped += 1
             elif all(real != x["url"] for x in external):
-                external.append({"url": real, "title": e.get("title", "").strip(), "quote": e.get("quote", "").strip(),
-                                 "supports": e.get("supports", "").strip()})
+                external.append({"url": real, "title": titles.get(real, "").strip(), "quote": e.get("quote", "").strip()})
         conclusion, from_a, from_b = d.get("conclusion", "").strip(), d.get("fromA", "").strip(), d.get("fromB", "").strip()
         status = "candidate"
         if d.get("status") == "no_new_knowledge":

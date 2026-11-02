@@ -104,3 +104,18 @@ def test_generator_reports_progress_and_a_stopped_listener_leaves_no_cache(tmp_p
     with pytest.raises(Stop):
         fresh.generate(A, B, CID, on_event=stop_on_search)
     assert not list((tmp_path / "other").glob("*.json"))           # 멈춘 호출은 결과를 남기지 않는다
+
+
+def test_titles_come_from_the_search_results_and_the_model_only_writes_url_and_quote():
+    from app.services.links.generate import MAX_SEARCHES, SCHEMA
+    item = SCHEMA["properties"]["external"]["items"]
+    assert set(item["properties"]) == {"url", "quote"} and "maxItems" not in SCHEMA["properties"]["external"] and MAX_SEARCHES == 1
+    r = run({**GOOD, "external": [{"url": URL, "quote": "ARIES 는 undo 정보를 로그에 먼저 남긴다."}]})
+    assert r["status"] == "candidate" and r["external"] == [{"url": URL, "title": "ARIES", "quote": "ARIES 는 undo 정보를 로그에 먼저 남긴다."}]
+    assert r["concept"]["external"][0]["title"] == "ARIES"
+
+
+def test_at_most_three_sources_are_kept_even_if_the_model_gives_more():
+    many = [{"url": f"https://example.com/{i}", "quote": "q"} for i in range(5)]
+    r = run({**GOOD, "external": many}, sources=[{"url": e["url"], "title": f"T{i}"} for i, e in enumerate(many)])
+    assert [e["url"] for e in r["external"]] == [e["url"] for e in many[:3]]

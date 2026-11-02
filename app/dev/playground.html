@@ -431,7 +431,7 @@ function genBlock(c, g) {
   if (g?.error) return `<p class="error">${esc(g.error)}</p>`;
   const ST = { candidate: ["candidate", "후보"], held: ["hypothesis", "가설"], known: ["excluded", "이미 노트에 있어요"] }[g.status] || ["hypothesis", g.status];
   const ext = g.external.map((e) => `<li>${isUrl(e.url) ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.title || e.url)}</a>` : esc(e.title || e.url)}
-      <div class="quote">${esc(e.quote)}</div>${e.supports ? `<p class="path">뒷받침하는 부분: ${esc(e.supports)}</p>` : ""}</li>`).join("");
+      <div class="quote">${esc(e.quote)}</div></li>`).join("");
   const why = g.reasons.length ? `<p class="path">${g.reasons.map(esc).join(" · ")}${g.reason ? ` — ${esc(g.reason)}` : ""}</p>` : "";
   const conclusion = g.conclusion ? `<div class="know"><span class="tag">새 키워드</span> <b>${esc(g.newKeyword)}</b><p>${esc(g.conclusion)}</p></div>` : "";
   const react = S.sg.react[pairKey(c)];
