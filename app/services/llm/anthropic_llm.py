@@ -4,6 +4,7 @@ system prompt 는 역할마다 고정이라(설명 생성·관계·검증) 요�
 5분 안에 이어지면 system 은 캐시에서 읽는다 (Opus 5.5 최소 512 토큰보다 짧은 prompt 는 조용히 캐시되지 않을 뿐이다).
 """
 
+import json
 from dataclasses import dataclass, field
 
 from . import LLMConfig, LLMError, LLMResult, parse_object
@@ -63,25 +64,59 @@ class AnthropicLLM:
         return LLMResult(parse_object(text), self.provider, getattr(response, "model", None) or self.model)
 
     def complete_web(self, system: str, user: str, schema: dict, name: str, max_searches: int = 3,
-                     tool: str = WEB_SEARCH_TOOL) -> WebResult:
+                     tool: str = WEB_SEARCH_TOOL, on_event=None) -> WebResult:
         """웹 검색 도구를 쓰고 구조화 출력으로 답한다. 서버 도구가 한 턴에 끝나지 않으면(pause_turn) 이어서 받는다 (최대 4번).
-        sources: 검색 결과에 실제로 나온 URL 들. 자동 재시도·모델 fallback 은 없다."""
+        sources: 검색 결과에 실제로 나온 URL 들. 자동 재시도·모델 fallback 은 없다.
+        on_event(dict): 진행 상황을 그때그때 알린다 — thinking · search_start · search(query) · search_results(results) · writing(chars).
+        콜백이 예외를 던지면 스트림을 닫아 모델 호출을 멈춘다 (화면에서 중단했을 때 토큰을 더 쓰지 않으려고)."""
         import anthropic
 
+        emit = on_event or (lambda e: None)
         messages = [{"role": "user", "content": user}]
         sources: dict[str, str] = {}
         searches = 0
         usage: dict[str, int] = {}
         for _ in range(MAX_PAUSES + 1):
+            blocks: dict[int, dict] = {}
+            chars = last = 0
             try:
-                response = self.client.messages.create(
-                    model=self.config.model,
-                    max_tokens=self.config.max_output_tokens,
-                    system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                    messages=messages,
-                    tools=[{"type": tool, "name": "web_search", "max_uses": max_searches}],
-                    output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
-                )
+                with self.client.messages.stream(
+                        model=self.config.model,
+                        max_tokens=self.config.max_output_tokens,
+                        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                        messages=messages,
+                        tools=[{"type": tool, "name": "web_search", "max_uses": max_searches}],
+                        output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}}) as stream:
+                    for ev in stream:
+                        if ev.type == "content_block_start":
+                            b = ev.content_block
+                            blocks[ev.index] = {"type": b.type, "name": getattr(b, "name", ""), "json": ""}
+                            if b.type == "thinking":
+                                emit({"type": "thinking"})
+                            elif b.type == "server_tool_use" and b.name == "web_search":
+                                emit({"type": "search_start"})
+                            elif b.type == "web_search_tool_result":
+                                found = [{"url": r.url, "title": getattr(r, "title", "") or ""} for r in b.content] if isinstance(b.content, list) else []
+                                emit({"type": "search_results", "results": found})
+                            elif b.type == "text":
+                                emit({"type": "writing", "chars": 0})
+                        elif ev.type == "content_block_delta":
+                            d = ev.delta
+                            if d.type == "input_json_delta" and ev.index in blocks:
+                                blocks[ev.index]["json"] += d.partial_json
+                            elif d.type == "text_delta":
+                                chars += len(d.text)
+                                if chars - last >= 200:                   # 글자마다 알리지 않는다
+                                    last = chars
+                                    emit({"type": "writing", "chars": chars})
+                        elif ev.type == "content_block_stop":
+                            blk = blocks.get(ev.index)
+                            if blk and blk["type"] == "server_tool_use" and blk["name"] == "web_search":
+                                try:
+                                    emit({"type": "search", "query": str(json.loads(blk["json"] or "{}").get("query", ""))})
+                                except ValueError:
+                                    emit({"type": "search", "query": ""})
+                    response = stream.get_final_message()
             except anthropic.APITimeoutError as e:
                 raise LLMError("timeout", str(e))
             except anthropic.RateLimitError as e:

@@ -79,3 +79,28 @@ def test_search_tool_is_passed_through_only_when_chosen():
     KnowledgeGenerator(Tool(GOOD), None, "web_search_20250305").generate(A, B, CID)
     KnowledgeGenerator(Tool(GOOD), None).generate(A, B, CID)
     assert seen == ["web_search_20250305", "default"]
+
+
+def test_generator_reports_progress_and_a_stopped_listener_leaves_no_cache(tmp_path):
+    class Fake2(Fake):
+        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None):
+            on_event({"type": "search", "query": "q"})
+            return super().complete_web(system, user, schema, name, max_searches)
+
+    seen = []
+    g = KnowledgeGenerator(Fake2(GOOD), tmp_path)
+    assert g.generate(A, B, CID, on_event=seen.append)["status"] == "candidate"
+    assert [e["type"] for e in seen] == ["start", "search", "validating"]
+    seen.clear()
+    assert g.generate(A, B, CID, on_event=seen.append)["cached"] is True and [e["type"] for e in seen] == ["cached"]
+
+    class Stop(Exception):
+        pass
+
+    def stop_on_search(e):
+        if e["type"] == "search":
+            raise Stop()
+    fresh = KnowledgeGenerator(Fake2(GOOD), tmp_path / "other")
+    with pytest.raises(Stop):
+        fresh.generate(A, B, CID, on_event=stop_on_search)
+    assert not list((tmp_path / "other").glob("*.json"))           # 멈춘 호출은 결과를 남기지 않는다

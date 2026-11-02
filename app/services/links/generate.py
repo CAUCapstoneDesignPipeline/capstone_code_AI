@@ -75,16 +75,23 @@ class KnowledgeGenerator:
     def model(self) -> str:
         return self.llm.model
 
-    def generate(self, a: dict, b: dict, concept_id: str) -> dict:
-        """a, b: {keyword, note, noteId, text, start, end, quote}. 반환: {status: candidate|held|known, reasons, ...}."""
+    def generate(self, a: dict, b: dict, concept_id: str, on_event=None) -> dict:
+        """a, b: {keyword, note, noteId, text, start, end, quote}. 반환: {status: candidate|held|known, reasons, ...}.
+        on_event(dict): 진행 상황 — cached · start · (모델이 알리는 thinking · search_start · search · search_results · writing) · validating.
+        콜백이 예외를 던지면 모델 호출을 멈춘다."""
+        emit = on_event or (lambda e: None)
         key = self._key(a, b)
         hit = self._cache_get(key)
         if hit is not None:
+            emit({"type": "cached"})
             return {**hit, "cached": True}
+        emit({"type": "start", "model": self.llm.model, "tool": self.tool or ""})
         user = json.dumps({"A": {k: a[k] for k in ("keyword", "note", "text")}, "B": {k: b[k] for k in ("keyword", "note", "text")}},
                           ensure_ascii=False)
-        res = (self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES, self.tool) if self.tool
-               else self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES))
+        extra = {"on_event": on_event} if on_event else {}                  # 알림을 받지 않는 호출자와 가짜 LLM 은 그대로
+        res = (self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES, self.tool, **extra) if self.tool
+               else self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES, **extra))
+        emit({"type": "validating", "sources": len(res.sources)})
         out = self._check(res, a, b, concept_id)
         self._cache_put(key, out)
         return {**out, "cached": False}

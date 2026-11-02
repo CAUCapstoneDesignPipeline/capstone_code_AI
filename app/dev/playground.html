@@ -123,6 +123,14 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .side .note { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
 .desc { margin: 0 12px 9px 14px; padding-left: 8px; border-left: 3px solid var(--line); color: var(--ink); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .desc.none { color: var(--muted); }
+ul.prog { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+ul.prog li { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: start; }
+ul.prog li.done { color: var(--muted); }
+ul.prog .ck { color: var(--accent); font-weight: 700; }
+ul.prog .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+ul.prog .plinks { margin: 3px 0 0; padding-left: 16px; font-size: 12px; }
+ul.prog .spin { margin: 2px 0 0; }
+.progBox { margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: var(--soft); }
 .sg .sgSide { margin: 8px 0; }
 .sg h4 { font-size: 13px; margin: 12px 0 4px; color: var(--muted); }
 .sg .gen { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
@@ -305,7 +313,7 @@ const loadReact = () => { try { return JSON.parse(localStorage.getItem(REACT_KEY
 const saveReact = () => { try { localStorage.setItem(REACT_KEY, JSON.stringify(S.sg.react)); } catch (e) { /* 저장하지 못해도 화면은 된다 */ } };
 const AUTO_KEY = "playground-auto-generate-v1", AUTO_N = 3;
 const loadAuto = () => { try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch (e) { return true; } };
-S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, react: loadReact(), showKnown: false, showRest: false, auto: loadAuto() };
+S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, react: loadReact(), showKnown: false, showRest: false, auto: loadAuto(), prog: {}, abort: {} };
 
 async function runSuggest() {
   const text = currentText();
@@ -335,17 +343,43 @@ async function runScreen() {
   S.sg.screening = false; render();
 }
 const GEN_FIELDS = ["keyword", "note", "noteId", "conceptId", "text", "start", "end", "quote"];
+// 새 지식 만들기는 SSE 로 진행 상황을 받는다 (POST 라서 EventSource 대신 fetch 스트림을 읽는다)
+async function streamGenerate(body, onEvent, signal) {
+  const res = await fetch("/dev/proposals/generate/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data: "));
+      buf = buf.slice(i + 2);
+      if (line) onEvent(JSON.parse(line.slice(6)));
+    }
+  }
+}
+async function startGen(id, c, set) {
+  const ctl = new AbortController();
+  S.sg.abort[id] = ctl; S.sg.prog[id] = { events: [], t0: Date.now() };
+  set("loading"); render();
+  const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
+  try {
+    await streamGenerate({ a: pick(c.a), b: pick(c.b) }, (ev) => {
+      if (ev.type === "result") set(ev.result);
+      else if (ev.type === "error") set({ error: ev.message });
+      else { S.sg.prog[id].events.push(ev); paintProg(id); }
+    }, ctl.signal);
+  } catch (e) { set({ error: e.name === "AbortError" ? "중단했어요. 모델 호출도 멈췄어요." : String(e.message || e) }); }
+  delete S.sg.abort[id];
+  render();
+}
 async function runGenerate(id) {
   const c = S.sg.data.candidates.find((x) => x.id === id);
   if (!c || S.sg.gen[id] === "loading") return;
-  S.sg.gen[id] = "loading"; render();
-  const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
-  try {
-    const res = await fetch("/dev/proposals/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a: pick(c.a), b: pick(c.b) }) });
-    const data = await res.json().catch(() => ({}));
-    S.sg.gen[id] = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
-  } catch (e) { S.sg.gen[id] = { error: String(e) }; }
-  render();
+  await startGen(id, c, (v) => { S.sg.gen[id] = v; });
 }
 async function generateTop(n) {
   if (!Object.keys(S.sg.screen).length) await runScreen();
@@ -367,8 +401,33 @@ function sgOrdered() {
 }
 
 const isUrl = (u) => /^https?:\/\//.test(u);
+// 진행 상황: 이벤트를 줄로 줄인다 (생각·쓰기는 이어지면 한 줄, 쓰기는 마지막 글자 수만)
+function progLines(evs) {
+  const out = [];
+  const last = () => out[out.length - 1];
+  for (const e of evs) {
+    if (e.type === "start") out.push({ t: e.t, html: `요청을 보냈어요 · ${esc(e.model)}${e.tool ? ` · ${esc(e.tool)}` : ""}` });
+    else if (e.type === "cached") out.push({ t: e.t, html: "저장된 결과를 불러와요" });
+    else if (e.type === "thinking") { if (last()?.key !== "thinking") out.push({ key: "thinking", t: e.t, html: "무엇을 찾아볼지 생각하는 중이에요" }); }
+    else if (e.type === "search_start") out.push({ key: "search", t: e.t, html: "웹을 검색하는 중이에요" });
+    else if (e.type === "search") { const l = [...out].reverse().find((x) => x.key === "search"); const h = `웹 검색: <b>${esc(e.query)}</b>`; if (l) { l.html = h; l.t = e.t; } else out.push({ key: "search", t: e.t, html: h }); }
+    else if (e.type === "search_results") out.push({ t: e.t, html: `검색 결과 ${e.results.length}개를 받았어요` + (e.results.length ? `<ul class="plinks">${e.results.slice(0, 4).map((r) =>
+      `<li>${isUrl(r.url) ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title || r.url)}</a>` : esc(r.title || r.url)}</li>`).join("")}${e.results.length > 4 ? `<li class="path">…외 ${e.results.length - 4}개</li>` : ""}</ul>` : "") });
+    else if (e.type === "writing") { if (last()?.key === "writing") { last().html = `결론을 쓰는 중이에요${e.chars ? ` (${e.chars}자)` : ""}`; last().t = e.t; } else out.push({ key: "writing", t: e.t, html: `결론을 쓰는 중이에요${e.chars ? ` (${e.chars}자)` : ""}` }); }
+    else if (e.type === "validating") out.push({ t: e.t, html: `출처 ${e.sources}개와 노트 인용을 확인하는 중이에요` });
+  }
+  return out;
+}
+function progInner(id) {
+  const lines = progLines(S.sg.prog[id]?.events || []);
+  if (!lines.length) return `<p class="count"><span class="spin"></span>연결하는 중이에요…</p>`;
+  return `<ul class="prog">${lines.map((l, i) => `<li class="${i === lines.length - 1 ? "now" : "done"}">${i === lines.length - 1 ? `<span class="spin"></span>` : `<span class="ck">✓</span>`}
+    <div>${l.html}</div><span class="t">${l.t != null ? l.t + "초" : ""}</span></li>`).join("")}</ul>`;
+}
+function paintProg(id) { const el = document.getElementById("prog-" + id); if (el) el.innerHTML = progInner(id); }
+const progBox = (id) => `<div class="progBox"><div id="prog-${id}">${progInner(id)}</div><p class="actions"><button class="linkBtn" data-sg="cancel:${id}">중단</button></p></div>`;
 function genBlock(c, g) {
-  if (g === "loading") return `<p class="count"><span class="spin"></span>웹을 검색해서 새 지식을 만드는 중이에요… (20~60초)</p>`;
+  if (g === "loading") return progBox(c.id);
   if (g?.error) return `<p class="error">${esc(g.error)}</p>`;
   const ST = { candidate: ["candidate", "후보"], held: ["hypothesis", "가설"], known: ["excluded", "이미 노트에 있어요"] }[g.status] || ["hypothesis", g.status];
   const ext = g.external.map((e) => `<li>${isUrl(e.url) ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.title || e.url)}</a>` : esc(e.title || e.url)}
@@ -428,7 +487,8 @@ $("#body").addEventListener("click", (e) => {
   const t = e.target.closest("[data-sg]");
   if (!t) return;
   const [k, id, kind] = t.dataset.sg.split(":");
-  if (k === "screen") runScreen();
+  if (k === "cancel") S.sg.abort[id]?.abort();
+  else if (k === "screen") runScreen();
   else if (k === "top") generateTop(3);
   else if (k === "gen") (id === "cn" ? runConnectGenerate() : runGenerate(id));
   else if (k === "unhide") { for (const x of S.sg.data.candidates) if (S.sg.react[pairKey(x)] === "known") delete S.sg.react[pairKey(x)]; saveReact(); render(); }
@@ -705,14 +765,7 @@ async function runConnect() {
 async function runConnectGenerate() {
   const C = S.cn, c = C.pairCand;
   if (!c || C.gen === "loading") return;
-  C.gen = "loading"; render();
-  const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
-  try {
-    const res = await fetch("/dev/proposals/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a: pick(c.a), b: pick(c.b) }) });
-    const data = await res.json().catch(() => ({}));
-    C.gen = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
-  } catch (e) { C.gen = { error: String(e) }; }
-  render();
+  await startGen("cn", c, (v) => { C.gen = v; });
 }
 async function runRelation(kind) {
   let a, b, evidence, set;

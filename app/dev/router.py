@@ -12,6 +12,7 @@
   POST /dev/proposals/candidates {noteId?, text?, limit}  새 지식을 만들 요소 쌍 후보 (결정적)
   POST /dev/proposals/screen {pairs}  후보 쌍을 LLM 으로 거른다 (눌렀을 때만)
   POST /dev/proposals/generate {a, b}  두 요소 + 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만)
+  POST /dev/proposals/generate/stream {a, b}  같은 일을 진행 상황과 함께 SSE 로 (화면이 쓰는 쪽)
   POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
@@ -21,6 +22,7 @@
 배포용이 아니다. 로컬 노트를 읽어 보여 주므로 127.0.0.1 에서만 띄운다.
 """
 
+import asyncio
 import json
 import os
 import threading
@@ -30,7 +32,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES
@@ -869,6 +871,20 @@ async def proposal_screen(q: ScreenQuery, request: Request):
     return {"results": res, "model": judge.model, "promptVersion": judge.prompt_version}
 
 
+def _knowledge_generator(state):
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm.anthropic_llm import WEB_SEARCH_BASIC
+
+    gen = getattr(state, "knowledge_generator", None)
+    if gen is None:
+        cfg, llm = _proposal_llm(state, "generate", "suggest", "medium", timeout=240)
+        if not hasattr(llm, "complete_web"):
+            raise HTTPException(503, f"웹 검색은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
+        gen = state.knowledge_generator = KnowledgeGenerator(llm, Path("data/private/cache/new-knowledge"),
+                                                             os.environ.get("AI_SEARCH_TOOL") or WEB_SEARCH_BASIC)
+    return gen
+
+
 class GenSide(BaseModel):
     keyword: str
     note: str
@@ -890,20 +906,11 @@ async def proposal_generate(q: GenerateQuery, request: Request):
     """두 요소와 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만, 검색을 하므로 20~60초). 외부 출처는 검색 결과에 실제로 나온 URL 만 남긴다.
     로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나가고 검색어에 섞일 수 있다)."""
     from app.client import uid
-    from app.services.links.generate import KnowledgeGenerator
     from app.services.llm import LLMError
 
     if not _loopback(request):
         raise HTTPException(403, "로컬에서만 부를 수 있다")
-    state = request.app.state
-    gen = getattr(state, "knowledge_generator", None)
-    if gen is None:
-        cfg, llm = _proposal_llm(state, "generate", "suggest", "medium", timeout=240)
-        if not hasattr(llm, "complete_web"):
-            raise HTTPException(503, f"웹 검색은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
-        from app.services.llm.anthropic_llm import WEB_SEARCH_BASIC
-        gen = state.knowledge_generator = KnowledgeGenerator(llm, Path("data/private/cache/new-knowledge"),
-                                                             os.environ.get("AI_SEARCH_TOOL") or WEB_SEARCH_BASIC)
+    gen = _knowledge_generator(request.app.state)
     if q.a.note == q.b.note:
         raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
     a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
@@ -912,6 +919,67 @@ async def proposal_generate(q: GenerateQuery, request: Request):
     except LLMError as e:
         raise HTTPException(502, f"생성 LLM 오류: {e.kind}")
     return res
+
+
+class _Cancelled(Exception):
+    """화면이 연결을 끊었다. 모델 호출을 멈추려고 진행 알림 콜백에서 던진다."""
+
+
+@router.post("/proposals/generate/stream")
+async def proposal_generate_stream(q: GenerateQuery, request: Request):
+    """/proposals/generate 와 같은 일을 하되, 진행 상황을 SSE(text/event-stream) 로 그때그때 보낸다.
+    이벤트 (event: 이름 / data: JSON, 모두 t = 시작 뒤 초):
+      start(model, tool) · cached · thinking · search_start · search(query) · search_results(results[{url,title}]) ·
+      writing(chars) · validating(sources) · result(result = /proposals/generate 의 응답) · error(status, message)
+    연결을 끊으면 모델 호출도 멈춘다 (검색·토큰을 더 쓰지 않는다). 사전 검사 실패(403·503·400)는 보통 HTTP 오류로 돌려준다."""
+    from app.client import uid
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    gen = _knowledge_generator(request.app.state)
+    if q.a.note == q.b.note:
+        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
+    a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
+    loop, queue, cancelled, t0 = asyncio.get_running_loop(), asyncio.Queue(), threading.Event(), time.monotonic()
+
+    def emit(ev: dict):
+        if cancelled.is_set():
+            raise _Cancelled()
+        loop.call_soon_threadsafe(queue.put_nowait, {**ev, "t": round(time.monotonic() - t0, 1)})
+
+    def work():
+        try:
+            emit({"type": "result", "result": gen.generate(a, b, uid("generated", q.a.conceptId, q.b.conceptId), on_event=emit)})
+        except _Cancelled:
+            pass
+        except LLMError as e:
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "status": 502, "message": f"생성 LLM 오류: {e.kind}", "t": round(time.monotonic() - t0, 1)})
+        except Exception as e:                                        # 스트림이 말없이 끊기지 않게 끝을 알린다
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "status": 500, "message": f"{type(e).__name__}", "t": round(time.monotonic() - t0, 1)})
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    task = asyncio.ensure_future(run_in_threadpool(work))
+
+    async def stream():
+        try:
+            while True:
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=10)
+                except asyncio.TimeoutError:
+                    if await request.is_disconnected():
+                        break
+                    yield ": keep-alive\n\n"                          # 프록시가 조용한 연결을 끊지 않게
+                    continue
+                if ev is None:
+                    break
+                yield f"event: {ev['type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        finally:
+            cancelled.set()                                           # 화면이 떠났으면 다음 알림에서 모델 호출을 멈춘다
+            task.done()                                               # task 를 끝까지 붙들어 둔다 (참조가 사라지면 일이 취소될 수 있다)
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ---- 관계 연결 그래프 ----

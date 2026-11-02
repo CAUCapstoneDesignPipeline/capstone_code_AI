@@ -413,3 +413,67 @@ def test_keyword_connect_returns_the_element_pair_to_make_new_knowledge_from(tmp
         p = r["pair"]
         assert p["a"]["keyword"] == "WAL" and p["b"]["keyword"] == "복구" and p["a"]["note"] == "DB-WAL" and p["b"]["note"] == "ACID"
         assert p["a"]["conceptId"] and p["b"]["noteId"] and p["a"]["text"] and p["b"]["end"] > p["b"]["start"]
+
+
+def _sse(text: str) -> list[dict]:
+    import json
+    out = []
+    for block in text.strip().split("\n\n"):
+        data = [l[6:] for l in block.split("\n") if l.startswith("data: ")]
+        if data:
+            out.append(json.loads(data[0]))
+    return out
+
+
+def test_proposal_generate_stream_reports_progress_then_the_result(tmp_path):
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm.anthropic_llm import WebResult
+    N1, N2 = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+
+    class Fake:
+        provider, model = "anthropic", "fake"
+        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None):
+            for ev in ({"type": "thinking"}, {"type": "search_start"}, {"type": "search", "query": "write ahead log os page cache"},
+                       {"type": "search_results", "results": [{"url": "https://example.com/p", "title": "T"}]}, {"type": "writing", "chars": 0}):
+                on_event(ev)
+            return WebResult({"status": "ok", "newKeyword": "새 키워드", "fromA": "로그를 먼저", "fromB": "전부 반영",
+                              "conclusion": "로그를 먼저 쓰기 때문에 전부 반영되거나 전혀 반영되지 않는 성질을 지킬 수 있어요.",
+                              "external": [{"url": "https://example.com/p", "title": "T", "quote": "q", "supports": "s"}], "reason": "r"},
+                             "anthropic", "fake", [{"url": "https://example.com/p", "title": "T"}], 1)
+
+    side = lambda k, note, nid, cid, text: {"keyword": k, "note": note, "noteId": nid, "conceptId": cid, "text": text, "start": 0, "end": len(text), "quote": text}
+    a = side("WAL", "DB-WAL", N1, "33333333-3333-4333-8333-333333333333", "WAL은 로그를 먼저 디스크에 쓴다.")
+    b = side("Atomicity", "ACID", N2, "44444444-4444-4444-8444-444444444444", "트랜잭션은 전부 반영되거나 전혀 반영되지 않는다.")
+    app = dev_app()
+    app.state.knowledge_generator = KnowledgeGenerator(Fake(), tmp_path)
+    with TestClient(app, client=LOCAL) as c:
+        r = c.post("/dev/proposals/generate/stream", json={"a": a, "b": b})
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream") and r.headers["cache-control"] == "no-cache"
+        evs = _sse(r.text)
+        assert [e["type"] for e in evs] == ["start", "thinking", "search_start", "search", "search_results", "writing", "validating", "result"]
+        assert evs[3]["query"] == "write ahead log os page cache" and evs[4]["results"][0]["url"] == "https://example.com/p"
+        assert all("t" in e for e in evs) and evs[0]["model"] == "fake"
+        assert evs[-1]["result"]["status"] == "candidate" and evs[-1]["result"]["concept"]["origin"] == "generated"
+        again = _sse(c.post("/dev/proposals/generate/stream", json={"a": a, "b": b}).text)      # 저장된 결과는 바로 돌려준다
+        assert [e["type"] for e in again] == ["cached", "result"] and again[-1]["result"]["cached"] is True
+        assert c.post("/dev/proposals/generate/stream", json={"a": a, "b": {**b, "note": "DB-WAL"}}).status_code == 400
+    with TestClient(app, client=("10.0.0.5", 50000)) as c:
+        assert c.post("/dev/proposals/generate/stream", json={"a": a, "b": b}).status_code == 403
+
+
+def test_proposal_generate_stream_turns_model_errors_into_an_error_event():
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm import LLMError
+    N1, N2 = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+
+    class Boom:
+        provider, model = "anthropic", "fake"
+        def complete_web(self, *a, **k):
+            raise LLMError("rate_limit", "x")
+
+    s = lambda note, nid, cid: {"keyword": "k", "note": note, "noteId": nid, "conceptId": cid, "text": "문장 하나 둘 셋", "start": 0, "end": 5, "quote": "문장"}
+    app = dev_app()
+    app.state.knowledge_generator = KnowledgeGenerator(Boom(), None)
+    with TestClient(app, client=LOCAL) as c:
+        evs = _sse(c.post("/dev/proposals/generate/stream", json={"a": s("A", N1, "c1"), "b": s("B", N2, "c2")}).text)
+        assert [e["type"] for e in evs] == ["start", "error"] and "rate_limit" in evs[-1]["message"] and evs[-1]["status"] == 502
