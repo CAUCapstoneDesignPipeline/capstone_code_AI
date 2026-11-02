@@ -187,7 +187,9 @@ def _build(corpus: Corpus, note_uuid: Callable[[str], str], uuid_of: Callable[..
             text = raw.strip()
             if not text or (nid, *span) in seen_spans:        # 같은 문장은 한 번만 (별칭이 같은 문장을 가리킨다)
                 continue
-            u16 = indexes.setdefault(nid, Utf16Index(e.text))
+            if nid not in indexes:                                   # 노트마다 한 번만 (개념마다 만들면 글 길이 × 개념 수가 든다)
+                indexes[nid] = Utf16Index(e.text)
+            u16 = indexes[nid]
             start = u16(span[0] + len(raw) - len(raw.lstrip()))
             end = start + len(text.encode("utf-16-le")) // 2
             if end > MAX_OFFSET:
