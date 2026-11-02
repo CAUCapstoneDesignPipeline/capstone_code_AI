@@ -1,0 +1,33 @@
+[
+ {
+  "quote": "LIFO. 배열 끝에서 넣고 뺀다",
+  "kind": "implements",
+  "subject": "스택",
+  "subjectKey": "array_stack",
+  "role": "stack"
+ },
+ {
+  "quote": "push O(1), pop O(1), peek O(1)",
+  "kind": "op_cost",
+  "subject": "스택",
+  "subjectKey": "array_stack",
+  "op": "push",
+  "expr": "1"
+ },
+ {
+  "quote": "push O(1), pop O(1), peek O(1)",
+  "kind": "op_cost",
+  "subject": "스택",
+  "subjectKey": "array_stack",
+  "op": "pop",
+  "expr": "1"
+ },
+ {
+  "quote": "push O(1), pop O(1), peek O(1)",
+  "kind": "op_cost",
+  "subject": "스택",
+  "subjectKey": "array_stack",
+  "op": "peek",
+  "expr": "1"
+ }
+]

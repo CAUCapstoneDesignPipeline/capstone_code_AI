@@ -325,14 +325,14 @@ async def suggest(q: SuggestQuery, request: Request):
     t0 = time.monotonic()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=request.app), base_url="http://ai",
                                  timeout=130) as http:
-        # 서버의 동시 처리 한도(AI_MAX_INFLIGHT, playground 기본 8)보다 작게: 설명 6개를 한 번에 보낸다
+        # 서버의 동시 처리 한도(AI_MAX_INFLIGHT, 기본 8)보다 작게: 설명 6개를 한 번에 보낸다
         client = AiClient("http://ai", state.settings.service_token, http,
                           concurrency=max(1, min(6, state.settings.max_inflight - 1)))
         try:
             res = await suggest_knowledge(client, note, candidates, playground_policy(), k=max(1, min(q.k, 30)),
                                           min_confidence=max(0.0, min(q.minConfidence, 1.0)), embedding_profile=emb,
                                           links_profile="links-hybrid-1" if state.typer else "links-det-1",
-                                          edges_profile="edges-llm-1" if state.edge_judge else "edges-det-1",
+                                          edges_profile="edges-llm-2" if state.edge_judge else "edges-det-1",
                                           verify_profile="explanation-hybrid-2" if state.explanation_judge
                                           else "explanation-det-3")
         except AiCallError as e:

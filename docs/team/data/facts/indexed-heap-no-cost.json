@@ -1,0 +1,41 @@
+[
+ {
+  "quote": "원소끼리 키를 비교할 수 있어야 한다",
+  "kind": "requires",
+  "subject": "인덱스 있는 이진 최소 힙",
+  "subjectKey": "indexed_binary_min_heap",
+  "condition": "원소끼리 키를 비교할 수 있음"
+ },
+ {
+  "quote": "그래서 우선순위 큐로 쓸 수 있다",
+  "kind": "implements",
+  "subject": "인덱스 있는 이진 최소 힙",
+  "subjectKey": "indexed_binary_min_heap",
+  "role": "priority_queue"
+ },
+ {
+  "quote": "| insert | O(log n) |",
+  "kind": "op_cost",
+  "subject": "인덱스 있는 이진 최소 힙",
+  "subjectKey": "indexed_binary_min_heap",
+  "op": "insert",
+  "expr": "log n",
+  "case": "worst"
+ },
+ {
+  "quote": "| extract-min | O(log n) |",
+  "kind": "op_cost",
+  "subject": "인덱스 있는 이진 최소 힙",
+  "subjectKey": "indexed_binary_min_heap",
+  "op": "extract_min",
+  "expr": "log n",
+  "case": "worst"
+ },
+ {
+  "quote": "decrease-key 도 지원한다",
+  "kind": "op_cost",
+  "subject": "인덱스 있는 이진 최소 힙",
+  "subjectKey": "indexed_binary_min_heap",
+  "op": "decrease_key"
+ }
+]

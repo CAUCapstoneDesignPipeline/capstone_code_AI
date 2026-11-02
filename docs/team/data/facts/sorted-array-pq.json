@@ -1,0 +1,33 @@
+[
+ {
+  "quote": "이 방식도 우선순위 큐로 쓸 수 있다",
+  "kind": "implements",
+  "subject": "정렬된 배열 우선순위 큐",
+  "subjectKey": "sorted_array_priority_queue",
+  "role": "priority_queue"
+ },
+ {
+  "quote": "insert: O(1)",
+  "kind": "op_cost",
+  "subject": "정렬된 배열 우선순위 큐",
+  "subjectKey": "sorted_array_priority_queue",
+  "op": "insert",
+  "expr": "1"
+ },
+ {
+  "quote": "extract-min: O(1)",
+  "kind": "op_cost",
+  "subject": "정렬된 배열 우선순위 큐",
+  "subjectKey": "sorted_array_priority_queue",
+  "op": "extract_min",
+  "expr": "1"
+ },
+ {
+  "quote": "decrease-key: O(1)",
+  "kind": "op_cost",
+  "subject": "정렬된 배열 우선순위 큐",
+  "subjectKey": "sorted_array_priority_queue",
+  "op": "decrease_key",
+  "expr": "1"
+ }
+]

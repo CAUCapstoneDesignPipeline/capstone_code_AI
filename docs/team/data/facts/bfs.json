@@ -1,0 +1,36 @@
+[
+ {
+  "quote": "각 정점은 큐에 한 번만 들어가니까 enqueue 는 V번",
+  "kind": "needs_op",
+  "subject": "BFS",
+  "subjectKey": "bfs",
+  "role": "queue",
+  "op": "enqueue",
+  "expr": "V"
+ },
+ {
+  "quote": "dequeue 도 V번",
+  "kind": "needs_op",
+  "subject": "BFS",
+  "subjectKey": "bfs",
+  "role": "queue",
+  "op": "dequeue",
+  "expr": "V"
+ },
+ {
+  "quote": "큐 크기는 최대 V",
+  "kind": "size_bound",
+  "subject": "BFS",
+  "subjectKey": "bfs",
+  "role": "queue",
+  "expr": "V"
+ },
+ {
+  "quote": "큐 연산 말고는 인접 리스트를 한 번씩 보니까 O(V+E)",
+  "kind": "extra_cost",
+  "subject": "BFS",
+  "subjectKey": "bfs",
+  "role": "queue",
+  "expr": "V+E"
+ }
+]

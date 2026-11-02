@@ -1,6 +1,7 @@
 """노트 사이 추론 단계 (병합 판단·매개 검증·간선 검증·설명 생성·설명 검증). 설명 생성만 LLM, 나머지는 결정적이다.
 
   identity     두 occurrence 가 같은 개념인가          → /merge-decisions, /verifications/bridges
+  identity_llm 규칙이 정하지 못한 병합 후보의 LLM 판정  → /merge-decisions (hybrid)
   entailment   간선 근거가 그 관계를 말하는가          → /verifications/edges
   explain_llm  A-B-C 경로 설명 = 새 지식 제안 (LLM)   → /explanations
   explain      설명 검증 (결정적)                       → /verifications/explanations
@@ -26,11 +27,11 @@ def code_revision(*files: str) -> str:
 class ReasoningProfile:
     """불변 추론 profile. 검증 profile 은 생성 profile 과 model 또는 prompt 가 달라야 한다 (계약 §5)."""
     id: str
-    operation: str              # merge | bridges | edges | explain | explanation | links
+    operation: str              # merge | bridges | edges | explain | explanation | links | facts | derive
     model: str
     prompt: str
     files: tuple[str, ...]
-    requires: tuple[str, ...] = ()   # 이 profile 이 쓰는 서버 구성 요소 (app.state 속성): extractor, typer, explainer, edge_judge, explanation_judge
+    requires: tuple[str, ...] = ()   # 이 profile 이 쓰는 서버 구성 요소 (app.state 속성): extractor, typer, explainer, edge_judge, explanation_judge, merge_judge
     # 설명 검증: 단계 근거가 아닌 단계 노트의 요청 근거를 문맥 근거로 받아 보조 전제를 인정하는가 (아니면 경로 밖 근거)
     context_evidence: bool = False
 
@@ -45,15 +46,22 @@ class ReasoningProfile:
 _ID = ("reasoning/identity.py", "reasoning/text.py",       # 문맥은 추출기의 명사구 후보라 그 코드도 넣는다
        "concepts/extract.py", "concepts/markdown.py", "concepts/config.py")
 _EX = ("reasoning/explain.py", "reasoning/text.py")
+_DERIVE = ("derive/rules.py", "derive/bigo.py", "derive/facts.py", "derive/korean.py")
 _LINKS = ("links/corpus.py", "links/linker.py", "links/context.py")
 
 REASONING_PROFILES = {p.id: p for p in (
     ReasoningProfile("merge-det-1", "merge", "rules-identity", "merge-rules-1", _ID, ("extractor",)),
+    # merge-det-1 + 규칙이 same 이라 하지 못한 쌍(번역·음역)과 주제가 다른 same 쌍을 LLM 이 판정한다
+    ReasoningProfile("merge-hybrid-1", "merge", "llm", "merge-llm-1", (*_ID, "reasoning/identity_llm.py"),
+                     ("extractor", "merge_judge")),
     ReasoningProfile("bridges-det-1", "bridges", "rules-identity", "bridges-rules-1", _ID, ("extractor",)),
     ReasoningProfile("edges-det-1", "edges", "rules-entailment-cues", "edges-cues-1",
                      ("reasoning/entailment.py", "reasoning/text.py")),
     # LLM 이 근거를 읽고 간선을 판정한다. 관계 판정(relation-typing)과 prompt 가 달라 계약 §5 독립성을 지킨다
     ReasoningProfile("edges-llm-1", "edges", "llm", "edges-llm-1", ("reasoning/entailment_llm.py",), ("edge_judge",)),
+    # + 근거마다 노트의 제목 경로를 보여 준다 ('오해'·'예전 방식' 절의 문장을 관계로 읽지 않게)
+    ReasoningProfile("edges-llm-2", "edges", "llm", "edges-llm-2",
+                     ("reasoning/entailment_llm.py", "links/context.py", "concepts/markdown.py"), ("edge_judge",)),
     # 새 지식 제안은 항상 LLM 이 쓴다 (해요체, 모든 사실은 근거 인용). 경로·근거·합성 규칙은 입력으로 고정, 응답은 §3.9 로 코드가 다시 검사한다
     ReasoningProfile("explain-llm-8", "explain", "llm", "explain-llm-8",
                      ("reasoning/explain_llm.py", "reasoning/explain.py", "reasoning/text.py"), ("explainer",)),
@@ -67,6 +75,14 @@ REASONING_PROFILES = {p.id: p for p in (
     # 노트 사이 연결·경로 후보. 계약 v0.1.0 에는 없는 AI 쪽 제안 operation (경로·순위는 계약상 BE 책임)
     ReasoningProfile("links-det-1", "links", "kiwi-tfidf-adamic-adar", "links-det-1", _LINKS, ("extractor",)),
     # 같은 방법에 관계를 LLM 으로 보탠다 (extract-hybrid-2 의 관계와 같다). 규칙만으로는 관계가 적어 경로가 거의 없다
+    # 계산용 사실 추출 (노트 하나). 노트에 쓰인 것만, quote 가 원문에 그대로 있어야 한다
+    ReasoningProfile("facts-llm-1", "facts", "llm", "facts-llm-1",
+                     ("derive/extract_llm.py", "derive/facts.py", "derive/cases.py"), ("fact_extractor",)),
+    # 조건부 결론 도출 R1 구현 적용 · R2 비용 합성 (결정적). 규칙 검사만
+    ReasoningProfile("derive-rules-1", "derive", "rules-r1-r2", "derive-rules-1", _DERIVE),
+    # + 규칙을 통과한 결론의 원문 충실성·soundness 를 LLM 이 판정 (판정만, 전제를 채우지 않는다)
+    ReasoningProfile("derive-sound-1", "derive", "llm", "derive-sound-1", (*_DERIVE, "derive/sound_llm.py"),
+                     ("soundness_judge",)),
     ReasoningProfile("links-hybrid-1", "links", "kiwi-tfidf-adamic-adar+llm-typing", "links-hybrid-1",
                      (*_LINKS, "relations/typer.py"), ("extractor", "typer")),
 )}

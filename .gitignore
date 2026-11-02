@@ -1,4 +1,6 @@
 data/
+# 대표 사례는 직접 쓴 예시 노트라 저장소에 넣는다 (개인 노트 아님)
+!docs/team/data/
 .env
 .DS_Store
 __pycache__/

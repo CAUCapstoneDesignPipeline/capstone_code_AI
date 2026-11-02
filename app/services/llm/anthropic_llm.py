@@ -1,4 +1,8 @@
-"""Anthropic (Claude). 구조화 출력: output_config.format. Opus 5.5 는 thinking 이 항상 켜져 있어 effort 로만 조절한다."""
+"""Anthropic (Claude). 구조화 출력: output_config.format. Opus 5.5 는 thinking 이 항상 켜져 있어 effort 로만 조절한다.
+
+system prompt 는 역할마다 고정이라(설명 생성·관계·검증) 요청마다 바뀌는 user 앞에 cache 경계를 둔다. 같은 역할의 요청이
+5분 안에 이어지면 system 은 캐시에서 읽는다 (Opus 5.5 최소 512 토큰보다 짧은 prompt 는 조용히 캐시되지 않을 뿐이다).
+"""
 
 from . import LLMConfig, LLMError, LLMResult, parse_object
 
@@ -19,7 +23,7 @@ class AnthropicLLM:
             response = self.client.messages.create(
                 model=self.config.model,
                 max_tokens=self.config.max_output_tokens,
-                system=system,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": user}],
                 output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
             )

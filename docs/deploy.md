@@ -12,7 +12,7 @@ docker build -t capstone-ai --build-arg SOURCE_REVISION=$(git rev-parse HEAD) .
 - 의존성은 `uv.lock` 그대로 설치한다 (`uv sync --frozen --no-dev`). Python 3.11, non-root(uid 10001), 약 690 MB (대부분 Kiwi 형태소 모델).
 - 이미지에 **넣지 않는 것**: `data/`(노트·IDF·캐시), `.env`·API 키, 개발용 playground(`app/dev`). `.dockerignore` 가 허용 목록이다.
 - 임베딩 모델(e5)을 쓰려면 `--build-arg UV_EXTRAS="--extra embeddings"` (torch 포함, 이미지가 커진다). 기본은 넣지 않는다.
-- 프로세스 1개(uvicorn worker 1). 동시 요청 수는 `AI_MAX_INFLIGHT` (기본 4, 넘으면 429 `AI_BUSY`).
+- 프로세스 1개(uvicorn worker 1). 동시 요청 수는 `AI_MAX_INFLIGHT` (기본 8, 넘으면 429 `AI_BUSY`). 요청 대부분이 LLM 응답을 기다리는 시간이라 CPU 보다 크게 둔다.
 - `HEALTHCHECK` 는 `/internal/v1/health/live` 를 서비스 토큰으로 부른다 (`deploy/healthcheck.py`).
 
 ## 실행할 때 주는 것
@@ -24,8 +24,8 @@ docker build -t capstone-ai --build-arg SOURCE_REVISION=$(git rev-parse HEAD) .
 | IDF 파일 → `/run/ai/idf.json` (읽기 전용 mount) | 예 | 개념 점수의 기준 통계. 없거나 코드와 맞지 않으면 추출 profile 이 준비되지 않아 readiness 503 |
 | `/var/cache/ai` volume | 권장 | 추출·관계·LLM 설명 캐시. 같은 입력의 LLM 호출을 다시 과금하지 않는다 |
 | `AI_EXPLAIN_LLM_MODEL` / `AI_EXPLAIN_LLM_EFFORT` | 아니오 | 기본 `claude-opus-5-5`, `medium` |
-| `AI_RELATION_LLM=1` | 권장 | 관계를 LLM 으로 보탠다 (`extract-hybrid-2`, `links-hybrid-1`). 끄면 노트 사이 경로가 거의 없다. effort 기본 `low` |
-| `AI_VERIFY_LLM` | 아니오 | 기본 1. LLM 간선 검증 `edges-llm-1`, LLM 설명 검증 `explanation-hybrid-2` (effort `low`) |
+| `AI_RELATION_LLM=1` | 권장 | 관계를 LLM 으로 보탠다 (`extract-hybrid-2`, `links-hybrid-1`). 끄면 노트 사이 경로가 거의 없다. effort 기본 `low`. 계산용 사실 추출 `facts-llm-1` 도 이것으로 켜진다 (effort 기본 `medium`, `AI_FACTS_LLM_*`) |
+| `AI_VERIFY_LLM` | 아니오 | 기본 1. LLM 간선 검증 `edges-llm-1`·`edges-llm-2`, LLM 설명 검증 `explanation-hybrid-2`, LLM 병합 판정 `merge-hybrid-1` (effort `low`), 조건부 결론 판정 `derive-sound-1` (effort `medium`, `AI_SOUND_LLM_*`) |
 | `AI_EMBEDDING_PROFILES` | 아니오 | 켤 임베딩 profile. 별칭 병합 후보 찾기는 `embeddings-bge-m3-1` (약 2 GB 메모리, [선택 근거](eval/alias-embeddings.md)). embeddings extra 로 빌드한 이미지만 |
 | `AI_MAX_INFLIGHT`, `AI_LLM_TIMEOUT_SECONDS` | 아니오 | 동시성, LLM 한 번 호출 제한(기본 90초) |
 
@@ -80,6 +80,6 @@ volumes:
 ## 확인한 것 (로컬 Docker 28, arm64)
 
 - 빌드 성공, `uid=10001` 로 실행, `HEALTHCHECK` healthy
-- readiness 200: `explain-llm-2` 포함 10개 profile. IDF 를 안 주면 readiness 503 (liveness 는 healthy)
+- readiness 200: 그 commit 의 profile 목록이 `profileVersions` 에 나온다 (LLM profile 은 LLM 설정이 있을 때만). IDF 를 안 주면 readiness 503 (liveness 는 healthy)
 - `/dev/` 404, 틀린 토큰 401
 - 참조 클라이언트(`app/client.py`)로 컨테이너에 전체 흐름(note-links → 검증 → LLM 설명 → 설명 검증)을 불러 candidate 제안 1건
