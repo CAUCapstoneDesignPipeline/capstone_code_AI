@@ -106,6 +106,27 @@ def test_extract_is_deterministic(client):
     assert a["meta"]["modelRevision"] == b["meta"]["modelRevision"]
 
 
+def test_extract_spans_skip_code_blocks_and_count_utf16(client):
+    """§4: 위치는 UTF-16 (이모지 = 2), 코드 블록(들여쓴 것 포함) 안은 추출하지 않지만 위치는 당기지 않는다."""
+    body = "# 재시도 🧠🧠\n\n- 예시\n  ```\n  재시도 중복 오류\n  ```\n\n**재시도**는 중복을 만든다. 🧠 중복은 오류를 만든다.\n"
+    req = copy.deepcopy(REQUEST)
+    req["note"].update(body=body, bodySha256=hashlib.sha256(body.encode()).hexdigest())
+    r = post(client, req)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    body16 = body.encode("utf-16-le")
+    code_start, code_end = body.index("  ```"), body.rindex("```") + 3
+    to16 = lambda i: len(body[:i].encode("utf-16-le")) // 2
+    spans = data["evidence"] + [m for c in data["concepts"] for m in c["mentions"]]
+    assert spans
+    for s in spans:
+        assert body16[2 * s["startOffset"]:2 * s["endOffset"]].decode("utf-16-le") == s["quote"]
+        assert s["endOffset"] <= to16(code_start) or s["startOffset"] >= to16(code_end)
+    again = post(client, req).json()
+    assert {k: again[k] for k in ("concepts", "evidence", "relations")} == \
+        {k: data[k] for k in ("concepts", "evidence", "relations")}
+
+
 def test_request_id_echoed(client):
     rid = str(uuid.uuid4())
     assert post(client, **{"X-Request-Id": rid}).headers["X-Request-Id"] == rid

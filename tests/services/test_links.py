@@ -123,3 +123,17 @@ def test_refused_note_keeps_rule_relations():
     assert set(c.notes) == set(NOTES)
     with pytest.raises(LLMError):
         build_corpus(NOTES, ex, lambda ms: select_concepts(ms, PROF), POLICY, PROF.limits, typer=Refuses("timeout"))
+
+
+def test_offline_evaluation_ranks_gold_pair_and_novelty():
+    from app.services.links.evaluate import evaluate, novelty
+    texts = {**NOTES, "db-wal2": "# WAL 메모\n\n**WAL** 은 로그를 먼저 기록한다. 체크포인트는 버퍼를 내린다.\n"}
+    topics = {"db-wal": "DB", "db-wal2": "DB", "os-journal": "OS", "ml": "ML"}
+    ex = ConceptExtractor(ExtractConfig())
+    c = build_corpus(texts, ex, lambda ms: select_concepts(ms, PROF), POLICY, PROF.limits)
+    nov = novelty(c, topics)
+    assert nov[("DB", "DB")] == 0.0 and 0 < nov[("DB", "OS")] <= 1
+    by = {r.method: r for r in evaluate(c, topics, [("db-wal", "os-journal")], alphas=(1.0,))}
+    assert by["S (다른 주제)"].ranks[("db-wal", "os-journal")] == 1     # 같은 주제(db-wal2)는 후보에서 빠진다
+    n1 = by["S·N^1"].ranks
+    assert n1[("db-wal", "os-journal")] == 1 and n1[("os-journal", "db-wal")] in (1, 2)   # 반대쪽은 db-wal2 도 후보

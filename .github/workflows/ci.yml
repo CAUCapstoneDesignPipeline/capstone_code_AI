@@ -1,0 +1,54 @@
+# AI 서버 CI: 시험과 Docker 이미지 확인. 비밀값을 쓰지 않는다 (LLM 은 시험에서 가짜로 바꾼다).
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.19"            # Dockerfile 의 uv 와 같다
+          enable-cache: true
+      - name: 의존성 (uv.lock 그대로)
+        run: uv sync --frozen --python 3.11
+      - name: 시험
+        run: uv run --frozen pytest -q
+
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 이미지 빌드
+        run: docker build -t capstone-ai:ci --build-arg SOURCE_REVISION=${{ github.sha }} .
+      - name: 컨테이너가 healthy 가 되는지 (HEALTHCHECK = /internal/v1/health/live)
+        run: |
+          docker run -d --name ai -e AI_SERVICE_TOKEN=ci-only-token capstone-ai:ci
+          for i in $(seq 1 30); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' ai)
+            [ "$s" = healthy ] && exit 0
+            [ "$s" = unhealthy ] && break
+            sleep 5
+          done
+          docker logs ai
+          exit 1
+      - name: 개발용 playground 가 이미지에 없는지
+        run: |
+          code=$(docker exec ai python -c "import urllib.request,urllib.error
+          try: urllib.request.urlopen('http://127.0.0.1:8000/dev/', timeout=2); print(200)
+          except urllib.error.HTTPError as e: print(e.code)")
+          [ "$code" = 404 ]

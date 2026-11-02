@@ -11,6 +11,7 @@ import hashlib
 import math
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 
 ROUND = 6
 
@@ -69,7 +70,11 @@ class SentenceTransformerEmbedder:
         from huggingface_hub import snapshot_download
         from sentence_transformers import SentenceTransformer
 
-        path = snapshot_download(model, revision=revision)
+        # 실행에 필요한 파일만 받는다 (ONNX 사본·다른 형식의 같은 가중치는 받지 않는다). safetensors 가 없을 때만 .bin
+        base = ["*.json", "*.txt", "*.model", "1_Pooling/*"]
+        path = snapshot_download(model, revision=revision, allow_patterns=[*base, "model.safetensors"])
+        if not (Path(path) / "model.safetensors").exists():
+            path = snapshot_download(model, revision=revision, allow_patterns=[*base, "pytorch_model.bin"])
         self.model = model
         self.revision = path.rstrip("/").rsplit("/", 1)[-1]     # 실제로 받은 commit hash
         self.prefix = prefix
