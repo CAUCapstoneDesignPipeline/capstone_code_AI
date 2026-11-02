@@ -76,7 +76,7 @@ REASONING_PROFILES = {p.id: p for p in (
     ReasoningProfile("links-det-1", "links", "kiwi-tfidf-adamic-adar", "links-det-1", _LINKS, ("extractor",)),
     # 같은 방법에 관계를 LLM 으로 보탠다 (extract-hybrid-2 의 관계와 같다). 규칙만으로는 관계가 적어 경로가 거의 없다
     # 계산용 사실 추출 (노트 하나). 노트에 쓰인 것만, quote 가 원문에 그대로 있어야 한다
-    ReasoningProfile("facts-llm-1", "facts", "llm", "facts-llm-1",
+    ReasoningProfile("facts-llm-3", "facts", "llm", "facts-llm-3",
                      ("derive/extract_llm.py", "derive/facts.py", "derive/cases.py"), ("fact_extractor",)),
     # 조건부 결론 도출 R1 구현 적용 · R2 비용 합성 (결정적). 규칙 검사만
     ReasoningProfile("derive-rules-1", "derive", "rules-r1-r2", "derive-rules-1", _DERIVE),

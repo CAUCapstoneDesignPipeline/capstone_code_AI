@@ -1,0 +1,14 @@
+[Unit]
+Description=Block AI container metadata access while retaining host ADC
+Requires=docker.service
+After=docker.service
+Before=capstone-ai.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/capstone-ai/metadata-guard.sh
+
+[Install]
+WantedBy=multi-user.target docker.service

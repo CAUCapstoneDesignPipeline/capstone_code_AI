@@ -49,7 +49,8 @@ def fact_from_dict(d: dict, fact_id: str, note_id: str, note_version: int, body:
         return None
     return Fact(fact_id, d["kind"], d["subject"], d.get("subjectKey") or subject_key(d["subject"]),
                 FactEvidence(note_id, note_version, body_sha, span[0], span[1], d["quote"]),
-                role=d.get("role"), op=d.get("op"), expr=d.get("expr"), case=d.get("case"),
+                role=d.get("role"), op=d.get("op"), role_label=d.get("roleLabel"), op_label=d.get("opLabel"),
+                expr=d.get("expr"), case=d.get("case"),
                 negated=bool(d.get("negated", False)), condition=d.get("condition"), other=d.get("other"),
                 other_key=d.get("otherKey"), origin=origin)
 
@@ -86,16 +87,55 @@ def manual_facts(note: Note, data: Path = DATA) -> list[Fact]:
 def load_cases(data: Path = DATA) -> list[dict]:
     """사례 목록. cases.json 의 aliases (기대 key → LLM 이 달리 쓸 수 있는 key) 를 사례마다 붙인다."""
     raw = json.loads((data / "cases.json").read_text(encoding="utf-8"))
-    return [{**c, "aliases": raw.get("aliases", {})} for c in raw["cases"]]
+    cases = [{**c, "aliases": raw.get("aliases", {})} for c in raw["cases"]]
+    test = data / "cases-test.json"                      # 독립 작성한 최종 시험. 고칠 때는 보지 않는다 (--split test)
+    if test.exists():
+        cases += [{**c, "split": "test", "aliases": {}} for c in json.loads(test.read_text(encoding="utf-8"))["cases"]]
+    return cases
+
+
+def _match(case: dict, got: list[Derivation]) -> tuple[dict, dict]:
+    """(기대 key → 기대, key → 도출). 기대 두 가지 쓰기:
+      - 키로: (rule, algorithm, structure). 주체 key 는 별칭을 기대 key 로 바꿔 비교한다 (LLM 추출은 같은 대상을
+        binary_min_heap 처럼 달리 부를 수 있다)
+      - 노트로 (독립 작성한 사례): {"rule", "notes": [전제를 낸 노트 둘]}. 키 없이 (규칙, 노트 쌍)으로 짝짓고,
+        같은 노트 쌍에 도출이 여럿이면 기대한 상태와 같은 것을 먼저 고른다
+    기대에 없는 도출은 따로 키를 달아 have 에만 넣는다 (잘못된 확정을 세려고)."""
+    canon = {a: k for k, alts in case.get("aliases", {}).items() for a in alts}
+    uid = {n: note_uuid(n) for n in case["notes"]}
+    back = {v: k for k, v in uid.items()}
+    want, have, used = {}, {}, set()
+    for i, e in enumerate(case["expect"]):
+        if "notes" in e:
+            key = (e["rule"], "+".join(sorted(e["notes"])), f"#{i}")
+            want[key] = e
+            ids = frozenset(uid[n] for n in e["notes"])
+            # 기대한 노트 둘을 모두 쓴 도출 (제3 노트가 같은 말을 되풀이해 셋이 되어도 인정, 노트가 적은 쪽을 먼저)
+            hits = sorted((d for d in got if d.rule == e["rule"] and ids <= frozenset(d.notes) and d.derivation_id not in used),
+                          key=lambda d: len(d.notes))
+            fits = lambda d: d.status == e["status"] and e.get("case", d.case) == d.case and e.get("result", d.result) == d.result
+            hit = next((d for d in hits if fits(d)), next((d for d in hits if d.status == e["status"]),
+                                                          hits[0] if hits else None))
+            if hit is not None:
+                have[key] = hit
+                used.add(hit.derivation_id)
+        else:
+            want[(e["rule"], e["algorithm"], e["structure"])] = e
+    for d in got:
+        if d.derivation_id in used:
+            continue
+        key = (d.rule, canon.get(d.algorithm[0], d.algorithm[0]), canon.get(d.structure[0], d.structure[0]))
+        if key in want and key not in have:
+            have[key] = d
+        else:
+            have[(d.rule, "+".join(sorted(back.get(n, n) for n in d.notes)), "+" + d.derivation_id)] = d
+        used.add(d.derivation_id)
+    return want, have
 
 
 def score_case(case: dict, got: list[Derivation]) -> dict:
-    """사례 하나의 비교. got 은 soundness 까지 끝난 최종 상태여야 한다.
-    주체 key 는 별칭을 기대 key 로 바꿔 비교한다 (LLM 추출은 같은 대상을 binary_min_heap 처럼 달리 부를 수 있다)."""
-    canon = {a: k for k, alts in case.get("aliases", {}).items() for a in alts}
-    want = {(e["rule"], e["algorithm"], e["structure"]): e for e in case["expect"]}
-    have = {(d.rule, canon.get(d.algorithm[0], d.algorithm[0]), canon.get(d.structure[0], d.structure[0])): d
-            for d in got}
+    """사례 하나의 비교. got 은 soundness 까지 끝난 최종 상태여야 한다."""
+    want, have = _match(case, got)
     concluded = [k for k, d in have.items() if d.status == "conclusion"]
     expected = [k for k, e in want.items() if e["status"] == "conclusion"]
 

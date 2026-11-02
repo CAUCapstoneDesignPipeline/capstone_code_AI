@@ -20,9 +20,15 @@ cases.json           사례: 쓰는 노트와 기대 결과. aliases 는 LLM 이
 | `dijkstra-fibonacci-amortized` | 상각 비용 | R2 `O(V log V + E)`, 상각 |
 | `wrong-premise-sorted-array` | 노트 전제가 틀림 (정렬 배열 삽입 O(1)) | R1 결론, R2 는 soundness 판정에서 기각 (`--sound` 일 때만 돈다) |
 
+**독립 시험 `cases-test.json`** (`t-*` 노트 14개, 사례 6개). 코드를 보지 않은 별도 에이전트가 문체·영역·변수 이름을 다르게 써서 만들었다
+(허프만, 인덱스 중첩 루프 조인, 해시 조인, DBSCAN, LRU, 위상 정렬). 기대 결과는 노트 이름으로 적는다 (키 없이). 사실은 적지 않아 `--auto` 로만 돈다.
+**고치는 중에는 보지 않는다** (`--split test` 는 고친 뒤 한 번). 한 번 보고 고쳤으면 그 시험은 더는 독립이 아니니 새로 써서 쓴다.
+dev 의 `d-*` 사례도 같은 모양이다 (영어·표·산문·LaTeX·다른 연산 이름·DB 인덱스).
+
 ```bash
 uv run ai derive                   # 사람이 적은 사실 + 규칙만 (LLM 없음, 같은 입력이면 같은 결과)
-uv run ai derive --auto --sound    # 사실을 LLM 으로 뽑고 결론을 판정 (ANTHROPIC_API_KEY 필요)
+uv run ai derive --auto --sound    # 사실을 LLM 으로 뽑고 결론을 판정 (ANTHROPIC_API_KEY 필요). 기본은 dev 사례만
+uv run ai derive --auto --sound --split test   # 독립 시험 (고친 뒤 한 번)
 ```
 
 **사례를 더할 때.** 노트를 `notes/` 에, 사람이 읽은 사실을 `facts/` 에 넣고 `cases.json` 에 기대 결과를 적는다.

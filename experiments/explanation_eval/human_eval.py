@@ -84,7 +84,7 @@ def blind(rows: list[dict]) -> tuple[list[dict], list[dict]]:
 async def _sample(note_names: list[str], per_note: int) -> list[dict]:
     import httpx
 
-    from app.client import AiClient, snapshot, suggest_knowledge, uid
+    from app.client import AiCallError, AiClient, snapshot, suggest_knowledge, uid
     from app.core.config import Settings
     from app.dev.router import playground_policy
     from app.main import create_app
@@ -109,8 +109,12 @@ async def _sample(note_names: list[str], per_note: int) -> list[dict]:
                 name = unicodedata.normalize("NFC", name)
                 if name not in snaps:
                     sys.exit(f"노트를 찾지 못했다: {name}")
-                res = await suggest_knowledge(client, snaps[name], [s for n, s in snaps.items() if n != name],
-                                              playground_policy(), max_paths=per_note)
+                try:
+                    res = await suggest_knowledge(client, snaps[name], [s for n, s in snaps.items() if n != name],
+                                                  playground_policy(), max_paths=per_note)
+                except AiCallError as e:     # 한 노트의 실패(예: 설명이 길이 제한을 넘음)가 표본 전체를 버리지 않게
+                    print(f"{name}: 실패 {e.status} {(e.error or {}).get('code')}", flush=True)
+                    continue
                 rows += _rows(name, names, res, len(rows))
                 print(f"{name}: 제안 {len(res['suggestions'])} · 제외 {len(res['screened']['rejected'])}", flush=True)
     return rows

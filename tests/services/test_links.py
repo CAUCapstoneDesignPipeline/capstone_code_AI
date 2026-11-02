@@ -159,3 +159,14 @@ def test_heading_path_skips_code_blocks():
     assert heading_path(text, text.index("문장이다")) == "DB > WAL > 오해"
     assert heading_path(text, text.index("끝.")) == "DB > 체크포인트"
     assert heading_path("본문뿐", 0) == ""
+
+
+def test_disk_entry_memo_survives_a_new_process_and_ignores_broken_files(tmp_path):
+    from app.services.links.corpus import DiskEntryMemo, NoteEntry
+    entry = NoteEntry("n", "본문", {"a": 1.0}, {"a": frozenset({"a"})}, {"a": [(0, 1)]}, {"a": "A"}, [("a", "is_a", "b")])
+    key = ("n", "hash", '["v1"]')
+    DiskEntryMemo(tmp_path).put(key, entry)
+    again = DiskEntryMemo(tmp_path)                                    # 새 프로세스를 흉내: 메모리 캐시는 비어 있다
+    assert again.get(key) == entry and again.get(("n", "other", '["v1"]')) is None   # 원문이 바뀌면 다른 키
+    again._path(key).write_bytes(b"not a pickle")
+    assert DiskEntryMemo(tmp_path).get(key) is None                    # 깨진 파일은 없는 것으로 보고 다시 만든다

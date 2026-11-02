@@ -31,7 +31,7 @@ def doc(name):
 def fact_json(f):
     e = f.evidence
     return {"factId": f.fact_id, "kind": f.kind, "subject": f.subject, "subjectKey": f.subject_key, "role": f.role,
-            "op": f.op, "expr": f.expr, "case": f.case, "negated": f.negated, "condition": f.condition,
+            "op": f.op, "roleLabel": f.role_label, "opLabel": f.op_label, "expr": f.expr, "case": f.case, "negated": f.negated, "condition": f.condition,
             "other": f.other, "otherKey": f.other_key, "origin": f.origin,
             "evidence": {"noteId": e.note_id, "noteVersion": e.note_version, "bodySha256": e.body_sha256,
                          "startOffset": e.start, "endOffset": e.end, "quote": e.quote}}
@@ -138,7 +138,7 @@ def test_sound_profile_unavailable_without_judge():
 
 def test_facts(client):
     note = doc("indexed-heap")
-    r = post(client, "/facts", {"context": ctx(note), "profileVersion": "facts-llm-1", "note": note,
+    r = post(client, "/facts", {"context": ctx(note), "profileVersion": "facts-llm-3", "note": note,
                                 "knownSubjects": ["dijkstra"]})
     assert r.status_code == 200, r.text
     fs = r.json()["facts"]
@@ -147,7 +147,7 @@ def test_facts(client):
         e = f["evidence"]
         assert note["body"].encode("utf-16-le")[2 * e["startOffset"]:2 * e["endOffset"]].decode("utf-16-le") == e["quote"]
     other = dict(ctx(note), noteId=str(uuid.uuid4()))
-    r = post(client, "/facts", {"context": other, "profileVersion": "facts-llm-1", "note": note})
+    r = post(client, "/facts", {"context": other, "profileVersion": "facts-llm-3", "note": note})
     assert r.status_code == 422
 
 

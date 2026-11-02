@@ -239,6 +239,164 @@
      "status": "rejected"
     }
    ]
+  },
+  {
+   "id": "heapsort-binary-heap",
+   "split": "dev",
+   "auto_only": true,
+   "scene": "영어 노트 + 표: 힙 정렬",
+   "notes": [
+    "d-heapsort",
+    "d-binary-heap-en"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "notes": [
+      "d-heapsort",
+      "d-binary-heap-en"
+     ],
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "notes": [
+      "d-heapsort",
+      "d-binary-heap-en"
+     ],
+     "status": "conclusion",
+     "result": "O(n log n)"
+    }
+   ]
+  },
+  {
+   "id": "hash-join-hash-table",
+   "split": "dev",
+   "auto_only": true,
+   "scene": "서술형 한국어 + 평균·최악 비용이 함께 적힘: 해시 조인 (변수 N, M). 경우마다 따로 결론",
+   "notes": [
+    "d-hash-join",
+    "d-hash-table"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "notes": [
+      "d-hash-join",
+      "d-hash-table"
+     ],
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "notes": [
+      "d-hash-join",
+      "d-hash-table"
+     ],
+     "status": "conclusion",
+     "result": "O(M + N)",
+     "case": "average"
+    },
+    {
+     "rule": "R2",
+     "notes": [
+      "d-hash-join",
+      "d-hash-table"
+     ],
+     "status": "conclusion",
+     "result": "O((M + N) N)",
+     "case": "worst"
+    }
+   ]
+  },
+  {
+   "id": "inlj-bplus-tree",
+   "split": "dev",
+   "auto_only": true,
+   "scene": "LaTeX + 표, 어휘 밖 구성 요소(DB 인덱스)",
+   "notes": [
+    "d-inlj",
+    "d-bplus-tree"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "notes": [
+      "d-inlj",
+      "d-bplus-tree"
+     ],
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "notes": [
+      "d-inlj",
+      "d-bplus-tree"
+     ],
+     "status": "conclusion",
+     "result": "O(R log S)"
+    }
+   ]
+  },
+  {
+   "id": "inlj-lookup-missing",
+   "split": "dev",
+   "auto_only": true,
+   "scene": "필수 전제 없음: 점 조회 비용이 노트에 없다",
+   "notes": [
+    "d-inlj",
+    "d-bplus-tree-nolookup"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "notes": [
+      "d-inlj",
+      "d-bplus-tree-nolookup"
+     ],
+     "status": "held"
+    }
+   ]
+  },
+  {
+   "id": "sliding-window-deque",
+   "split": "dev",
+   "auto_only": true,
+   "scene": "연산 이름이 다르게 쓰임(뒤에 넣기·앞에서 빼기)",
+   "notes": [
+    "d-sliding-window",
+    "d-deque"
+   ],
+   "expect": [
+    {
+     "rule": "R1",
+     "notes": [
+      "d-sliding-window",
+      "d-deque"
+     ],
+     "status": "conclusion"
+    },
+    {
+     "rule": "R2",
+     "notes": [
+      "d-sliding-window",
+      "d-deque"
+     ],
+     "status": "conclusion",
+     "result": "O(n)"
+    }
+   ]
+  },
+  {
+   "id": "heapsort-deque-negative",
+   "split": "dev",
+   "auto_only": true,
+   "scene": "음성: 힙 정렬과 덱은 이어지지 않는다",
+   "notes": [
+    "d-heapsort",
+    "d-deque"
+   ],
+   "expect": []
   }
  ]
 }

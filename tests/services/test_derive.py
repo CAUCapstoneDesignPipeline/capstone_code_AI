@@ -44,7 +44,7 @@ def test_josa():
     assert josa("O(log V)", "예요") == "O(log V)예요" and josa("BFS", "은") == "BFS는"
 
 
-@pytest.mark.parametrize("case", [c for c in load_cases() if c.get("needs") != "sound"], ids=lambda c: c["id"])
+@pytest.mark.parametrize("case", [c for c in load_cases() if c.get("needs") != "sound" and not c.get("auto_only")], ids=lambda c: c["id"])
 def test_cases_with_manual_facts(case):
     got, _ = run_case(case)
     s = score_case(case, got)
@@ -53,6 +53,35 @@ def test_cases_with_manual_facts(case):
 
 def _case(cid):
     return next(c for c in load_cases() if c["id"] == cid)
+
+
+def test_explanation_is_friendly_and_defines_terms():
+    got, _ = run_case(_case("dijkstra-fibonacci-amortized"))
+    r2 = next(d for d in got if d.rule == "R2")
+    e = r2.explanation
+    assert e.startswith(r2.conclusion + ". 쉽게 말하면,") and "차근차근" in e
+    assert "삽입은 새 원소를 넣는 일이에요" in e and "O(log n)이라는 건 n이 아주 커져도" in e   # 용어·표기 풀이
+    assert "상각 시간은 연산 하나하나가 아니라" in e
+    assert all(s.text in e for s in r2.steps)                                         # 계산 단계는 그대로 들어간다
+    assert "이 결론이 성립하는 조건이에요." in e
+
+
+def test_explanation_of_held_and_rejected_says_what_is_missing():
+    got, _ = run_case(_case("decrease-key-cost-missing"))
+    held = next(d for d in got if d.status == "held")
+    assert held.explanation.startswith("아직 확정하지 못한 결론이에요") and "키 줄이기 연산 비용" in held.explanation
+    assert "쉽게 말하면" not in held.explanation and "먼저 나오는 말" not in held.explanation
+    got, _ = run_case(_case("plain-heap-no-decrease-key"))
+    assert got[0].explanation.startswith("이 결론은 버렸어요") and "그 까닭은 이래요." in got[0].explanation
+
+
+@pytest.mark.parametrize("expr, want", [
+    ("1", "입력이 커져도 걸리는 시간이 거의 그대로라는 뜻이에요"), ("log n", "n이 아주 커져도 아주 천천히만 늘어난다는 뜻이에요"),
+    ("V", "V에 비례해서 늘어난다는 뜻이에요"), ("V^2", "V가 두 배가 되면 대략 네 배가 된다는 뜻이에요"),
+    ("(V + E) log V", None), ("foo(n)", None)])
+def test_cost_gloss(expr, want):
+    from app.services.derive.plain import cost_gloss
+    assert cost_gloss(expr) == want
 
 
 def test_dijkstra_explanation_cites_both_notes():
@@ -103,9 +132,9 @@ def test_unreadable_expression_holds():
 def test_factset_drops_malformed():
     ev = FactEvidence("n", 1, "s", 0, 1, "x")
     fs = FactSet.of([Fact("a", "needs_op", "X", "x", ev, role="priority_queue"),          # op 없음
-                     Fact("b", "op_cost", "Y", "y", ev, op="teleport"),
+                     Fact("b", "op_cost", "Y", "y", ev, op="Teleport Now"),
                      Fact("c", "op_cost", "Z", "Bad Key", ev, op="insert")])
-    assert {p.reason for p in fs.problems} == {"missing_op", "unknown_op", "invalid_key"} and not fs.facts
+    assert {p.reason for p in fs.problems} == {"missing_op", "invalid_op", "invalid_key"} and not fs.facts
 
 
 # ---- LLM (가짜) ----
@@ -133,13 +162,13 @@ def test_extractor_grounds_quotes_and_drops_invented(tmp_path):
     body = "# 힙\n- insert: O(log n)\n"
     fake = FakeLLM({"facts": [_raw("insert: O(log n)"),
                               _raw("extract-min: O(log n)", op="extract_min"),                 # 원문에 없는 quote
-                              _raw("insert: O(log n)", op="teleport")]})                       # enum 밖 (스키마가 막지만 다시 본다)
+                              _raw("insert: O(log n)", op="Teleport Now")]})                   # key 모양이 아님 (스키마는 못 막는다)
     ex = FactExtractor(fake, tmp_path)
     got = ex.extract("note-1", 2, body, "sha", ["dijkstra"])
     assert [f.op for f in got.facts] == ["insert"] and got.facts[0].origin == "extracted"
     f = got.facts[0]
     assert (f.evidence.start, f.evidence.end) == locate(body, "insert: O(log n)") and f.role is None
-    assert got.dropped == {"quote_not_in_note": 1, "unknown_op": 1}
+    assert got.dropped == {"quote_not_in_note": 1, "invalid_op": 1}
     assert "dijkstra" in fake.calls[0][1]                               # 이미 있는 이름을 알려 준다
     ex.extract("note-1", 2, body, "sha", ["dijkstra"])
     assert len(fake.calls) == 1                                         # 캐시
@@ -182,3 +211,56 @@ def test_soundness_uncertain_holds_and_bad_output_is_error(tmp_path):
     bad = {"judgments": [{"derivation": "D1", "unfaithful": ["P99"], "verdict": "sound", "reason": "x"}]}
     with pytest.raises(LLMError):
         SoundnessJudge(FakeLLM(bad), tmp_path / "b").judge(items)
+
+
+def test_open_vocabulary_new_role_and_op_get_labels():
+    """어휘 밖의 역할·연산도 key + 한국어 이름으로 도출에 쓰인다 (DB 인덱스 조회)."""
+    ev = lambda n: FactEvidence(n, 1, "s", 0, 1, "x")
+    facts = [Fact("a1", "needs_op", "인덱스 중첩 루프 조인", "inlj", ev("N1"), role="join_index", op="point_lookup",
+                  role_label="조인 인덱스", op_label="점 조회", expr="R"),
+             Fact("a2", "size_bound", "인덱스 중첩 루프 조인", "inlj", ev("N1"), role="join_index", expr="S"),
+             Fact("a3", "extra_cost", "인덱스 중첩 루프 조인", "inlj", ev("N1"), role="join_index", expr="R"),
+             Fact("b1", "implements", "B+ 트리 인덱스", "bplus", ev("N2"), role="join_index"),
+             Fact("b2", "op_cost", "B+ 트리 인덱스", "bplus", ev("N2"), op="point_lookup", op_label="점 조회",
+                  expr="log n", case="worst")]
+    got = {d.rule: d for d in derive(facts)}
+    assert got["R2"].status == "conclusion" and got["R2"].result == "O(R log S)" and "점 조회" in got["R2"].explanation
+    assert got["R2"].role_label == "조인 인덱스"
+
+
+def _ev(note):
+    return FactEvidence(note, 1, "s", 0, 1, "x")
+
+
+def _fx(i, kind, subject, note, **kw):
+    return Fact(i, kind, subject, kw.pop("key", subject), _ev(note), **kw)
+
+
+def test_phase_counts_are_summed():
+    """단계마다 적힌 횟수는 합친다: k번 넣고, 병합마다 k-1번 넣으면 2k-1번 (하나만 고르면 전체보다 작게 잡는다)."""
+    facts = [_fx("a1", "needs_op", "H", "N1", role="priority_queue", op="insert", expr="k"),
+             Fact("a1b", "needs_op", "H", "H", FactEvidence("N1", 1, "s", 5, 6, "y"), role="priority_queue", op="insert", expr="k-1"),
+             _fx("a2", "size_bound", "H", "N1", role="priority_queue", expr="k"),
+             _fx("a3", "extra_cost", "H", "N1", role="priority_queue", expr="k"),
+             _fx("b1", "implements", "Heap", "N2", role="priority_queue"),
+             _fx("b2", "op_cost", "Heap", "N2", op="insert", expr="log n")]
+    r2 = next(d for d in derive(facts) if d.rule == "R2")
+    assert r2.status == "conclusion" and r2.result == "O(k log k)"
+    assert {"a1", "a1b"} <= set(r2.premises) and "k + k-1" in r2.explanation
+
+
+def test_r2_per_cost_case_and_single_refused_op_rejects():
+    facts = [_fx("a1", "needs_op", "J", "N1", role="dictionary", op="insert", expr="N"),
+             _fx("a2", "needs_op", "J", "N1", role="dictionary", op="search", expr="M"),
+             _fx("a3", "size_bound", "J", "N1", role="dictionary", expr="N"),
+             _fx("a4", "extra_cost", "J", "N1", role="dictionary", expr="N+M"),
+             _fx("b0", "implements", "T", "N2", role="dictionary")]
+    for op in ("insert", "search"):
+        facts += [_fx(f"b-{op}-avg", "op_cost", "T", "N2", op=op, expr="1", case="average"),
+                  _fx(f"b-{op}-w", "op_cost", "T", "N2", op=op, expr="n", case="worst")]
+    out = {d.case: d for d in derive(facts) if d.rule == "R2"}
+    assert out["average"].result == "O(M + N)" and out["worst"].result == "O((M + N) N)"   # 경우마다 따로
+    refused = [_fx("a1", "needs_op", "D", "N1", role="spatial_index", op="range_query", expr="N"),
+               _fx("b1", "op_cost", "K", "N2", op="range_query", negated=True)]
+    d = derive(refused)
+    assert [(x.rule, x.status) for x in d] == [("R1", "rejected")]                       # 연산 하나만 겹쳐도 기각은 낸다

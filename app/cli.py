@@ -458,8 +458,9 @@ def derive_main(argv=None):
     ap = argparse.ArgumentParser(prog="ai derive")
     ap.add_argument("--data", type=Path, default=DATA)
     ap.add_argument("--case", nargs="*", help="이 사례만")
-    ap.add_argument("--split", choices=["dev", "test", "all"], default="all")
-    ap.add_argument("--auto", action="store_true", help="사실을 LLM 으로 뽑는다 (facts-llm-1)")
+    ap.add_argument("--split", choices=["dev", "test", "all"], default="dev",
+                    help="규칙·프롬프트를 고치는 중에는 dev. test 는 고친 뒤 한 번만")
+    ap.add_argument("--auto", action="store_true", help="사실을 LLM 으로 뽑는다 (facts-llm-3)")
     ap.add_argument("--sound", action="store_true", help="규칙을 통과한 결론을 LLM 이 판정한다 (derive-sound-1)")
     ap.add_argument("--show", action="store_true", help="결론마다 설명을 보여 준다")
     ap.add_argument("--cache", type=Path, default=Path("data/private/cache"))
@@ -473,10 +474,14 @@ def derive_main(argv=None):
             sys.exit("사실 추출 LLM 이 없다 (ANTHROPIC_API_KEY 또는 AI_FACTS_LLM_PROVIDER)")
         ex = FactExtractor(make_llm(cfg), args.cache / "relations" / "facts")
         known: set[str] = set()
+        known_roles: set[str] = set()
+        known_ops: set[str] = set()
 
         def facts_of(n):
-            got = ex.extract(n.note_id, 1, n.body, n.sha, sorted(known))
+            got = ex.extract(n.note_id, 1, n.body, n.sha, sorted(known), sorted(known_roles), sorted(known_ops))
             known.update(f.subject_key for f in got.facts)
+            known_roles.update(f.role for f in got.facts if f.role)
+            known_ops.update(f.op for f in got.facts if f.op)
             for k, v in got.dropped.items():
                 dropped[k] = dropped.get(k, 0) + v
             return got.facts
@@ -488,7 +493,8 @@ def derive_main(argv=None):
         judge = SoundnessJudge(make_llm(cfg), args.cache / "verifications" / "soundness")
 
     cases = [c for c in load_cases(args.data) if (not args.case or c["id"] in args.case)
-             and args.split in ("all", c.get("split", "dev")) and (c.get("needs") != "sound" or judge is not None)]
+             and args.split in ("all", c.get("split", "dev")) and (c.get("needs") != "sound" or judge is not None)
+             and (not c.get("auto_only") or args.auto)]
     rows = []
     for c in cases:
         got, used = run_case(c, args.data, facts_of)
