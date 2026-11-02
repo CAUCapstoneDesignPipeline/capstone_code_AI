@@ -407,6 +407,32 @@ def _edge_view(e: dict, levels: tuple[str, ...]) -> dict | None:
             "evidence": ev[:6]}
 
 
+def _edge_index(state, corpus, min_confidence: float, levels: tuple[str, ...]):
+    """고른 증거 수준의 선·이웃·세기·허브 기준을 키워드 집합마다 한 번만 만든다. 요청마다 모든 선을 다시 훑지 않고, 고른 키워드의 이웃만 본다."""
+    from types import SimpleNamespace
+
+    kws, meta, edges = _keyword_set(state, corpus, min_confidence)
+    cached = getattr(state, "edge_index", None)
+    if not cached or cached[0] is not edges:
+        cached = state.edge_index = (edges, {})
+    if levels not in cached[1]:
+        views = {pair: v for pair, e in edges.items() if (v := _edge_view(e, levels))}
+        adj: dict[str, dict[str, float]] = {}
+        for (a, b), v in views.items():
+            adj.setdefault(a, {})[b] = v["score"]
+            adj.setdefault(b, {})[a] = v["score"]
+        degs = sorted(len(n) for n in adj.values())
+        by_note: dict[str, set[str]] = {}
+        for k in kws:
+            for c in k.concepts:
+                by_note.setdefault(meta[c.conceptId]["note"], set()).add(k.keywordId)
+        cached[1][levels] = SimpleNamespace(
+            kws=kws, meta=meta, by_id={k.keywordId: k for k in kws}, by_note=by_note, views=views, adj=adj,
+            strength={k: sum(n.values()) for k, n in adj.items()},
+            hub=max(40, degs[int(len(degs) * 0.99)] if degs else 0))        # 상위 1% 이상으로 이어진 키워드는 허브
+    return cached[1][levels]
+
+
 async def _graph_corpus(state, note_id: str | None, text: str | None):
     """노트 폴더 색인 (붙여넣은 글이 있으면 그 글을 노트로 더해서). (색인, 노트 이름)."""
     if state.extractor is None:
@@ -448,16 +474,9 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
     if q.scope == "note" and note_id is None:
         raise HTTPException(400, "note 범위에는 noteId 또는 text 가 필요하다")
     mc = max(0.0, min(q.minConfidence, 1.0))
-    kws, meta, edges = await run_in_threadpool(_keyword_set, state, corpus, mc)
-    by_id = {k.keywordId: k for k in kws}
-    mine = {k.keywordId for k in kws if note_id and any(meta[c.conceptId]["note"] == note_id for c in k.concepts)}
-    views = {pair: v for pair, e in edges.items() if (v := _edge_view(e, levels))}
-    strength: dict[str, float] = {}
-    adj: dict[str, dict[str, float]] = {}
-    for (a, b), v in views.items():
-        for x, y in ((a, b), (b, a)):
-            strength[x] = strength.get(x, 0.0) + v["score"]
-            adj.setdefault(x, {})[y] = v["score"]
+    ei = await run_in_threadpool(_edge_index, state, corpus, mc, levels)
+    kws, meta, by_id, adj, strength = ei.kws, ei.meta, ei.by_id, ei.adj, ei.strength
+    mine = ei.by_note.get(note_id, set()) if note_id else set()
     if q.scope == "note":
         own = sorted((k for k in mine if k in strength), key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 14]
         near: dict[str, float] = {}
@@ -467,11 +486,11 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
                     near[y] = near.get(y, 0.0) + sc
         chosen = own + sorted(near, key=lambda k: (-near[k], by_id[k].name))[:max(6, len(own) * 3 // 4)]
     else:
-        pool = [k.keywordId for k in kws if k.keywordId in strength and len(k.note_ids()) >= 2]
+        pool = [k for k in strength if len(by_id[k].note_ids()) >= 2]
         chosen = sorted(pool, key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 200]
     inside = set(chosen)
-    out_edges = [{"a": a, "b": b, **v} for (a, b), v in sorted(views.items(), key=lambda kv: -kv[1]["score"])
-                 if a in inside and b in inside]
+    out_edges = sorted(({"a": a, "b": b, **ei.views[(a, b)]} for a in chosen for b in adj.get(a, {}) if b in inside and a < b),
+                       key=lambda e: -e["score"])
     degree: dict[str, int] = {}
     for e in out_edges:
         degree[e["a"]] = degree.get(e["a"], 0) + 1
@@ -503,19 +522,12 @@ async def keyword_connect(q: ConnectQuery, request: Request):
     levels = _levels(q.levels)
     corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
     mc = max(0.0, min(q.minConfidence, 1.0))
-    kws, meta, edges = await run_in_threadpool(_keyword_set, state, corpus, mc)
-    by_id = {k.keywordId: k for k in kws}
+    ei = await run_in_threadpool(_edge_index, state, corpus, mc, levels)
+    meta, by_id, views, adj, hub = ei.meta, ei.by_id, ei.views, ei.adj, ei.hub
     if q.a not in by_id or q.b not in by_id or q.a == q.b:
         raise HTTPException(404, "키워드를 찾지 못했다 (같은 키워드 둘이면 안 된다)")
 
     def work():
-        views = {pair: v for pair, e in edges.items() if (v := _edge_view(e, levels))}
-        adj: dict[str, dict[str, float]] = {}
-        for (x, y), v in views.items():
-            adj.setdefault(x, {})[y] = v["score"]
-            adj.setdefault(y, {})[x] = v["score"]
-        degs = sorted(len(n) for n in adj.values())
-        hub = max(40, degs[int(len(degs) * 0.99)] if degs else 0)          # 상위 1% 이상으로 이어진 키워드는 허브
         key = lambda x, y: (x, y) if x < y else (y, x)
         edge = lambda x, y: {"a": x, "b": y, **views[key(x, y)]}
         a, b = q.a, q.b
@@ -542,6 +554,7 @@ async def keyword_connect(q: ConnectQuery, request: Request):
                     "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation}
                                  for c in kw.concepts[:6 if full else 2]]}
         return {
+            "pair": _best_pair(by_id[a], by_id[b], meta),
             "a": info(a, True), "b": info(b, True), "levels": list(levels), "hubThreshold": hub, "hubsSkipped": skipped,
             "direct": ({"a": a, "b": b, **views[key(a, b)]} if key(a, b) in views else None),
             "paths": [{"hops": len(p) - 1, "strength": round(sc, 4), "nodes": [info(k) for k in p],
@@ -551,6 +564,22 @@ async def keyword_connect(q: ConnectQuery, request: Request):
     out = await run_in_threadpool(work)
     out["note"] = note_id
     return out
+
+
+def _best_pair(ka, kb, meta) -> dict | None:
+    """두 키워드가 이어졌을 때 새 지식을 만들 요소 쌍: 서로 다른 노트의 혼자 읽을 수 있는 설명 둘. 공유 낱말이 많은 쌍을, 같으면 신뢰도가 높은 쌍을 고른다.
+    (임베딩을 새로 계산하지 않으려고 낱말만 본다.)"""
+    from app.services.links.pairing import TOKEN, elements_from, gate
+
+    els = [e for e in elements_from([ka, kb], meta) if gate(e.text)]
+    best = None
+    for x in (e for e in els if e.keyword_id == ka.keywordId):
+        for y in (e for e in els if e.keyword_id == kb.keywordId):
+            if x.note != y.note:
+                score = (len(set(TOKEN.findall(x.text.lower())) & set(TOKEN.findall(y.text.lower()))), min(x.confidence or 0, y.confidence or 0))
+                if best is None or score > best[0]:
+                    best = (score, x, y)
+    return None if best is None else {"a": _side(best[1]), "b": _side(best[2])}
 
 
 class RelSide(BaseModel):

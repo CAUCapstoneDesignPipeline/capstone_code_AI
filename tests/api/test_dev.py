@@ -396,3 +396,20 @@ def test_proposal_screen_and_generate_endpoints(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     with TestClient(dev_app(), client=LOCAL) as c:
         assert c.post("/dev/proposals/generate", json={"a": a, "b": b}).status_code == 503
+
+
+def test_keyword_connect_returns_the_element_pair_to_make_new_knowledge_from(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    (tmp_path / "DB-WAL.md").write_text("# WAL\n\n**WAL**은 **트랜잭션**이 커밋되기 전에 변경 내용을 로그로 디스크에 먼저 기록하는 방식이다. "
+                                        "**체크포인트**는 장애가 났을 때 복구 시간을 줄이려고 쓰는 기록 지점이다.\n", encoding="utf-8")
+    (tmp_path / "ACID.md").write_text("# ACID\n\n**원자성**은 **트랜잭션**이 전부 반영되거나 전혀 반영되지 않는 성질이라는 뜻이다. "
+                                      "**복구**는 장애 뒤에 **트랜잭션** 로그를 다시 읽어 데이터를 되돌리는 일이다.\n", encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        g = c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "scope": "note", "limit": 30, "levels": ["sentence", "heading", "paragraph"]}).json()
+        ids = {n["title"]: n["id"] for n in g["nodes"]}
+        r = c.post("/dev/keyword-connect", json={"a": ids["WAL"], "b": ids["복구"], "levels": ["sentence", "heading", "paragraph"]}).json()
+        p = r["pair"]
+        assert p["a"]["keyword"] == "WAL" and p["b"]["keyword"] == "복구" and p["a"]["note"] == "DB-WAL" and p["b"]["note"] == "ACID"
+        assert p["a"]["conceptId"] and p["b"]["noteId"] and p["a"]["text"] and p["b"]["end"] > p["b"]["start"]

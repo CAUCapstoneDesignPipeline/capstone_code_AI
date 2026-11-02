@@ -6,6 +6,15 @@
   - 코사인 0.5 미만은 쓸모 있는 쌍이 하나도 없었다 (0 / 89). 임베딩이 있으면 0.5 를 바닥으로 둔다.
   - 요소가 혼자 읽을 수 있어야 한다 (너무 짧거나 이어 붙는 말로 시작하거나 표 칸인 것은 뺀다).
   - 후보는 적어도 3~16% 만 쓸모 있었다. 이 후보를 LLM 선별(pair_screen) 이 거른다.
+
+비용 (요소 E 개, 이 노트의 요소 A 개). 모든 쌍(E²/2)을 비교하지 않는다 — 요소마다 신호가 가리키는 몇십 개만 본다:
+  - 색인은 O(글자 수) 한 번: 공유 낱말 역색인, 키워드 이름 trie 로 "어느 요소가 어느 키워드를 말하는지" 를 글 하나당 한 번 훑어 찾는다
+    (요소마다 모든 키워드 이름을 훑으면 A·K 번 부분 문자열 검사가 든다. 실제 노트에서 전체 3,318 요소 기준 6.9초 → 0.75초)
+  - 공유 낱말 O(낱말 수 · 25), 공통 키워드 O(말한 키워드 수 · 40): 낱말·키워드 빈도 상한이 있어 말뭉치가 커져도 늘지 않는다
+  - 임베딩 근접은 A × E 행렬곱 한 번 + argpartition (정렬하지 않는다). E × E 행렬은 만들지 않는다. 근사 색인(군집 IVF)도 해 봤지만
+    실제 임베딩에서는 이웃 10개의 90% 를 찾으려면 전체의 26~46% 를 훑어야 해서 (재현율 0.63~0.95) 정확한 검색이 낫다.
+    E 가 수십만이 되면 이 자리(_nearest_all)에 HNSW 같은 그래프 색인을 꽂는다
+  - 새 지식 만들기(LLM + 웹 검색) 는 후보 수가 아니라 고정한 개수(상위 k) 나 사용자가 이은 한 쌍만 한다 — 이어진 쌍마다 하지 않는다
 """
 
 import hashlib
@@ -94,7 +103,42 @@ class PairingIndex:
             self.kw_names.setdefault(e.keyword_id, sorted(names))
         self.name_tokens = [set().union(*(set(TOKEN.findall(n)) for n in self.kw_names[e.keyword_id])) if self.kw_names[e.keyword_id] else set()
                             for e in elements]
-        self._mentioners: dict[str, list[int]] = {}
+        self._index_mentions()
+        if vectors is not None:
+            import numpy as np
+            codes = lambda xs: np.unique(xs, return_inverse=True)[1]
+            self._ok_arr = np.array(self.ok)
+            self._kid_code, self._note_code = codes([e.keyword_id for e in elements]), codes([e.note for e in elements])
+
+    def _index_mentions(self):
+        """키워드 이름·별칭이 설명에 나오는지를 글 하나당 한 번의 훑기로 모두 찾는다 (이름 trie). 요소마다 모든 이름을 훑지 않는다."""
+        trie: dict = {}
+        for kid, names in self.kw_names.items():
+            for n in names:
+                node = trie
+                for ch in n:
+                    node = node.setdefault(ch, {})
+                node.setdefault(None, set()).add(kid)
+        self.elem_kws: list[set[str]] = [set() for _ in self.el]
+        self.mentioners: dict[str, list[int]] = defaultdict(list)
+        for i, text in enumerate(self.low):
+            if not self.ok[i]:
+                continue
+            found: set[str] = set()
+            for s in range(len(text)):
+                node = trie.get(text[s])
+                t = s + 1
+                while node is not None:
+                    if None in node:
+                        found |= node[None]
+                    if t >= len(text):
+                        break
+                    node = node.get(text[t])
+                    t += 1
+            found.discard(self.el[i].keyword_id)                   # 자기 키워드는 다른 키워드를 잇는 고리가 아니다
+            self.elem_kws[i] = found
+            for kid in found:
+                self.mentioners[kid].append(i)
 
     def _valid(self, i: int, j: int) -> bool:
         a, b = self.el[i], self.el[j]
@@ -110,16 +154,63 @@ class PairingIndex:
                     best[e.keyword_id] = e.idx
         return sorted(best.values(), key=lambda i: (-(self.el[i].confidence or 0), i))[:limit]
 
-    def _mentions(self, kid: str) -> list[int]:
-        """그 키워드의 이름·별칭이 설명에 나오는 요소들 (자기 키워드의 요소는 뺀다)."""
-        if kid not in self._mentioners:
-            names = self.kw_names.get(kid, [])
-            self._mentioners[kid] = [i for i, t in enumerate(self.low) if self.ok[i] and self.el[i].keyword_id != kid
-                                     and any(n in t for n in names)]
-        return self._mentioners[kid]
+    def _nearest_all(self, anchors: list[int], k: int) -> dict[int, list[int]]:
+        """anchors 마다 가까운 다른 노트·다른 키워드 요소 k 개. 행렬곱 한 번(256개씩)으로 구하고 정렬 없이 k 개만 뽑는다."""
+        import numpy as np
+        out: dict[int, list[int]] = {}
+        anchors = [i for i in anchors if self.ok[i]]
+        k = min(k, len(self.el) - 1)
+        if self.vec is None or not anchors or k < 1:
+            return out
+        for s in range(0, len(anchors), 256):
+            chunk = anchors[s:s + 256]
+            sims = self.vec[chunk] @ self.vec.T                                  # (chunk, E)
+            bad = (~self._ok_arr[None, :] | (self._kid_code[None, :] == self._kid_code[chunk][:, None])
+                   | (self._note_code[None, :] == self._note_code[chunk][:, None]))
+            sims[bad] = -np.inf
+            top = np.argpartition(-sims, k - 1, axis=1)[:, :k]
+            for r, i in enumerate(chunk):
+                out[i] = [int(j) for j in top[r] if np.isfinite(sims[r, j])]
+        return out
+
+    def anchors(self, note: str, limit: int = 40) -> list[int]:
+        """이 노트의 요소 중 혼자 읽을 수 있는 것. 키워드마다 하나, 신뢰도 순."""
+        best: dict[str, int] = {}
+        for e in self.el:
+            if e.note == note and self.ok[e.idx]:
+                cur = best.get(e.keyword_id)
+                if cur is None or (e.confidence or 0) > (self.el[cur].confidence or 0):
+                    best[e.keyword_id] = e.idx
+        return sorted(best.values(), key=lambda i: (-(self.el[i].confidence or 0), i))[:limit]
+
+    def _nearest(self, i: int, k: int, exact: bool) -> list[int]:
+        """요소 i 와 가까운 다른 노트·다른 키워드의 요소 k 개. 군집 색인으로 √E 개 군집 중 가까운 몇 개만 훑는다."""
+        import numpy as np
+        if self._ivf is None and not exact:
+            self._ivf = _IVF(self.vec)
+        q = self.vec[i]
+        kid_i, note_i = self.el[i].keyword_id, self.el[i].note
+        cand = np.arange(len(self.el)) if exact else None
+        probe = 4
+        while True:
+            if not exact:
+                cand = self._ivf.probe(q, probe)
+            sims = self.vec[cand] @ q
+            order = np.argsort(-sims)
+            out = []
+            for pos in order:
+                j = int(cand[pos])
+                if j != i and self.ok[j] and self.el[j].keyword_id != kid_i and self.el[j].note != note_i:
+                    out.append(j)
+                    if len(out) >= k:
+                        return out
+            if exact or probe >= self._ivf.nlist:
+                return out
+            probe = min(self._ivf.nlist, probe * 2)             # 쓸 수 있는 이웃이 모자라면 더 넓게 훑는다
 
     def candidates(self, anchors: list[int], per_anchor: int = 3, per_partner: int = 1, limit: int = 12,
                    neighbors: int = 10) -> tuple[list[Candidate], dict]:
+        near = self._nearest_all(anchors, neighbors)
         found: dict[tuple[int, int], dict] = {}
 
         def add(i: int, j: int, ch: str, **extra):
@@ -141,23 +232,13 @@ class PairingIndex:
             for j, ws in shared.items():
                 if len(ws) >= 2:
                     add(i, j, "terms", shared=tuple(sorted(ws)))
-            for kid, names in self.kw_names.items():                   # pivot: 이 요소가 말하는 다른 키워드를 같이 말하는 요소
-                if kid != self.el[i].keyword_id and any(n in self.low[i] for n in names):
-                    ms = self._mentions(kid)
-                    if PIVOT_DF[0] <= len(ms) <= PIVOT_DF[1]:
-                        for j in ms:
-                            add(i, j, "pivot", via=(self.kw_label[kid],))
-            if self.vec is not None:                                    # embed
-                sims = self.vec @ self.vec[i]
-                order = sims.argsort()[::-1]
-                taken = 0
-                for j in order:
-                    j = int(j)
-                    if j != i and self._valid(i, j):
-                        add(i, j, "embed")
-                        taken += 1
-                        if taken >= neighbors:
-                            break
+            for kid in self.elem_kws[i]:                                # pivot: 이 요소가 말하는 다른 키워드를 같이 말하는 요소
+                ms = self.mentioners[kid]
+                if PIVOT_DF[0] <= len(ms) <= PIVOT_DF[1]:
+                    for j in ms:
+                        add(i, j, "pivot", via=(self.kw_label[kid],))
+            for j in near.get(i, []):                                   # embed
+                add(i, j, "embed")
         for f in found.values():
             for ch in f["channels"]:
                 counts[ch] += 1

@@ -66,3 +66,54 @@ def test_same_sentence_under_two_keywords_is_one_candidate_and_agreeing_channels
     cands, _ = PairingIndex(els, v).candidates([0, 1], per_anchor=5, per_partner=5)
     assert len({(c.a.text, c.b.text) for c in cands}) == len(cands)                # 같은 문장 쌍은 한 번
     assert cands == sorted(cands, key=lambda c: -c.score)
+
+
+def _random_elements(n, rng):
+    syl = ["로그", "버퍼", "캐시", "트랜잭션", "디스크", "페이지", "복구", "정렬", "탐색", "해시", "큐", "스택", "WAL", "ACID", "락"]
+    words = [a + b for a in syl for b in syl if a != b] + syl
+    out = []
+    for i in range(n):
+        kw = f"{rng.choice(words)}{i % 17}"
+        text = " ".join(rng.choice(words) for _ in range(rng.randint(5, 12))) + " 라고 한다 정말로 그렇다"
+        out.append(Element(i, f"k{i % 23}", kw, (), f"n{i % 11}", f"n{i % 11}", f"c{i}", text, 0.5, 0, len(text), text))
+    return out
+
+
+def test_mention_index_equals_scanning_every_name_in_every_text():
+    import random
+    rng = random.Random(3)
+    els = _random_elements(300, rng)
+    idx = PairingIndex(els)
+    for i, e in enumerate(els):
+        naive = {kid for kid, names in idx.kw_names.items() if kid != e.keyword_id and any(n in idx.low[i] for n in names)} if idx.ok[i] else set()
+        assert idx.elem_kws[i] == naive
+    for kid, ms in idx.mentioners.items():
+        assert ms == [i for i in range(len(els)) if kid in idx.elem_kws[i]]
+
+
+def test_batched_nearest_equals_scoring_every_pair():
+    import random
+    rng = random.Random(4)
+    els = _random_elements(200, rng)
+    v = np.random.default_rng(0).standard_normal((200, 16)).astype(np.float32)
+    v /= np.linalg.norm(v, axis=1, keepdims=True)
+    idx = PairingIndex(els, v)
+    anchors = [i for i in range(0, 200, 7) if idx.ok[i]]
+    got = idx._nearest_all(anchors, 10)
+    for i in anchors:
+        valid = [j for j in range(200) if j != i and idx.ok[j] and els[j].keyword_id != els[i].keyword_id and els[j].note != els[i].note]
+        want = sorted(valid, key=lambda j: -float(v[i] @ v[j]))[:10]
+        assert set(got[i]) == set(want)
+
+
+def test_work_per_anchor_does_not_grow_with_the_number_of_other_notes():
+    """요소 쌍을 모두 비교하지 않는다: 후보 수는 요소당 신호가 가리키는 수로 묶인다 (빈도 상한 덕분)."""
+    import random
+    for n in (200, 800):
+        els = _random_elements(n, random.Random(5))
+        v = np.random.default_rng(1).standard_normal((n, 16)).astype(np.float32)
+        v /= np.linalg.norm(v, axis=1, keepdims=True)
+        idx = PairingIndex(els, v)
+        _, counts = idx.candidates(idx.anchors("n0"), per_anchor=3, limit=12)
+        anchors = len(idx.anchors("n0"))
+        assert counts["union"] <= anchors * (10 + 40 * 8 + 25 * 40)          # 요소당 임베딩 10 + 공통 키워드 · 공유 낱말의 상한

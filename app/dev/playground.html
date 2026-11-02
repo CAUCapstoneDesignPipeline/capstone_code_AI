@@ -303,7 +303,9 @@ function keywordsView(source) {
 const REACT_KEY = "playground-reactions-v1";
 const loadReact = () => { try { return JSON.parse(localStorage.getItem(REACT_KEY) || "{}"); } catch (e) { return {}; } };
 const saveReact = () => { try { localStorage.setItem(REACT_KEY, JSON.stringify(S.sg.react)); } catch (e) { /* 저장하지 못해도 화면은 된다 */ } };
-S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, react: loadReact(), showKnown: false, showRest: false };
+const AUTO_KEY = "playground-auto-generate-v1", AUTO_N = 3;
+const loadAuto = () => { try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch (e) { return true; } };
+S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, react: loadReact(), showKnown: false, showRest: false, auto: loadAuto() };
 
 async function runSuggest() {
   const text = currentText();
@@ -318,6 +320,7 @@ async function runSuggest() {
     S.sg.data = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
   } catch (e) { if (r === S.run) S.sg.data = { error: String(e) }; }
   render();
+  if (r === S.run && S.sg.auto && S.sg.data?.candidates?.length) generateTop(AUTO_N);       // 요소 쌍이 이어지면 새 지식을 바로 만든다
 }
 async function runScreen() {
   const D = S.sg.data;
@@ -404,8 +407,9 @@ function suggestView(source) {
   const o = sgOrdered(), ch = D.channels;
   const stats = `이 노트의 요소 ${D.anchors}개 · 전체 요소 ${D.elements}개 → 후보 ${D.candidates.length}개 (공유 낱말 ${ch.terms || 0} · 공통 키워드 ${ch.pivot || 0} · 의미 비슷 ${ch.embed || 0}${D.embeddings ? ` · 코사인 ${D.cosineFloor} 미만은 뺌` : " · 임베딩 없음"}) · ${D.ms}ms`;
   const tools = `<p class="actions"><button class="act" data-sg="screen" ${S.sg.screening || !D.candidates.length ? "disabled" : ""}>${S.sg.screening ? "선별하는 중…" : "LLM 선별"}</button>
-    <button class="act" data-sg="top" ${D.candidates.length ? "" : "disabled"}>상위 3개 새 지식 만들기</button>
-    <span class="note">LLM 선별은 노트 문장을, 새 지식 만들기는 노트 문장과 검색어를 모델 제공자에게 보내요 (눌렀을 때만).</span></p>`;
+    <button class="act" data-sg="top" ${D.candidates.length ? "" : "disabled"}>상위 ${AUTO_N}개 새 지식 만들기</button>
+    <label class="note"><input type="checkbox" data-auto ${S.sg.auto ? "checked" : ""}>이어지면 자동으로 선별하고 상위 ${AUTO_N}개의 새 지식을 만들기</label>
+    <span class="note">선별과 새 지식 만들기는 노트 문장과 검색어를 모델 제공자에게 보내고 검색 비용이 들어요. 끄면 버튼을 눌렀을 때만 해요.</span></p>`;
   const scrNote = S.sg.screenError ? `<p class="error">${esc(S.sg.screenError)}</p>` : o.screened ? `<p class="count">선별 ${esc(S.sg.screenModel)} · 합쳐 볼 만한 쌍 ${o.main.filter((c) => S.sg.screen[c.id]?.label === "useful").length}개</p>` : "";
   return `${head}<p class="count">${stats}</p>${tools}${scrNote}
     ${o.main.map(sgCard).join("") || `<p class="empty">후보가 없어요. 신뢰도를 낮추거나 다른 노트를 골라 보세요.</p>`}
@@ -413,16 +417,23 @@ function suggestView(source) {
     ${o.hidden.length ? `<p class="note">알고 있던 내용으로 숨긴 쌍 ${o.hidden.length}개 · <button class="linkBtn" data-sg="unhide">다시 보기</button></p>` : ""}`;
 }
 
+$("#body").addEventListener("change", (e) => {
+  if (!e.target.matches("[data-auto]")) return;
+  S.sg.auto = e.target.checked;
+  try { localStorage.setItem(AUTO_KEY, S.sg.auto ? "1" : "0"); } catch (err) { /* 저장하지 못해도 화면은 된다 */ }
+  if (S.sg.auto && S.mode === "suggest" && S.sg.data?.candidates?.length) generateTop(AUTO_N);
+  render();
+});
 $("#body").addEventListener("click", (e) => {
   const t = e.target.closest("[data-sg]");
   if (!t) return;
   const [k, id, kind] = t.dataset.sg.split(":");
   if (k === "screen") runScreen();
   else if (k === "top") generateTop(3);
-  else if (k === "gen") runGenerate(id);
+  else if (k === "gen") (id === "cn" ? runConnectGenerate() : runGenerate(id));
   else if (k === "unhide") { for (const x of S.sg.data.candidates) if (S.sg.react[pairKey(x)] === "known") delete S.sg.react[pairKey(x)]; saveReact(); render(); }
   else if (k === "react") {
-    const c = S.sg.data.candidates.find((x) => x.id === id), key = pairKey(c);
+    const c = id === "cn" ? S.cn.pairCand : S.sg.data.candidates.find((x) => x.id === id), key = pairKey(c);
     if (S.sg.react[key] === kind && kind !== "known") delete S.sg.react[key]; else S.sg.react[key] = kind;
     saveReact(); render();
   }
@@ -614,6 +625,13 @@ function pathView(p) {
       + (ev ? `<div class="quote hop"><span class="tag">${LEVEL_KO[ev.level]}</span> ${esc(clean(ev.text))}</div>` : "");
   }).join("")}</div>`;
 }
+function connectKnowledge(C) {
+  const c = C.pairCand;
+  if (!c) return `<p class="note">두 키워드에 서로 다른 노트에서 온 혼자 읽을 수 있는 설명이 없어서 새 지식을 만들 수 없어요.</p>`;
+  const side = (e, w) => `<p class="path"><b>근거 ${w}</b> · ${esc(e.keyword)} · ${esc(shortTitle(e.note, 28))}</p><div class="quote">${esc(e.text)}</div>`;
+  const foot = C.gen ? genBlock(c, C.gen) : `<p class="actions"><button class="act" data-sg="gen:cn">새 지식 만들기 (웹 검색)</button> <span class="note">자동 만들기를 꺼 두었어요.</span></p>`;
+  return `<div class="sg">${side(c.a, "A")}${side(c.b, "B")}${foot}</div>`;
+}
 function connectPanel() {
   const C = S.cn, D = C.data;
   let out = `<h3>두 키워드의 연결</h3><p class="note">아무 두 키워드나 골라 직접 증거와, 다른 키워드를 거치는 경로를 본다. 증거 수준은 위 체크박스를 따른다.</p>
@@ -630,6 +648,7 @@ function connectPanel() {
   const rel = C.rel;
   return out + `<h4>직접 연결</h4>${direct}
     <h4>다른 키워드를 거치는 길 ${D.paths.length}${D.hubsSkipped ? ` <small>· 연결 ${D.hubThreshold}개 넘는 허브 ${D.hubsSkipped}개는 건너뜀</small>` : ""}</h4>${paths}
+    <h4>새 지식</h4>${connectKnowledge(C)}
     <h4>관계 확인</h4><p class="actions">${relButton("connect")}</p>${relBox(rel, D.a.name, D.b.name)}
     <details><summary>${esc(D.a.name)} 의 개념</summary>${kgConcepts(D.a)}</details>
     <details><summary>${esc(D.b.name)} 의 개념</summary>${kgConcepts(D.b)}</details>`;
@@ -679,6 +698,20 @@ async function runConnect() {
     const data = await res.json().catch(() => ({}));
     C.data = res.ok ? data : { error: res.status === 404 ? "키워드를 찾지 못했다. 다시 검색해서 고른다." : (data.detail || `HTTP ${res.status}`) };
   } catch (e) { C.data = { error: String(e) }; }
+  C.gen = null; C.pairCand = C.data?.pair ? { id: "cn", a: C.data.pair.a, b: C.data.pair.b } : null;
+  render();
+  if (S.sg.auto && C.pairCand) runConnectGenerate();                    // 두 키워드가 이어지면 새 지식을 바로 만든다
+}
+async function runConnectGenerate() {
+  const C = S.cn, c = C.pairCand;
+  if (!c || C.gen === "loading") return;
+  C.gen = "loading"; render();
+  const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
+  try {
+    const res = await fetch("/dev/proposals/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a: pick(c.a), b: pick(c.b) }) });
+    const data = await res.json().catch(() => ({}));
+    C.gen = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+  } catch (e) { C.gen = { error: String(e) }; }
   render();
 }
 async function runRelation(kind) {
