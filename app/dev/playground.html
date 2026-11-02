@@ -123,6 +123,22 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .side .note { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
 .desc { margin: 0 12px 9px 14px; padding-left: 8px; border-left: 3px solid var(--line); color: var(--ink); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .desc.none { color: var(--muted); }
+.tag { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.act { border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 8px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
+.act:disabled { opacity: .4; }
+.actions { margin: 8px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.tabs2 { margin: 0 0 12px; }
+.pickRow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.pickBox label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.pickBox input { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; background: var(--bg); color: var(--ink); }
+.chosen { margin: 4px 0; font-size: 13px; }
+.chain { font-size: 13px; margin: 6px 0 2px; }
+.chain small { color: var(--muted); font-weight: 400; }
+.quote.hop { margin-left: 16px; font-size: 12px; color: var(--muted); }
+.card.rel .cardHead { gap: 8px; }
+.status.vd-related { background: #d3f9d8; color: #2b8a3e; }
+.status.vd-weak { background: #fff3bf; color: #946200; }
+.status.vd-unrelated, .status.vd-unsure { background: var(--soft); color: var(--muted); }
 .kwTools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
 .kwTools input[type="search"] { border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; background: var(--bg); min-width: 180px; }
 .kwTools label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
@@ -175,7 +191,9 @@ const FREE = "\u0000free";
 const S = { cfg: null, notes: [], note: null, text: "", free: "", mode: null, thr: 0.35, concepts: null, links: null, sel: null, edge: null, run: 0,
             scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 },
             kw: null, kq: "", kscope: "note", kmulti: false,
-            glens: "keywords", kg: null, kgSel: null, kgEdge: null };
+            glens: "keywords", kg: null, kgSel: null, kgEdge: null, kgTab: "sel", kgRel: null,
+            glevels: { sentence: true, heading: true, paragraph: false },
+            cn: { a: null, b: null, qa: "", qb: "", ca: [], cb: [], data: null, rel: null } };
 const name = (id) => (id === FREE ? "직접 입력" : id);
 const valid = (c) => c.confidence >= S.thr;
 
@@ -339,8 +357,8 @@ async function runKg() {
   const text = currentText();
   if (!text.trim() && S.scope === "note") { S.kg = null; return render(); }
   const r = ++S.run;
-  S.kg = "loading"; S.kgSel = null; S.kgEdge = null; render();
-  const body = { scope: S.scope, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
+  S.kg = "loading"; S.kgSel = null; S.kgEdge = null; S.kgRel = null; render();
+  const body = { scope: S.scope, minConfidence: S.thr, levels: levelsOn(), ...(S.note === FREE ? { text } : { noteId: S.note }) };
   try {
     const res = await fetch("/dev/keyword-graph", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
@@ -395,22 +413,51 @@ function kgSvg(K) {
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="키워드 연결 그래프"><g id="vp" transform="translate(${x} ${y}) scale(${k})">${lines}${nodes}</g></svg>`;
 }
 
+const LEVEL_KO = { sentence: "같은 문장", heading: "제목과 본문", paragraph: "같은 문단", path: "경로" };
+const LEVEL_HINT = { sentence: "두 키워드가 한 문장에 같이 나옴", heading: "한쪽이 제목, 다른 쪽이 그 절 본문에 나옴", paragraph: "같은 문단에 나옴 (느슨함)" };
+const VERDICT_KO = { related: "관계 있음", weak: "약한 관계", unrelated: "관계 없음", unsure: "판정 못 함" };
+const TYPE_KO = { is_a: "종류", part_of: "구성", causes: "원인", requires: "필요", used_for: "용도", contrasts_with: "대비",
+                  example_of: "예시", analogous_to: "유사", related: "관련", none: "—" };
+const levelsOn = () => Object.keys(S.glevels).filter((k) => S.glevels[k]);
+const clean = (t) => String(t ?? "").replace(/\*\*|__/g, "");
+
 function kgConcepts(n) {
   return n.concepts.map((c) => `<div class="card" style="padding:8px 12px"><button class="linkBtn" data-open="${esc(c.note)}">${esc(shortTitle(c.note, 34))}</button>
-    <div class="quote">${esc(c.explanation.replace(/\*\*|__/g, ""))}</div></div>`).join("");
+    <div class="quote">${esc(clean(c.explanation))}</div></div>`).join("");
 }
+const evCard = (v) => `<div class="card" style="padding:8px 12px"><span class="tag" title="${esc(LEVEL_HINT[v.level] || "")}">${LEVEL_KO[v.level] || v.level}</span>
+  <button class="linkBtn" data-open="${esc(v.note)}">${esc(shortTitle(v.note, 34))}</button><div class="quote">${esc(clean(v.text))}</div></div>`;
+
+// 관계 확인 (LLM) 결과 상자. rel = { loading | error | data, items }
+function relBox(rel, aName, bName) {
+  if (!rel) return "";
+  if (rel.loading) return `<p class="count"><span class="spin"></span>관계를 확인하는 중… (모델에 노트 내용이 전달된다)</p>`;
+  if (rel.error) return `<p class="error">${esc(rel.error)}</p>`;
+  const d = rel.data;
+  const dir = d.type === "none" ? "" : d.direction === "a_to_b" ? `${esc(aName)} → ${esc(bName)}` : d.direction === "b_to_a" ? `${esc(bName)} → ${esc(aName)}` : "방향 없음 (대칭)";
+  const cited = d.evidence.map((id) => rel.items[Number(id.slice(1)) - 1]).filter(Boolean);
+  return `<div class="card rel ${esc(d.verdict)}"><div class="cardHead"><span class="status vd-${esc(d.verdict)}">${VERDICT_KO[d.verdict] || d.verdict}</span>
+      ${d.type !== "none" ? `<b>${esc(TYPE_KO[d.type] || d.type)}</b>` : ""}<span class="path">${dir}</span></div>
+    <p class="know">${esc(d.reason)}</p>
+    ${cited.length ? `<details><summary>인용한 증거 ${cited.length}개</summary>${cited.map(evCard).join("")}</details>` : ""}
+    <p class="path">${esc(d.model)} · ${esc(d.promptVersion)}${d.cached ? " · 저장된 결과" : ""}</p></div>`;
+}
+const relButton = (key) => `<button class="act" data-rel="${esc(key)}">관계 확인 (LLM)</button>`;
 
 function kgPanel(K) {
   const t = Object.fromEntries(K.nodes.map((n) => [n.id, n]));
   const e = S.kgEdge && K.edges.find((x) => edgeKey(x) === S.kgEdge);
   if (e) {
     const A = t[e.a], B = t[e.b];
+    const counts = Object.entries(e.counts).map(([l, n]) => `${LEVEL_KO[l]} ${n}`).join(" · ");
+    const rel = S.kgRel && S.kgRel.key === S.kgEdge ? S.kgRel : null;
     return `<h3>${esc(A.title)} ↔ ${esc(B.title)}</h3>
-      <p class="note">같은 문장에 ${e.sentences}번 · 페이지 ${e.pages}개 · 연결 점수 ${e.score}
+      <p class="note">${esc(counts)} · 페이지 ${e.pages}개 · 연결 점수 ${e.score}
         · <button class="linkBtn" data-ksel="${esc(A.id)}">${esc(shortTitle(A.title, 12))}</button> · <button class="linkBtn" data-ksel="${esc(B.id)}">${esc(shortTitle(B.title, 12))}</button></p>
-      <h4>두 키워드가 함께 나온 문장${e.sentences > e.evidence.length ? ` (${e.evidence.length}개만)` : ""}</h4>
-      ${e.evidence.map((v) => `<div class="card" style="padding:8px 12px"><button class="linkBtn" data-open="${esc(v.note)}">${esc(shortTitle(v.note, 34))}</button>
-        <div class="quote">${esc(v.quote.replace(/\*\*|__/g, ""))}</div></div>`).join("")}
+      <p class="actions">${relButton("edge")} <button class="act" data-conn="${esc(A.id)}|${esc(B.id)}">경로까지 보기</button></p>
+      ${relBox(rel, A.title, B.title)}
+      <h4>증거${e.evidence.length < Object.values(e.counts).reduce((x, y) => x + y, 0) ? ` (${e.evidence.length}개만)` : ""}</h4>
+      ${e.evidence.map(evCard).join("")}
       <details><summary>${esc(A.title)} 의 개념</summary>${kgConcepts(A)}</details>
       <details><summary>${esc(B.title)} 의 개념</summary>${kgConcepts(B)}</details>`;
   }
@@ -418,28 +465,158 @@ function kgPanel(K) {
   if (n) {
     const mine = K.edges.filter((x) => x.a === n.id || x.b === n.id).sort((x, y) => y.score - x.score);
     return `<h3>${esc(n.title)}${n.aliases.length ? ` <span class="alias">${esc(n.aliases.join(" · "))}</span>` : ""}</h3>
-      <p class="note">페이지 ${n.pages} · 이 화면에서 연결 ${mine.length}</p>
+      <p class="note">페이지 ${n.pages} · 이 화면에서 연결 ${mine.length}
+        · <button class="linkBtn" data-pick="a" data-id="${esc(n.id)}" data-name="${esc(n.title)}">A 로 지정</button>
+        · <button class="linkBtn" data-pick="b" data-id="${esc(n.id)}" data-name="${esc(n.title)}">B 로 지정</button></p>
       <h4>이어진 키워드 (눌러서 근거 보기)</h4>
-      <ul class="list2">${mine.map((x) => { const o = t[x.a === n.id ? x.b : x.a]; return `<li><button data-kedge="${esc(edgeKey(x))}">${esc(shortTitle(o.title, 26))}<small>${x.sentences}번</small></button></li>`; }).join("") || `<li class="note">이 화면에서는 이어진 키워드가 없다.</li>`}</ul>
+      <ul class="list2">${mine.map((x) => { const o = t[x.a === n.id ? x.b : x.a]; const top = x.counts.sentence ? "문장" : x.counts.heading ? "제목" : "문단";
+        return `<li><button data-kedge="${esc(edgeKey(x))}">${esc(shortTitle(o.title, 26))}<small>${top} ${Object.values(x.counts).reduce((p, q) => p + q, 0)}</small></button></li>`; }).join("") || `<li class="note">이 화면에서는 이어진 키워드가 없다.</li>`}</ul>
       <h4>개념 ${n.concepts.length}</h4>${kgConcepts(n)}`;
   }
   return `<p class="empty">점(키워드)이나 선을 누른다. 휠로 확대, 끌어서 이동한다.</p>`;
 }
 
+// ---------- 두 키워드의 연결 ----------
+const candItems = (w) => (S.cn["c" + w] || []).map((k) => `<li><button data-cand="${w}" data-id="${esc(k.keywordId)}" data-name="${esc(k.name)}">${esc(k.name)}<small>페이지 ${k.pages}</small></button></li>`).join("");
+function pickBox(w) {
+  const C = S.cn;
+  return `<div class="pickBox"><label>${w.toUpperCase()}<input id="cq${w}" placeholder="키워드 이름 검색" autocomplete="off" value="${esc(C["q" + w])}"></label>
+    ${C[w] ? `<div class="chosen"><b>${esc(C[w].name)}</b> <button class="linkBtn" data-clear="${w}">지우기</button></div>` : ""}
+    <ul class="list2" id="cand${w}">${candItems(w)}</ul></div>`;
+}
+function pathView(p) {
+  const last = p.nodes.length - 1;
+  return `<div class="card" style="padding:8px 12px"><p class="note">${p.hops}칸 · 가장 약한 연결 ${p.strength}</p>${p.nodes.map((n, i) => {
+    const ev = i < last ? p.edges[i].evidence[0] : null;
+    return `<div class="chain"><b>${esc(n.name)}</b>${i > 0 && i < last ? ` <small>페이지 ${n.pages} · 연결 ${n.degree}</small>` : ""}</div>`
+      + (ev ? `<div class="quote hop"><span class="tag">${LEVEL_KO[ev.level]}</span> ${esc(clean(ev.text))}</div>` : "");
+  }).join("")}</div>`;
+}
+function connectPanel() {
+  const C = S.cn, D = C.data;
+  let out = `<h3>두 키워드의 연결</h3><p class="note">아무 두 키워드나 골라 직접 증거와, 다른 키워드를 거치는 경로를 본다. 증거 수준은 위 체크박스를 따른다.</p>
+    <div class="pickRow">${pickBox("a")}${pickBox("b")}</div>
+    <p class="actions"><button class="act" data-conn="go" ${C.a && C.b ? "" : "disabled"}>연결 보기</button> <button class="linkBtn" data-swap="1">A↔B 바꾸기</button></p>`;
+  if (D === "loading") return out + `<p class="count"><span class="spin"></span>찾는 중…</p>`;
+  if (D?.error) return out + `<p class="error">${esc(D.error)}</p>`;
+  if (!D) return out;
+  const direct = D.direct
+    ? `<p class="note">${Object.entries(D.direct.counts).map(([l, n]) => `${LEVEL_KO[l]} ${n}`).join(" · ")} · 페이지 ${D.direct.pages}개 · 점수 ${D.direct.score}</p>${D.direct.evidence.map(evCard).join("")}`
+    : `<p class="note">고른 증거 수준(${D.levels.map((l) => LEVEL_KO[l]).join(" · ")})에서는 두 키워드가 같이 나온 곳이 없다.</p>`;
+  const paths = D.paths.length ? D.paths.map(pathView).join("")
+    : `<p class="note">다른 키워드를 거쳐 3칸 안에 이어지는 길이 없다. 증거 수준을 넓혀 본다.</p>`;
+  const rel = C.rel;
+  return out + `<h4>직접 연결</h4>${direct}
+    <h4>다른 키워드를 거치는 길 ${D.paths.length}${D.hubsSkipped ? ` <small>· 연결 ${D.hubThreshold}개 넘는 허브 ${D.hubsSkipped}개는 건너뜀</small>` : ""}</h4>${paths}
+    <h4>관계 확인</h4><p class="actions">${relButton("connect")}</p>${relBox(rel, D.a.name, D.b.name)}
+    <details><summary>${esc(D.a.name)} 의 개념</summary>${kgConcepts(D.a)}</details>
+    <details><summary>${esc(D.b.name)} 의 개념</summary>${kgConcepts(D.b)}</details>`;
+}
+
+function kgSide(K) {
+  const tab = (k, label) => `<button data-ktab="${k}" aria-pressed="${S.kgTab === k}">${label}</button>`;
+  return `<div class="scope tabs2" role="group" aria-label="패널">${tab("sel", "선택한 것")}${tab("connect", "두 키워드 연결")}</div>`
+    + (S.kgTab === "connect" ? connectPanel() : (K ? kgPanel(K) : ""));
+}
+
 function kgView(source) {
   const K = S.kg, toggle = scopeToggle(), head = S.scope === "note" ? `<h1>${esc(name(S.note))}</h1>` : "";
+  const lv = `<div class="kwTools">${Object.keys(LEVEL_KO).filter((l) => l !== "path").map((l) =>
+    `<label title="${esc(LEVEL_HINT[l])}"><input type="checkbox" data-level="${l}" ${S.glevels[l] ? "checked" : ""}>${LEVEL_KO[l]}</label>`).join("")}<span class="note">증거 수준</span></div>`;
   if (!K || K === "loading" || K.error) {
-    return `<div class="col">${toggle}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
+    return `<div class="col">${toggle}${lv}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
       ${K === "loading" ? `<p class="count"><span class="spin"></span>실행 중…</p>` : K?.error ? `<p class="error">${esc(K.error)}</p>` : ""}</div>`;
   }
   const info = K.scope === "note"
-    ? `이 노트의 키워드 ${K.mine}개 중 ${K.mineLinked}개가 다른 키워드와 같은 문장에 나온다 · 강조한 점 = 이 노트의 키워드, 회색 = 다른 페이지에서 이어진 키워드`
+    ? `이 노트의 키워드 ${K.mine}개 중 ${K.mineLinked}개가 다른 키워드와 이어진다 · 강조한 점 = 이 노트의 키워드, 회색 = 다른 페이지에서 이어진 키워드`
     : `전체 키워드 ${K.keywords}개 중 ${K.linkedKeywords}개가 이어져 있다 · 둘 이상의 페이지에 걸치고 연결이 센 ${K.nodes.length}개만 그린다`;
-  return `<div class="col">${toggle}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
-      <p class="count">${info} · 선 = 같은 문장에 같이 나옴 (${K.edges.length}개) · 신뢰도 ${S.thr.toFixed(2)} 이상 · ${K.ms}ms</p>
-      ${K.nodes.length ? `<div class="graphWrap allWrap">${kgSvg(K)}</div>` : `<p class="empty">이어진 키워드가 없다. 기준을 낮춰 본다.</p>`}</div>
-    <div class="col side">${kgPanel(K)}</div>`;
+  return `<div class="col">${toggle}${lv}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
+      <p class="count">${info} · 선 ${K.edges.length}개 · 신뢰도 ${S.thr.toFixed(2)} 이상 · ${K.ms}ms</p>
+      ${K.nodes.length ? `<div class="graphWrap allWrap">${kgSvg(K)}</div>` : `<p class="empty">이어진 키워드가 없다. 증거 수준을 넓히거나 기준을 낮춰 본다.</p>`}</div>
+    <div class="col side">${kgSide(K)}</div>`;
 }
+
+// ---------- 두 키워드 연결: 검색·연결 찾기·관계 확인 ----------
+let cqTimer = {};
+async function searchKw(w) {
+  const q = S.cn["q" + w].trim();
+  if (!q) { S.cn["c" + w] = []; const ul = $("#cand" + w); if (ul) ul.innerHTML = ""; return; }
+  const body = { q, limit: 8, minPages: 1, everywhere: true, minConfidence: S.thr, ...(S.note === FREE ? { text: currentText() } : {}) };
+  const res = await fetch("/dev/keywords", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  S.cn["c" + w] = res.ok ? data.keywords : [];
+  const ul = $("#cand" + w); if (ul) ul.innerHTML = candItems(w);
+}
+async function runConnect() {
+  const C = S.cn;
+  if (!C.a || !C.b) return;
+  C.data = "loading"; C.rel = null; render();
+  const body = { a: C.a.id, b: C.b.id, minConfidence: S.thr, levels: levelsOn(), ...(S.note === FREE ? { text: currentText() } : {}) };
+  try {
+    const res = await fetch("/dev/keyword-connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    C.data = res.ok ? data : { error: res.status === 404 ? "키워드를 찾지 못했다. 다시 검색해서 고른다." : (data.detail || `HTTP ${res.status}`) };
+  } catch (e) { C.data = { error: String(e) }; }
+  render();
+}
+async function runRelation(kind) {
+  let a, b, evidence, set;
+  if (kind === "edge") {
+    const K = S.kg, e = K.edges.find((x) => edgeKey(x) === S.kgEdge), t = Object.fromEntries(K.nodes.map((n) => [n.id, n]));
+    a = t[e.a]; b = t[e.b]; evidence = e.evidence.map((v) => ({ level: v.level, note: v.note, text: v.text }));
+    a = { name: a.title, concepts: a.concepts.map((c) => c.explanation) }; b = { name: b.title, concepts: b.concepts.map((c) => c.explanation) };
+    set = (v) => { S.kgRel = { key: S.kgEdge, ...v }; };
+  } else {
+    const D = S.cn.data;
+    a = { name: D.a.name, concepts: D.a.concepts.map((c) => c.explanation) }; b = { name: D.b.name, concepts: D.b.concepts.map((c) => c.explanation) };
+    evidence = (D.direct ? D.direct.evidence.map((v) => ({ level: v.level, note: v.note, text: v.text })) : []);
+    for (const p of D.paths.slice(0, 3)) p.edges.forEach((ed, i) => {
+      const v = ed.evidence[0]; if (v && evidence.length < 12) evidence.push({ level: "path", label: `${p.nodes[i].name} — ${p.nodes[i + 1].name}`, note: v.note, text: v.text });
+    });
+    set = (v) => { S.cn.rel = v; };
+  }
+  if (!evidence.length) { set({ error: "확인할 증거가 없다." }); return render(); }
+  set({ loading: true }); render();
+  try {
+    const res = await fetch("/dev/keyword-relation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a, b, evidence }) });
+    const data = await res.json().catch(() => ({}));
+    set(res.ok ? { data, items: evidence } : { error: data.detail || `HTTP ${res.status}` });
+  } catch (e) { set({ error: String(e) }); }
+  render();
+}
+
+// 패널 안 버튼·입력은 그래프를 다시 그려도 붙어 있게 body 에서 한꺼번에 받는다
+$("#body").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-ktab],[data-pick],[data-cand],[data-clear],[data-swap],[data-conn],[data-rel]");
+  if (!t) return;
+  const d = t.dataset, C = S.cn;
+  if (d.ktab) { S.kgTab = d.ktab; render(); }
+  else if (d.pick) { C[d.pick] = { id: d.id, name: d.name }; C["q" + d.pick] = ""; C["c" + d.pick] = []; C.data = null; S.kgTab = "connect"; render(); }
+  else if (d.cand) { C[d.cand] = { id: d.id, name: d.name }; C["q" + d.cand] = ""; C["c" + d.cand] = []; C.data = null; render(); }
+  else if (d.clear) { C[d.clear] = null; C.data = null; render(); }
+  else if (d.swap) { [C.a, C.b] = [C.b, C.a]; C.data = null; render(); if (C.a && C.b) runConnect(); }
+  else if (d.conn) {
+    if (d.conn !== "go") {
+      const [x, y] = d.conn.split("|"), t2 = Object.fromEntries(S.kg.nodes.map((n) => [n.id, n]));
+      C.a = { id: x, name: t2[x].title }; C.b = { id: y, name: t2[y].title }; S.kgTab = "connect";
+    }
+    runConnect();
+  } else if (d.rel) runRelation(d.rel);
+});
+$("#body").addEventListener("input", (e) => {
+  const w = e.target.id === "cqa" ? "a" : e.target.id === "cqb" ? "b" : null;
+  if (!w) return;
+  S.cn["q" + w] = e.target.value; clearTimeout(cqTimer[w]); cqTimer[w] = setTimeout(() => searchKw(w), 250);
+});
+$("#body").addEventListener("change", (e) => {
+  const l = e.target.dataset?.level;
+  if (!l) return;
+  S.glevels[l] = e.target.checked;
+  if (!levelsOn().length) { S.glevels[l] = true; e.target.checked = true; return; }      // 하나는 켜 둔다
+  S.cn.data = null; run();
+  if (S.kgTab === "connect" && S.cn.a && S.cn.b) runConnect();
+});
+
 const edgeKey = (e) => [e.a, e.b].sort().join("\u0001");
 const shortTitle = (id, n = 16) => {
   const t = (id === FREE ? "직접 입력" : id).replace(/\s+[0-9a-f]{32}$/, "");
@@ -755,17 +932,17 @@ function render() {
       kt = setTimeout(async () => { await runKeywords(true); const q = $("#kq"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }, 300);
     });
   } else if (S.mode === "links" && S.glens === "keywords") {
-    const K = S.kg, ready = K && K !== "loading" && !K.error && K.nodes.length;
-    body.className = ready ? "body" : "body single";
+    const K = S.kg, loaded = K && K !== "loading" && !K.error;
+    body.className = loaded ? "body" : "body single";
     body.innerHTML = kgView(source);
-    if (ready) {
+    if (loaded && K.nodes.length) {
       bindPanZoom(body.querySelector(".allWrap svg"));
       attachSim(body.querySelector(".allWrap svg"), K.sim);
       body.querySelectorAll("[data-anode]").forEach((el) => el.addEventListener("click", () => {
         if (wasDragged(el)) return;
-        S.kgSel = S.kgSel === el.dataset.anode ? null : el.dataset.anode; S.kgEdge = null; render();
+        S.kgSel = S.kgSel === el.dataset.anode ? null : el.dataset.anode; S.kgEdge = null; S.kgTab = "sel"; render();
       }));
-      body.querySelectorAll("[data-aedge]").forEach((el) => el.addEventListener("click", () => { S.kgEdge = el.dataset.aedge; render(); }));
+      body.querySelectorAll("[data-aedge]").forEach((el) => el.addEventListener("click", () => { S.kgEdge = el.dataset.aedge; S.kgTab = "sel"; render(); }));
     }
     body.querySelectorAll("[data-kedge]").forEach((b) => b.addEventListener("click", () => { S.kgEdge = b.dataset.kedge; render(); }));
     body.querySelectorAll("[data-ksel]").forEach((b) => b.addEventListener("click", () => { S.kgSel = b.dataset.ksel; S.kgEdge = null; render(); }));

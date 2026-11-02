@@ -232,13 +232,13 @@ def test_keyword_graph_links_keywords_named_in_one_sentence(tmp_path, monkeypatc
         titles = {n["id"]: n["title"] for n in g["nodes"]}
         assert g["mine"] >= 1 and g["mineLinked"] >= 1 and g["edges"]
         for e in g["edges"]:
-            assert e["a"] in titles and e["b"] in titles and e["sentences"] >= 1 and e["score"] > 0
-            assert all(v["quote"] and v["note"] in ("TCP", "전송 계층") for v in e["evidence"])
+            assert e["a"] in titles and e["b"] in titles and e["counts"] and e["score"] > 0
+            assert all(v["text"] and v["level"] in ("sentence", "heading") and v["note"] in ("TCP", "전송 계층") for v in e["evidence"])
         assert all(n["concepts"] and n["title"] for n in g["nodes"])
         assert any(n["inNote"] for n in g["nodes"])
         pair = {tuple(sorted((titles[e["a"]], titles[e["b"]]))): e for e in g["edges"]}
         tcp_class = pair[("TCP", "전송 프로토콜")]                       # "TCP는 전송 프로토콜의 일종이다." 한 문장에 둘만
-        assert "TCP" in tcp_class["evidence"][0]["quote"] and "전송 프로토콜" in tcp_class["evidence"][0]["quote"]
+        assert "TCP" in tcp_class["evidence"][0]["text"] and "전송 프로토콜" in tcp_class["evidence"][0]["text"]
         assert ("TCP", "혼잡 제어") in pair and ("UDP", "전송 프로토콜") in pair
         crowded = pair[("TCP", "포트 번호")]                            # "TCP와 UDP는 … 포트 번호를 담는다." 키워드 셋이 한 문장 → 선이 약하다
         assert crowded["score"] < tcp_class["score"]
@@ -247,3 +247,82 @@ def test_keyword_graph_links_keywords_named_in_one_sentence(tmp_path, monkeypatc
         assert c.post("/dev/keyword-graph", json={"scope": "note"}).status_code == 400
         assert c.post("/dev/keyword-graph", json={"noteId": "nope"}).status_code == 404
         assert c.post("/dev/keyword-graph", json={"noteId": "TCP", "scope": "x"}).status_code == 400
+
+
+def _net(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    for name, body in NET_NOTES.items():
+        (tmp_path / f"{name}.md").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+
+
+def test_keyword_graph_evidence_levels(tmp_path, monkeypatch):
+    _net(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        def edges(levels):
+            g = c.post("/dev/keyword-graph", json={"noteId": "TCP", "scope": "note", "limit": 30, "levels": levels}).json()
+            t = {n["id"]: n["title"] for n in g["nodes"]}
+            return {tuple(sorted((t[e["a"]], t[e["b"]]))): e for e in g["edges"]}
+        sent, head, para = edges(["sentence"]), edges(["heading"]), edges(["paragraph"])
+        assert ("TCP", "전송 프로토콜") in sent and ("TCP", "전송 프로토콜") not in head
+        h = head[("패킷", "혼잡 제어")]                                  # "## 혼잡 제어" 절 본문에 패킷이 나온다
+        assert h["counts"] == {"heading": 1} and h["evidence"][0]["level"] == "heading" and h["evidence"][0]["text"].startswith("혼잡 제어\n")
+        p = para[("패킷", "혼잡 제어")]                                  # 같은 문단, 다른 문장
+        assert p["evidence"][0]["level"] == "paragraph" and p["score"] < h["score"] < sent[("TCP", "전송 프로토콜")]["score"]
+        assert not set(sent) & set(para) - {("TCP", "전송 프로토콜")}    # 같은 문장으로 이어진 쌍은 문단 증거를 더하지 않는다 (다른 노트의 문단은 예외)
+        both = edges(["sentence", "heading", "paragraph"])
+        assert set(both) >= set(sent) | set(head) | set(para)
+        assert c.post("/dev/keyword-graph", json={"noteId": "TCP", "levels": ["x"]}).status_code == 400
+        assert c.post("/dev/keyword-graph", json={"noteId": "TCP", "levels": []}).status_code == 400
+
+
+def test_keyword_connect_direct_and_paths(tmp_path, monkeypatch):
+    _net(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        g = c.post("/dev/keyword-graph", json={"noteId": "TCP", "scope": "note", "limit": 30}).json()
+        ids = {n["title"]: n["id"] for n in g["nodes"]}
+        r = c.post("/dev/keyword-connect", json={"a": ids["TCP"], "b": ids["전송 프로토콜"]}).json()
+        assert r["direct"] and r["direct"]["evidence"][0]["level"] == "sentence" and r["a"]["name"] == "TCP"
+        r = c.post("/dev/keyword-connect", json={"a": ids["TCP"], "b": ids["네트워크 프로토콜"]}).json()
+        assert r["direct"] is None                                      # 한 문장에 같이 나온 적이 없다
+        two = [[n["name"] for n in p["nodes"]] for p in r["paths"] if p["hops"] == 2]
+        assert ["TCP", "전송 프로토콜", "네트워크 프로토콜"] in two          # TCP → 전송 프로토콜 → 네트워크 프로토콜
+        path = next(p for p in r["paths"] if p["hops"] == 2)
+        assert len(path["edges"]) == 2 and all(e["evidence"] for e in path["edges"])
+        assert c.post("/dev/keyword-connect", json={"a": ids["TCP"], "b": ids["TCP"]}).status_code == 404
+        assert c.post("/dev/keyword-connect", json={"a": ids["TCP"], "b": "nope"}).status_code == 404
+
+
+def test_keyword_relation_endpoint(tmp_path, monkeypatch):
+    from app.services.links.relation_llm import KeywordRelationJudge
+    from app.services.llm import LLMResult
+
+    class Fake:
+        provider, model = "anthropic", "fake-model"
+        def __init__(self, data): self.data, self.calls = data, 0
+        def complete_json(self, system, user, schema, name):
+            self.calls += 1
+            return LLMResult(self.data, self.provider, self.model)
+
+    body = {"a": {"name": "TCP", "concepts": ["TCP는 전송 프로토콜의 일종이다."]}, "b": {"name": "전송 프로토콜", "concepts": []},
+            "evidence": [{"level": "sentence", "note": "TCP", "text": "TCP는 전송 프로토콜의 일종이다."},
+                         {"level": "path", "label": "TCP — UDP", "note": "전송 계층", "text": "TCP와 UDP는 모두 패킷 헤더에 포트 번호를 담는다."}]}
+    app = dev_app()
+    fake = Fake({"verdict": "related", "type": "is_a", "direction": "a_to_b", "reason": "TCP 는 전송 프로토콜의 한 종류다.", "evidence": ["E1"]})
+    app.state.kwrel = KeywordRelationJudge(fake, tmp_path / "cache")
+    with TestClient(app, client=LOCAL) as c:
+        r = c.post("/dev/keyword-relation", json=body).json()
+        assert (r["verdict"], r["type"], r["direction"], r["evidence"], r["cached"]) == ("related", "is_a", "a_to_b", ["E1"], False)
+        assert r["model"] == "fake-model"
+        assert c.post("/dev/keyword-relation", json=body).json()["cached"] is True and fake.calls == 1
+        assert c.post("/dev/keyword-relation", json={**body, "evidence": []}).status_code == 400
+        bad = {**body, "evidence": [{"level": "x", "note": "n", "text": "t"}]}
+        assert c.post("/dev/keyword-relation", json=bad).status_code == 400
+    with TestClient(app, client=("10.0.0.5", 50000)) as c:
+        assert c.post("/dev/keyword-relation", json=body).status_code == 403          # 노트 내용이 밖으로 나가므로 로컬만
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for k in ("AI_LLM_PROVIDER", "AI_KEYWORD_RELATION_LLM_PROVIDER"):
+        monkeypatch.delenv(k, raising=False)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        assert c.post("/dev/keyword-relation", json=body).status_code == 503

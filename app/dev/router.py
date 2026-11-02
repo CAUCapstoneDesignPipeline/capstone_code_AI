@@ -6,7 +6,9 @@
   GET /dev/notes/{id}    노트 원문 (NFC)
   GET /dev/index         노트 전체 색인을 미리 만든다 (노트 사이 연결용)
   POST /dev/extract      {noteId?, text?} 노트 하나의 키워드와 키워드마다 설명 (결정적)
-  POST /dev/keyword-graph {noteId?, text?, scope, limit, minConfidence} 키워드 노드와 같은 문장에 같이 나온 연결 (결정적)
+  POST /dev/keyword-graph {noteId?, text?, scope, limit, minConfidence, levels} 키워드 노드와 증거가 있는 연결 (결정적)
+  POST /dev/keyword-connect {a, b, …}  두 키워드의 직접 증거와 다른 키워드를 거치는 경로 (결정적)
+  POST /dev/keyword-relation {a, b, evidence}  두 키워드가 관계가 있는지 LLM 으로 확인 (눌렀을 때만)
   POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
@@ -319,6 +321,7 @@ class KeywordsQuery(BaseModel):
     minPages: int = 1           # 이 수 이상의 페이지(노트)에 걸친 키워드만
     limit: int = 60
     minConfidence: float = 0.0
+    everywhere: bool = False    # true 면 text 가 있어도 그 노트의 키워드로 좁히지 않는다 (키워드 고르기용)
 
 
 def _keyword_set(state, corpus, min_confidence: float):
@@ -362,7 +365,7 @@ async def keywords(q: KeywordsQuery, request: Request):
             return False
         if needle and not any(needle in s.lower() for s in (k.name, *k.aliases)):
             return False
-        return note_id is None or any(meta[c.conceptId]["note"] == note_id for c in k.concepts)
+        return note_id is None or q.everywhere or any(meta[c.conceptId]["note"] == note_id for c in k.concepts)
 
     picked = [k for k in all_keywords if wanted(k)]
     return {
@@ -378,47 +381,80 @@ async def keywords(q: KeywordsQuery, request: Request):
     }
 
 
+LEVEL_KO = {"sentence": "같은 문장", "heading": "제목과 본문", "paragraph": "같은 문단"}
+DEFAULT_LEVELS = ["sentence", "heading"]          # 문단은 느슨해서 기본으로는 끈다
+
+
+def _levels(levels: list[str]) -> tuple[str, ...]:
+    from app.services.links.keywords import LEVELS
+    bad = [x for x in levels if x not in LEVELS]
+    if bad or not levels:
+        raise HTTPException(400, f"levels 는 {', '.join(LEVELS)} 중에서 하나 이상")
+    return tuple(x for x in LEVELS if x in levels)
+
+
+def _edge_view(e: dict, levels: tuple[str, ...]) -> dict | None:
+    """고른 증거 수준만 남긴 선. 증거가 없으면 None. 증거는 센 수준부터 6개까지."""
+    score = sum(e["scores"].get(x, 0.0) for x in levels)
+    if score <= 0:
+        return None
+    ev = [{"level": x, "note": v["note"], "text": v["text"]} for x in levels for v in e["evidence"].get(x, [])]
+    pages = set().union(*(e["notes"].get(x, set()) for x in levels))
+    return {"score": round(score, 4), "pages": len(pages), "counts": {x: e["counts"][x] for x in levels if x in e["counts"]},
+            "evidence": ev[:6]}
+
+
+async def _graph_corpus(state, note_id: str | None, text: str | None):
+    """노트 폴더 색인 (붙여넣은 글이 있으면 그 글을 노트로 더해서). (색인, 노트 이름)."""
+    if state.extractor is None:
+        raise HTTPException(503, "추출기가 준비되지 않았다")
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    note_id = _nfc(note_id) if note_id else None
+    if text is not None:
+        if not text.strip() or len(text) > 50000:
+            raise HTTPException(400, "글이 비었거나 50,000자를 넘는다")
+        note_id = note_id if note_id in corpus.notes else FREE_ID
+        t = _nfc(text)
+        if note_id not in corpus.notes or corpus.notes[note_id].text != t:
+            corpus = await run_in_threadpool(_with_text, state, corpus, note_id, t)
+    elif note_id is not None and note_id not in corpus.notes:
+        raise HTTPException(404, "노트를 찾지 못했다")
+    return corpus, note_id
+
+
 class KeywordGraphQuery(BaseModel):
     noteId: str | None = None
     text: str | None = None
     scope: str = "note"         # note: 이 노트의 키워드와 그 이웃 · all: 전체에서 연결이 센 키워드
     limit: int = 0              # 가져올 키워드 수 (0 = note 14 / all 200)
     minConfidence: float = 0.0
+    levels: list[str] = DEFAULT_LEVELS     # 쓸 증거 수준: sentence · heading · paragraph
 
 
 @router.post("/keyword-graph")
 async def keyword_graph(q: KeywordGraphQuery, request: Request):
-    """키워드를 노드로, 같은 문장에 같이 나온 키워드끼리 선으로 (app/services/links/keywords.py build_keyword_graph).
-    선마다 그 문장(근거)을, 노드마다 개념(설명 + 페이지)을 담는다. LLM 호출 없음."""
+    """키워드를 노드로, 증거가 있는 키워드끼리 선으로 (app/services/links/keywords.py build_keyword_graph).
+    증거 수준은 같은 문장 · 제목과 본문 · 같은 문단이고 levels 로 고른다. 선마다 증거 문장을, 노드마다 개념(설명 + 페이지)을 담는다.
+    LLM 호출 없음 (관계 확인은 /dev/keyword-relation)."""
     state = request.app.state
-    if state.extractor is None:
-        raise HTTPException(503, "추출기가 준비되지 않았다")
     if q.scope not in ("note", "all"):
         raise HTTPException(400, "scope 는 note 또는 all")
+    levels = _levels(q.levels)
     t0 = time.monotonic()
-    corpus, _ = await run_in_threadpool(_links_corpus, state)
-    note_id = _nfc(q.noteId) if q.noteId else None
-    if q.text is not None:
-        if not q.text.strip() or len(q.text) > 50000:
-            raise HTTPException(400, "글이 비었거나 50,000자를 넘는다")
-        note_id = note_id if note_id in corpus.notes else FREE_ID
-        text = _nfc(q.text)
-        if note_id not in corpus.notes or corpus.notes[note_id].text != text:
-            corpus = await run_in_threadpool(_with_text, state, corpus, note_id, text)
-    elif note_id is not None and note_id not in corpus.notes:
-        raise HTTPException(404, "노트를 찾지 못했다")
+    corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
     if q.scope == "note" and note_id is None:
         raise HTTPException(400, "note 범위에는 noteId 또는 text 가 필요하다")
     mc = max(0.0, min(q.minConfidence, 1.0))
     kws, meta, edges = await run_in_threadpool(_keyword_set, state, corpus, mc)
     by_id = {k.keywordId: k for k in kws}
     mine = {k.keywordId for k in kws if note_id and any(meta[c.conceptId]["note"] == note_id for c in k.concepts)}
+    views = {pair: v for pair, e in edges.items() if (v := _edge_view(e, levels))}
     strength: dict[str, float] = {}
     adj: dict[str, dict[str, float]] = {}
-    for (a, b), e in edges.items():
+    for (a, b), v in views.items():
         for x, y in ((a, b), (b, a)):
-            strength[x] = strength.get(x, 0.0) + e["score"]
-            adj.setdefault(x, {})[y] = e["score"]
+            strength[x] = strength.get(x, 0.0) + v["score"]
+            adj.setdefault(x, {})[y] = v["score"]
     if q.scope == "note":
         own = sorted((k for k in mine if k in strength), key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 14]
         near: dict[str, float] = {}
@@ -431,13 +467,8 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
         pool = [k.keywordId for k in kws if k.keywordId in strength and len(k.note_ids()) >= 2]
         chosen = sorted(pool, key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 200]
     inside = set(chosen)
-    quote = lambda nid, sent: corpus.notes[nid].text[sent[0]:sent[1]].strip()
-    out_edges = []
-    for (a, b), e in sorted(edges.items(), key=lambda kv: -kv[1]["score"]):
-        if a in inside and b in inside:
-            ev = sorted(e["evidence"], key=lambda x: (x[0] == note_id, x[0]))[::-1][:3] if note_id else e["evidence"][:3]
-            out_edges.append({"a": a, "b": b, "score": e["score"], "pages": e["pages"], "sentences": len(e["evidence"]),
-                              "evidence": [{"note": nid, "quote": quote(nid, sent)} for nid, sent in ev]})
+    out_edges = [{"a": a, "b": b, **v} for (a, b), v in sorted(views.items(), key=lambda kv: -kv[1]["score"])
+                 if a in inside and b in inside]
     degree: dict[str, int] = {}
     for e in out_edges:
         degree[e["a"]] = degree.get(e["a"], 0) + 1
@@ -447,9 +478,130 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
         "inNote": k in mine, "degree": degree.get(k, 0),
         "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation} for c in by_id[k].concepts[:6]],
     } for k in chosen]
-    return {"note": note_id, "scope": q.scope, "nodes": nodes, "edges": out_edges, "notes": len(corpus.notes),
-            "keywords": len(kws), "linkedKeywords": len(strength), "mine": len(mine),
+    return {"note": note_id, "scope": q.scope, "levels": list(levels), "nodes": nodes, "edges": out_edges,
+            "notes": len(corpus.notes), "keywords": len(kws), "linkedKeywords": len(strength), "mine": len(mine),
             "mineLinked": sum(1 for k in mine if k in strength), "ms": int((time.monotonic() - t0) * 1000)}
+
+
+class ConnectQuery(BaseModel):
+    a: str                      # keywordId
+    b: str
+    noteId: str | None = None   # 붙여넣은 글의 키워드를 고를 때만 (색인을 같은 것으로 맞추려고)
+    text: str | None = None
+    minConfidence: float = 0.0
+    levels: list[str] = DEFAULT_LEVELS
+
+
+@router.post("/keyword-connect")
+async def keyword_connect(q: ConnectQuery, request: Request):
+    """두 키워드가 어떻게 이어지는지: 직접 증거와, 다른 키워드를 거치는 경로 (최대 3칸). 그래프에 그리지 않은 키워드도 된다.
+    너무 많은 키워드와 이어진 허브 키워드는 경로의 중간으로 쓰지 않는다 (아무것과도 이어져서 말해 주는 게 없다). LLM 호출 없음."""
+    state = request.app.state
+    levels = _levels(q.levels)
+    corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
+    mc = max(0.0, min(q.minConfidence, 1.0))
+    kws, meta, edges = await run_in_threadpool(_keyword_set, state, corpus, mc)
+    by_id = {k.keywordId: k for k in kws}
+    if q.a not in by_id or q.b not in by_id or q.a == q.b:
+        raise HTTPException(404, "키워드를 찾지 못했다 (같은 키워드 둘이면 안 된다)")
+
+    def work():
+        views = {pair: v for pair, e in edges.items() if (v := _edge_view(e, levels))}
+        adj: dict[str, dict[str, float]] = {}
+        for (x, y), v in views.items():
+            adj.setdefault(x, {})[y] = v["score"]
+            adj.setdefault(y, {})[x] = v["score"]
+        degs = sorted(len(n) for n in adj.values())
+        hub = max(40, degs[int(len(degs) * 0.99)] if degs else 0)          # 상위 1% 이상으로 이어진 키워드는 허브
+        key = lambda x, y: (x, y) if x < y else (y, x)
+        edge = lambda x, y: {"a": x, "b": y, **views[key(x, y)]}
+        a, b = q.a, q.b
+        na, nb = adj.get(a, {}), adj.get(b, {})
+        skipped = 0
+        paths: list[tuple[int, float, list[str]]] = []
+        for c in set(na) & set(nb) - {a, b}:
+            if len(adj[c]) > hub:
+                skipped += 1
+                continue
+            paths.append((2, min(na[c], nb[c]), [a, c, b]))
+        top = lambda nbr, other: sorted((x for x in nbr if x != other and len(adj[x]) <= hub), key=lambda x: -nbr[x])[:25]
+        for x in top(na, b):
+            for y in top(nb, a):
+                if x != y and y in adj[x]:
+                    paths.append((3, min(na[x], adj[x][y], nb[y]), [a, x, y, b]))
+        paths.sort(key=lambda p: (p[0], -p[1], p[2]))
+        two, three = [p for p in paths if p[0] == 2][:6], [p for p in paths if p[0] == 3][:4]
+        used = {k for p in (*two, *three) for k in p[2]} | {a, b}
+
+        def info(k: str, full: bool = False) -> dict:
+            kw = by_id[k]
+            return {"id": k, "name": kw.name, "aliases": kw.aliases[:4], "pages": len(kw.note_ids()), "degree": len(adj.get(k, {})),
+                    "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation}
+                                 for c in kw.concepts[:6 if full else 2]]}
+        return {
+            "a": info(a, True), "b": info(b, True), "levels": list(levels), "hubThreshold": hub, "hubsSkipped": skipped,
+            "direct": ({"a": a, "b": b, **views[key(a, b)]} if key(a, b) in views else None),
+            "paths": [{"hops": len(p) - 1, "strength": round(sc, 4), "nodes": [info(k) for k in p],
+                       "edges": [edge(p[i], p[i + 1]) for i in range(len(p) - 1)]} for _, sc, p in (*two, *three)],
+            "nodes": {k: info(k) for k in used},
+        }
+    out = await run_in_threadpool(work)
+    out["note"] = note_id
+    return out
+
+
+class RelSide(BaseModel):
+    name: str
+    concepts: list[str] = []
+
+
+class RelEvidence(BaseModel):
+    level: str                  # sentence | heading | paragraph | path
+    label: str = ""             # path 일 때 어느 두 키워드 사이의 증거인지
+    note: str
+    text: str
+
+
+class RelationQuery(BaseModel):
+    a: RelSide
+    b: RelSide
+    evidence: list[RelEvidence]
+
+
+def _relation_judge(state):
+    """관계 확인 LLM. AI_KEYWORD_RELATION_LLM_* → AI_LLM_* → ANTHROPIC_API_KEY 의 anthropic 기본 모델, effort low."""
+    judge = getattr(state, "kwrel", None)
+    if judge is None:
+        from app.main import role_llm_config
+        from app.services.links.relation_llm import KeywordRelationJudge
+        from app.services.llm import make_llm
+        cfg = role_llm_config("keyword_relation", "low")
+        if cfg is None:
+            raise HTTPException(503, "관계 확인 LLM 이 없다. .env 에 ANTHROPIC_API_KEY 를 넣거나 AI_KEYWORD_RELATION_LLM_PROVIDER 를 정한다")
+        judge = state.kwrel = KeywordRelationJudge(make_llm(cfg), Path("data/private/cache/keyword-relations"))
+    return judge
+
+
+@router.post("/keyword-relation")
+async def keyword_relation(q: RelationQuery, request: Request):
+    """두 키워드와 그 증거를 LLM 에 보내 관계가 있는지·어떤 관계인지 묻는다 (버튼을 눌렀을 때만 부른다). 증거 id 를 인용하지 못한
+    판정은 받아들이지 않는다. 같은 입력은 디스크 캐시에서 돌려준다. 로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나간다)."""
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not 1 <= len(q.evidence) <= 12:
+        raise HTTPException(400, "증거는 1~12개")
+    if any(e.level not in ("sentence", "heading", "paragraph", "path") for e in q.evidence):
+        raise HTTPException(400, "level 은 sentence · heading · paragraph · path")
+    side = lambda s: {"name": s.name[:100], "concepts": [c[:400] for c in s.concepts[:6]]}
+    ev = [{"level": e.level, "label": e.label[:200], "note": e.note[:200], "text": e.text[:800]} for e in q.evidence]
+    judge = _relation_judge(request.app.state)
+    try:
+        res = await run_in_threadpool(judge.judge, side(q.a), side(q.b), ev)
+    except LLMError as e:
+        raise HTTPException(502, f"관계 확인 LLM 오류: {e.kind}")
+    return {**res, "model": judge.model, "promptVersion": judge.prompt_version}
 
 
 def _with_text(state, corpus, note_id: str, text: str):
