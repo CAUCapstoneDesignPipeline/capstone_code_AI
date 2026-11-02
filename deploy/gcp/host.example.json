@@ -1,0 +1,16 @@
+{
+  "projectId": "capsnote",
+  "projectNumber": "169516793433",
+  "region": "asia-northeast3",
+  "privateIp": "10.60.2.10",
+  "appIp": "REPLACE_WITH_APP_PRIVATE_IP",
+  "serverName": "capsnote-prod-ai.asia-northeast3-a.c.capsnote.internal",
+  "releaseBucket": "REPLACE_WITH_TERRAFORM_AI_RELEASE_BUCKET",
+  "artifactBucket": "REPLACE_WITH_TERRAFORM_AI_ARTIFACT_BUCKET",
+  "repository": "asia-northeast3-docker.pkg.dev/capsnote/capstone-ai/ai",
+  "secretResources": {
+    "serviceToken": "projects/capsnote/secrets/REPLACE_WITH_AI_SERVICE_TOKEN_ID",
+    "providerKey": "projects/capsnote/secrets/REPLACE_WITH_AI_PROVIDER_KEY_ID",
+    "tlsBundle": "projects/capsnote/secrets/REPLACE_WITH_AI_TLS_BUNDLE_ID"
+  }
+}

@@ -1,0 +1,87 @@
+name: gcp-publish-image
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gcp-ai-publish-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  ci:
+    if: github.repository == 'CAUCapstoneDesignPipeline/capstone_code_AI' && github.ref == 'refs/heads/develop' && vars.GCP_IMAGE_PUBLISH_ENABLED == 'true'
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: image-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate immutable publish identity and destination
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          AR_REPOSITORY: ${{ vars.AR_REPOSITORY }}
+          GCP_IMAGE_SERVICE_ACCOUNT: ${{ vars.GCP_IMAGE_SERVICE_ACCOUNT }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: python3 deploy/gcp/publish_preflight.py
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_IMAGE_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+      - name: Configure regional Artifact Registry
+        env:
+          REGION: ${{ vars.GCP_REGION }}
+        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Publish verified source (run attempt is immutable tag)
+        id: image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/capstone-ai/ai:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
+            UV_EXTRAS=--extra embeddings
+          provenance: false
+      - name: Validate the exact candidate on CPU before publishing
+        env:
+          IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/capstone-ai/ai:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          docker run --rm --platform linux/amd64 --entrypoint python \
+            -v "$PWD/deploy/gcp/image_smoke.py:/opt/image_smoke.py:ro" \
+            "$IMAGE" /opt/image_smoke.py
+      - name: Push validated candidate
+        id: pushed
+        env:
+          IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/capstone-ai/ai:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          docker push "$IMAGE"
+          full=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          printf 'digest=%s\n' "${full##*@}" >> "$GITHUB_OUTPUT"
+      - name: Record source and immutable digest
+        env:
+          IMAGE_DIGEST: ${{ steps.pushed.outputs.digest }}
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          digest = os.environ['IMAGE_DIGEST']
+          assert re.fullmatch(r'sha256:[0-9a-f]{64}', digest)
+          pathlib.Path('image.json').write_text(json.dumps({'sourceSha':os.environ['GITHUB_SHA'], 'image':f"{os.environ['REGION']}-docker.pkg.dev/{os.environ['PROJECT']}/capstone-ai/ai@{digest}", 'platform':'linux/amd64'}))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gcp-ai-image-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: image.json
+          retention-days: 14
