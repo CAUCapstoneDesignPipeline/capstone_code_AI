@@ -65,9 +65,10 @@ def _url(u: str) -> str:
 
 
 class KnowledgeGenerator:
-    def __init__(self, llm, cache_dir: Path | None):
-        """llm: AnthropicLLM 처럼 complete_web(system, user, schema, name, max_searches) 가 있는 것."""
-        self.llm, self.cache_dir = llm, cache_dir
+    def __init__(self, llm, cache_dir: Path | None, tool: str | None = None):
+        """llm: AnthropicLLM 처럼 complete_web(system, user, schema, name, max_searches, tool) 가 있는 것.
+        tool: 검색 도구. 기본은 기본판(web_search_20250305): 같은 쌍에서 동적 필터링판과 결과가 같았고 호출당 입력 토큰이 6분의 1이다 (3천 대 2만)."""
+        self.llm, self.cache_dir, self.tool = llm, cache_dir, tool
         self.prompt_version = PROMPT_VERSION
 
     @property
@@ -82,7 +83,8 @@ class KnowledgeGenerator:
             return {**hit, "cached": True}
         user = json.dumps({"A": {k: a[k] for k in ("keyword", "note", "text")}, "B": {k: b[k] for k in ("keyword", "note", "text")}},
                           ensure_ascii=False)
-        res = self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES)
+        res = (self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES, self.tool) if self.tool
+               else self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES))
         out = self._check(res, a, b, concept_id)
         self._cache_put(key, out)
         return {**out, "cached": False}

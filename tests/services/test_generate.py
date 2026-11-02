@@ -66,3 +66,16 @@ def test_trailing_slash_in_url_still_matches_and_result_is_cached(tmp_path):
     g = KnowledgeGenerator(fake, tmp_path)
     assert g.generate(A, B, CID)["status"] == "candidate"
     assert g.generate(A, B, CID)["cached"] is True and fake.calls == 1
+
+
+def test_search_tool_is_passed_through_only_when_chosen():
+    seen = []
+
+    class Tool(Fake):
+        def complete_web(self, system, user, schema, name, max_searches=3, tool="default"):
+            seen.append(tool)
+            return super().complete_web(system, user, schema, name, max_searches)
+
+    KnowledgeGenerator(Tool(GOOD), None, "web_search_20250305").generate(A, B, CID)
+    KnowledgeGenerator(Tool(GOOD), None).generate(A, B, CID)
+    assert seen == ["web_search_20250305", "default"]

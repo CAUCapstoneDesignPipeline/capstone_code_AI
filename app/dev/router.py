@@ -188,8 +188,12 @@ def _links_corpus_locked(state):
     profile = EXTRACT_PROFILES[EXTRACT_PROFILE]
     t0 = time.monotonic()
     texts = {k: p.read_text(encoding="utf-8") for k, p in paths.items()}
+    if getattr(state, "entry_memo", None) is None:        # 노트마다 한 번만 만들고 디스크에 둔다: 노트 하나를 고쳐도 나머지는 다시 만들지 않고, 서버를 다시 켜도 빠르다
+        from app.services.links.corpus import DiskEntryMemo
+        state.entry_memo = DiskEntryMemo(Path("data/private/cache/note-entries"))
     corpus = build_corpus(texts, state.extractor, lambda ms: select_concepts(ms, profile), _policy_types(),
-                          profile.limits, version=state.extractor.method_version, lock=state.kiwi_lock, typer=typer)
+                          profile.limits, version=state.extractor.method_version, lock=state.kiwi_lock, typer=typer,
+                          memo=state.entry_memo)
     built_ms = int((time.monotonic() - t0) * 1000)
     state.links_cache = (signature, corpus, built_ms)
     return corpus, built_ms
@@ -802,8 +806,12 @@ async def proposal_candidates(q: ProposalQuery, request: Request):
     }
 
 
-def _proposal_llm(state, key: str, role: str, effort: str, timeout: float | None = None):
-    """역할별 LLM (한 번 만들어 state 에 둔다). AI_{ROLE}_LLM_* → AI_LLM_* → ANTHROPIC_API_KEY 의 anthropic 기본 모델."""
+SCREEN_MODEL = "claude-haiku-5-5"      # 선별은 짧은 판단이라 작은 모델로 충분하다 (275쌍 시험: 정밀도 44% · 재현율 40%, Sonnet 35% · 50%)
+
+
+def _proposal_llm(state, key: str, role: str, effort: str, timeout: float | None = None, default_model: str | None = None):
+    """역할별 LLM (한 번 만들어 state 에 둔다). AI_{ROLE}_LLM_* → AI_LLM_* → ANTHROPIC_API_KEY 의 anthropic 기본 모델.
+    default_model: 환경 변수로 모델을 정하지 않았을 때만 쓰는 이 역할의 기본 모델 (anthropic 일 때)."""
     cache = state.__dict__.setdefault("proposal_llms", {})
     if key not in cache:
         from dataclasses import replace
@@ -815,6 +823,9 @@ def _proposal_llm(state, key: str, role: str, effort: str, timeout: float | None
             raise HTTPException(503, f"{role} LLM 이 없다. .env 에 ANTHROPIC_API_KEY 를 넣거나 AI_{role.upper()}_LLM_PROVIDER 를 정한다")
         if timeout:
             cfg = replace(cfg, timeout=max(cfg.timeout, timeout))
+        explicit = any(os.environ.get(n) for n in (f"AI_{role.upper()}_LLM_MODEL", "AI_LLM_MODEL"))
+        if default_model and cfg.provider == "anthropic" and not explicit:
+            cfg = replace(cfg, model=default_model)
         cache[key] = (cfg, make_llm(cfg))
     return cache[key]
 
@@ -847,7 +858,7 @@ async def proposal_screen(q: ScreenQuery, request: Request):
     state = request.app.state
     judge = getattr(state, "pair_screen", None)
     if judge is None:
-        _, llm = _proposal_llm(state, "screen", "pair_screen", "low")
+        _, llm = _proposal_llm(state, "screen", "pair_screen", "low", default_model=SCREEN_MODEL)
         judge = state.pair_screen = PairScreen(llm, Path("data/private/cache/pair-screens"))
     pairs = [{"id": p.id, "a": {"keyword": p.a.keyword[:100], "text": p.a.text[:600]}, "b": {"keyword": p.b.keyword[:100], "text": p.b.text[:600]}}
              for p in q.pairs]
@@ -890,7 +901,9 @@ async def proposal_generate(q: GenerateQuery, request: Request):
         cfg, llm = _proposal_llm(state, "generate", "suggest", "medium", timeout=240)
         if not hasattr(llm, "complete_web"):
             raise HTTPException(503, f"웹 검색은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
-        gen = state.knowledge_generator = KnowledgeGenerator(llm, Path("data/private/cache/new-knowledge"))
+        from app.services.llm.anthropic_llm import WEB_SEARCH_BASIC
+        gen = state.knowledge_generator = KnowledgeGenerator(llm, Path("data/private/cache/new-knowledge"),
+                                                             os.environ.get("AI_SEARCH_TOOL") or WEB_SEARCH_BASIC)
     if q.a.note == q.b.note:
         raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
     a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
