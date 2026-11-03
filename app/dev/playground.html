@@ -139,6 +139,8 @@ ul.prog .spin { margin: 2px 0 0; }
 .sg a { color: var(--accent); }
 .act[aria-pressed="true"] { background: var(--accent); color: #fff; }
 pre.json { max-height: 260px; overflow: auto; background: var(--soft); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.aEdge.inf { stroke-dasharray: 5 4; }
+.aNode.inf circle { stroke-dasharray: 3 2; stroke: var(--muted); }
 .tag { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
 .act { border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 8px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
 .act:disabled { opacity: .4; }
@@ -208,7 +210,7 @@ const S = { cfg: null, notes: [], note: null, text: "", free: "", mode: null, th
             scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 },
             kw: null, kq: "", kscope: "note", kmulti: false,
             glens: "keywords", kg: null, kgSel: null, kgEdge: null, kgTab: "sel", kgRel: null,
-            glevels: { sentence: true, heading: true, paragraph: false },
+            glevels: { sentence: true, heading: true, paragraph: false, inferred: false },
             cn: { a: null, b: null, qa: "", qb: "", ca: [], cb: [], data: null, rel: null } };
 const name = (id) => (id === FREE ? "직접 입력" : id);
 const valid = (c) => c.confidence >= S.thr;
@@ -590,14 +592,14 @@ function kgSvg(K) {
   const top = new Set([...K.nodes].sort((x, y) => y.degree - x.degree).slice(0, own ? 99 : 14).map((v) => v.id));
   const lines = K.edges.map((e) => {
     const k = edgeKey(e), touch = sel && (e.a === sel || e.b === sel);
-    const cls = k === S.kgEdge ? " on" : touch ? " hl" : sel ? " dim" : "";
+    const cls = (k === S.kgEdge ? " on" : touch ? " hl" : sel ? " dim" : "") + (e.counts.inferred ? " inf" : "");
     const ab = `data-la="${esc(e.a)}" data-lb="${esc(e.b)}"`;
     return `<line class="aEdge${cls}" ${ab} stroke-width="${(0.8 + 4.5 * e.score / max).toFixed(1)}"/>
       <line class="gHit" data-aedge="${esc(k)}" ${ab}><title>${esc(title[e.a])} ↔ ${esc(title[e.b])} · 같은 문장 ${e.sentences}번</title></line>`;
   }).join("");
   const nodes = K.nodes.map((v) => {
     const r = (own ? 8 : 4) + 1.6 * Math.sqrt(v.degree);
-    const cls = v.id === sel ? " sel" : v.inNote ? " cur" : sel && !nb.has(v.id) ? " dim" : "";
+    const cls = (v.id === sel ? " sel" : v.inNote ? " cur" : sel && !nb.has(v.id) ? " dim" : "") + (v.inferred ? " inf" : "");
     const show = v.id === sel || nb.has(v.id) || v.inNote || top.has(v.id);
     return `<g class="aNode${cls}" data-anode="${esc(v.id)}" data-pid="${esc(v.id)}"><title>${esc(v.title)} · 페이지 ${v.pages} · 연결 ${v.degree}</title>
       <circle r="${r.toFixed(1)}"/>${show ? `<text y="${(-r - 4).toFixed(1)}" text-anchor="middle">${esc(shortTitle(v.title, 16))}</text>` : ""}</g>`;
@@ -606,8 +608,8 @@ function kgSvg(K) {
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="키워드 연결 그래프"><g id="vp" transform="translate(${x} ${y}) scale(${k})">${lines}${nodes}</g></svg>`;
 }
 
-const LEVEL_KO = { sentence: "같은 문장", heading: "제목과 본문", paragraph: "같은 문단", path: "경로" };
-const LEVEL_HINT = { sentence: "두 키워드가 한 문장에 같이 나옴", heading: "한쪽이 제목, 다른 쪽이 그 절 본문에 나옴", paragraph: "같은 문단에 나옴 (느슨함)" };
+const LEVEL_KO = { sentence: "같은 문장", heading: "제목과 본문", paragraph: "같은 문단", inferred: "추정 연결", path: "경로" };
+const LEVEL_HINT = { sentence: "두 키워드가 한 문장에 같이 나옴", heading: "한쪽이 제목, 다른 쪽이 그 절 본문에 나옴", paragraph: "같은 문단에 나옴 (느슨함)", inferred: "같이 나온 적 없지만 구조(공통 이웃·걸음 수)와 의미 유사도로 이어질 만하다고 추정. 증거가 아니다. 처음 켤 때 임베딩 때문에 1분쯤 걸린다" };
 const VERDICT_KO = { related: "관계 있음", weak: "약한 관계", unrelated: "관계 없음", unsure: "판정 못 함" };
 const TYPE_KO = { is_a: "종류", part_of: "구성", causes: "원인", requires: "필요", used_for: "용도", contrasts_with: "대비",
                   example_of: "예시", analogous_to: "유사", related: "관련", none: "—" };
@@ -619,7 +621,7 @@ function kgConcepts(n) {
     <div class="quote">${esc(clean(c.explanation))}</div></div>`).join("");
 }
 const evCard = (v) => `<div class="card" style="padding:8px 12px"><span class="tag" title="${esc(LEVEL_HINT[v.level] || "")}">${LEVEL_KO[v.level] || v.level}</span>
-  <button class="linkBtn" data-open="${esc(v.note)}">${esc(shortTitle(v.note, 34))}</button><div class="quote">${esc(clean(v.text))}</div></div>`;
+  ${v.note ? `<button class="linkBtn" data-open="${esc(v.note)}">${esc(shortTitle(v.note, 34))}</button>` : ""}<div class="quote">${esc(clean(v.text))}</div></div>`;
 
 // 관계 확인 (LLM) 결과 상자. rel = { loading | error | data, items }
 function relBox(rel, aName, bName) {
@@ -647,8 +649,11 @@ function kgPanel(K) {
     return `<h3>${esc(A.title)} ↔ ${esc(B.title)}</h3>
       <p class="note">${esc(counts)} · 페이지 ${e.pages}개 · 연결 점수 ${e.score}
         · <button class="linkBtn" data-ksel="${esc(A.id)}">${esc(shortTitle(A.title, 12))}</button> · <button class="linkBtn" data-ksel="${esc(B.id)}">${esc(shortTitle(B.title, 12))}</button></p>
-      <p class="actions">${relButton("edge")} <button class="act" data-conn="${esc(A.id)}|${esc(B.id)}">경로까지 보기</button></p>
-      ${relBox(rel, A.title, B.title)}
+      ${e.counts.inferred
+        ? `<p class="note">증거가 아니라 추정이에요 (추정 점수 ${e.inferredScore}${e.cos != null ? ` · 의미 유사도 ${e.cos}` : " · 임베딩 없이 구조만"}). 관계가 실제로 있는지는 경로의 문장으로 확인해요.</p>
+           <p class="actions"><button class="act" data-conn="${esc(A.id)}|${esc(B.id)}">경로까지 보고 관계 확인</button></p>`
+        : `<p class="actions">${relButton("edge")} <button class="act" data-conn="${esc(A.id)}|${esc(B.id)}">경로까지 보기</button></p>
+      ${relBox(rel, A.title, B.title)}`}
       <h4>증거${e.evidence.length < Object.values(e.counts).reduce((x, y) => x + y, 0) ? ` (${e.evidence.length}개만)` : ""}</h4>
       ${e.evidence.map(evCard).join("")}
       <details><summary>${esc(A.title)} 의 개념</summary>${kgConcepts(A)}</details>
@@ -706,7 +711,9 @@ function connectPanel() {
   const paths = D.paths.length ? D.paths.map(pathView).join("")
     : `<p class="note">다른 키워드를 거쳐 3칸 안에 이어지는 길이 없다. 증거 수준을 넓혀 본다.</p>`;
   const rel = C.rel;
-  return out + `<h4>직접 연결</h4>${direct}
+  const inf = D.inferred ? `<div class="card" style="padding:8px 12px"><span class="tag">추정 연결</span> 추정 점수 <b>${D.inferred.score}</b>${D.inferred.cos != null ? ` · 의미 유사도 ${D.inferred.cos}` : " · 임베딩 없이 구조만"}
+      · 공통 이웃 ${D.inferred.via.length ? D.inferred.via.map((v) => esc(v.name)).join(", ") : "없음"}<p class="note">증거가 아니라 구조와 의미로 한 추정이에요 (3 이상이면 선으로 이을 만한 점수). 아래 길의 문장으로 실제 관계를 확인해요.</p></div>` : "";
+  return out + `<h4>직접 연결</h4>${direct}${inf}
     <h4>다른 키워드를 거치는 길 ${D.paths.length}${D.hubsSkipped ? ` <small>· 연결 ${D.hubThreshold}개 넘는 허브 ${D.hubsSkipped}개는 건너뜀</small>` : ""}</h4>${paths}
     <h4>새 지식</h4>${connectKnowledge(C)}
     <h4>관계 확인</h4><p class="actions">${relButton("connect")}</p>${relBox(rel, D.a.name, D.b.name)}
@@ -726,13 +733,13 @@ function kgView(source) {
     `<label title="${esc(LEVEL_HINT[l])}"><input type="checkbox" data-level="${l}" ${S.glevels[l] ? "checked" : ""}>${LEVEL_KO[l]}</label>`).join("")}<span class="note">증거 수준</span></div>`;
   if (!K || K === "loading" || K.error) {
     return `<div class="col">${toggle}${lv}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
-      ${K === "loading" ? `<p class="count"><span class="spin"></span>실행 중…</p>` : K?.error ? `<p class="error">${esc(K.error)}</p>` : ""}</div>`;
+      ${K === "loading" ? `<p class="count"><span class="spin"></span>실행 중…${S.glevels.inferred ? " (추정 연결은 처음 한 번 임베딩 때문에 1분쯤 걸려요)" : ""}</p>` : K?.error ? `<p class="error">${esc(K.error)}</p>` : ""}</div>`;
   }
   const info = K.scope === "note"
     ? `이 노트의 키워드 ${K.mine}개 중 ${K.mineLinked}개가 다른 키워드와 이어진다 · 강조한 점 = 이 노트의 키워드, 회색 = 다른 페이지에서 이어진 키워드`
     : `전체 키워드 ${K.keywords}개 중 ${K.linkedKeywords}개가 이어져 있다 · 둘 이상의 페이지에 걸치고 연결이 센 ${K.nodes.length}개만 그린다`;
   return `<div class="col">${toggle}${lv}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
-      <p class="count">${info} · 선 ${K.edges.length}개 · 신뢰도 ${S.thr.toFixed(2)} 이상 · ${K.ms}ms</p>
+      <p class="count">${info} · 선 ${K.edges.length}개${K.semantic != null ? ` (추정 ${K.inferredEdges}개, 점선${K.semantic ? "" : " · 임베딩 없이 구조만"})` : ""} · 신뢰도 ${S.thr.toFixed(2)} 이상 · ${K.ms}ms</p>
       ${K.nodes.length ? `<div class="graphWrap allWrap">${kgSvg(K)}</div>` : `<p class="empty">이어진 키워드가 없다. 증거 수준을 넓히거나 기준을 낮춰 본다.</p>`}</div>
     <div class="col side">${kgSide(K)}</div>`;
 }
@@ -820,7 +827,7 @@ $("#body").addEventListener("change", (e) => {
   const l = e.target.dataset?.level;
   if (!l) return;
   S.glevels[l] = e.target.checked;
-  if (!levelsOn().length) { S.glevels[l] = true; e.target.checked = true; return; }      // 하나는 켜 둔다
+  if (!levelsOn().some((x) => x !== "inferred")) { S.glevels[l] = true; e.target.checked = true; return; }      // 증거 수준은 하나 켜 둔다
   S.cn.data = null; run();
   if (S.kgTab === "connect" && S.cn.a && S.cn.b) runConnect();
 });

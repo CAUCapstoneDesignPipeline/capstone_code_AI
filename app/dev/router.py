@@ -390,16 +390,19 @@ async def keywords(q: KeywordsQuery, request: Request):
     }
 
 
+from app.services.links.inference import MIN_SCORE as INFER_MIN_SCORE      # noqa: E402  (시험에서 바꿀 수 있게 이 모듈의 이름으로 둔다)
+
 LEVEL_KO = {"sentence": "같은 문장", "heading": "제목과 본문", "paragraph": "같은 문단"}
 DEFAULT_LEVELS = ["sentence", "heading"]          # 문단은 느슨해서 기본으로는 끈다
 
 
 def _levels(levels: list[str]) -> tuple[str, ...]:
+    """증거 수준(sentence · heading · paragraph) + 선택으로 inferred(추정 연결). 증거 수준은 하나 이상 있어야 하고, 결과는 센 순서 + 맨 뒤 inferred."""
     from app.services.links.keywords import LEVELS
-    bad = [x for x in levels if x not in LEVELS]
-    if bad or not levels:
-        raise HTTPException(400, f"levels 는 {', '.join(LEVELS)} 중에서 하나 이상")
-    return tuple(x for x in LEVELS if x in levels)
+    evidence = tuple(x for x in LEVELS if x in levels)
+    if any(x not in (*LEVELS, "inferred") for x in levels) or not evidence:
+        raise HTTPException(400, f"levels 는 {', '.join(LEVELS)} 중 하나 이상 (+ 선택으로 inferred)")
+    return evidence + (("inferred",) if "inferred" in levels else ())
 
 
 def _edge_view(e: dict, levels: tuple[str, ...]) -> dict | None:
@@ -439,6 +442,33 @@ def _edge_index(state, corpus, min_confidence: float, levels: tuple[str, ...]):
     return cached[1][levels]
 
 
+def _link_graph(state, corpus, min_confidence: float):
+    """추정 연결을 구하는 그래프 (증거 연결 전체 + 키워드 의미 벡터). 키워드 집합마다 한 번 만든다. 임베딩이 처음이면 오래 걸린다 (요소 6,583개에 약 34초)."""
+    from app.services.links.inference import LinkGraph, keyword_vectors
+
+    kws, _, edges = _keyword_set(state, corpus, min_confidence)
+    cached = getattr(state, "link_graph", None)
+    if cached and cached[0] is edges:
+        return cached[1]
+    ids = [k.keywordId for k in kws]
+    index, embedded, _ = _pairing_index(state, corpus, min_confidence)
+    vectors = keyword_vectors([e.keyword_id for e in index.el], index.vec, ids) if embedded else None
+    lg = LinkGraph(ids, edges.keys(), vectors)
+    state.link_graph = (edges, lg)
+    return lg
+
+
+def _inferred_edge(r, by_id) -> dict:
+    """추정 연결 하나를 선 형식으로. 증거가 아니라 점수와 근거 설명(공통 이웃·의미 유사도)이다."""
+    names = [by_id[v].name for v in r.via if v in by_id]
+    why = (f"공통 이웃 {len(names)}개: {', '.join(names)}" if names else "공통 이웃은 없고 3걸음 안에서 닿는다 (또는 의미만 가깝다)")
+    if r.cos is not None:
+        why += f" · 의미 유사도 {r.cos:.2f}"
+    a, b = sorted((r.a, r.b))
+    return {"a": a, "b": b, "score": r.weight, "pages": 0, "counts": {"inferred": 1}, "inferredScore": r.score, "cos": r.cos, "via": names,
+            "evidence": [{"level": "inferred", "note": "", "text": why}]}
+
+
 async def _graph_corpus(state, note_id: str | None, text: str | None):
     """노트 폴더 색인 (붙여넣은 글이 있으면 그 글을 노트로 더해서). (색인, 노트 이름)."""
     if state.extractor is None:
@@ -463,7 +493,7 @@ class KeywordGraphQuery(BaseModel):
     scope: str = "note"         # note: 이 노트의 키워드와 그 이웃 · all: 전체에서 연결이 센 키워드
     limit: int = 0              # 가져올 키워드 수 (0 = note 14 / all 200)
     minConfidence: float = 0.0
-    levels: list[str] = DEFAULT_LEVELS     # 쓸 증거 수준: sentence · heading · paragraph
+    levels: list[str] = DEFAULT_LEVELS     # 쓸 증거 수준: sentence · heading · paragraph (+ inferred: 구조·의미로 추정한 연결)
 
 
 @router.post("/keyword-graph")
@@ -480,7 +510,8 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
     if q.scope == "note" and note_id is None:
         raise HTTPException(400, "note 범위에는 noteId 또는 text 가 필요하다")
     mc = max(0.0, min(q.minConfidence, 1.0))
-    ei = await run_in_threadpool(_edge_index, state, corpus, mc, levels)
+    ev_levels = tuple(x for x in levels if x != "inferred")
+    ei = await run_in_threadpool(_edge_index, state, corpus, mc, ev_levels)
     kws, meta, by_id, adj, strength = ei.kws, ei.meta, ei.by_id, ei.adj, ei.strength
     mine = ei.by_note.get(note_id, set()) if note_id else set()
     if q.scope == "note":
@@ -495,7 +526,29 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
         pool = [k for k in strength if len(by_id[k].note_ids()) >= 2]
         chosen = sorted(pool, key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 200]
     inside = set(chosen)
-    out_edges = sorted(({"a": a, "b": b, **ei.views[(a, b)]} for a in chosen for b in adj.get(a, {}) if b in inside and a < b),
+    inferred_edges: list[dict] = []
+    added: set[str] = set()
+    semantic = None
+    if "inferred" in levels:                                   # 증거로는 안 이어진 키워드를 구조·의미로 잇는다 (화면에 올린 키워드에 대해서만 계산)
+        lg = await run_in_threadpool(_link_graph, state, corpus, mc)
+        semantic = lg.vec is not None
+        sources = list(own) if q.scope == "note" else list(chosen)
+        found = await run_in_threadpool(lambda: [r for k in sources for r in lg.infer(k, min_score=INFER_MIN_SCORE)])
+        if q.scope == "note":                                  # 이 노트의 키워드에 이어질 만한 다른 키워드를 노드로 더한다 (키워드마다 상위 2개, 모두 최대 10개)
+            per: dict[str, int] = {}
+            for r in found:
+                if r.b not in inside and per.get(r.a, 0) < 2 and len(added) < 10:
+                    per[r.a] = per.get(r.a, 0) + 1
+                    added.add(r.b)
+            chosen = chosen + sorted(added, key=lambda k: by_id[k].name)
+            inside = set(chosen)
+        seen: set[tuple[str, str]] = set()
+        for r in found:
+            e = _inferred_edge(r, by_id)
+            if r.b in inside and (e["a"], e["b"]) not in seen:
+                seen.add((e["a"], e["b"]))
+                inferred_edges.append(e)
+    out_edges = sorted([{"a": a, "b": b, **ei.views[(a, b)]} for a in chosen for b in adj.get(a, {}) if b in inside and a < b] + inferred_edges,
                        key=lambda e: -e["score"])
     degree: dict[str, int] = {}
     for e in out_edges:
@@ -503,10 +556,11 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
         degree[e["b"]] = degree.get(e["b"], 0) + 1
     nodes = [{
         "id": k, "title": by_id[k].name, "aliases": by_id[k].aliases[:4], "pages": len(by_id[k].note_ids()),
-        "inNote": k in mine, "degree": degree.get(k, 0),
+        "inNote": k in mine, "degree": degree.get(k, 0), "inferred": k in added,
         "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation} for c in by_id[k].concepts[:6]],
     } for k in chosen]
     return {"note": note_id, "scope": q.scope, "levels": list(levels), "nodes": nodes, "edges": out_edges,
+            "inferredEdges": len(inferred_edges), "semantic": semantic,
             "notes": len(corpus.notes), "keywords": len(kws), "linkedKeywords": len(strength), "mine": len(mine),
             "mineLinked": sum(1 for k in mine if k in strength), "ms": int((time.monotonic() - t0) * 1000)}
 
@@ -528,10 +582,18 @@ async def keyword_connect(q: ConnectQuery, request: Request):
     levels = _levels(q.levels)
     corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
     mc = max(0.0, min(q.minConfidence, 1.0))
-    ei = await run_in_threadpool(_edge_index, state, corpus, mc, levels)
+    ev_levels = tuple(x for x in levels if x != "inferred")
+    ei = await run_in_threadpool(_edge_index, state, corpus, mc, ev_levels)
     meta, by_id, views, adj, hub = ei.meta, ei.by_id, ei.views, ei.adj, ei.hub
     if q.a not in by_id or q.b not in by_id or q.a == q.b:
         raise HTTPException(404, "키워드를 찾지 못했다 (같은 키워드 둘이면 안 된다)")
+    inferred = None
+    if "inferred" in levels:                                   # 어느 증거 수준으로도 안 이어진 쌍이면 구조·의미 점수를 보인다
+        lg = await run_in_threadpool(_link_graph, state, corpus, mc)
+        r = await run_in_threadpool(lg.score, q.a, q.b)
+        if r is not None:
+            inferred = {"score": r.score, "cos": r.cos, "katz": r.katz, "via": [{"id": v, "name": by_id[v].name} for v in r.via if v in by_id],
+                        "weight": r.weight, "semantic": lg.vec is not None}
 
     def work():
         key = lambda x, y: (x, y) if x < y else (y, x)
@@ -560,7 +622,7 @@ async def keyword_connect(q: ConnectQuery, request: Request):
                     "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation}
                                  for c in kw.concepts[:6 if full else 2]]}
         return {
-            "pair": _best_pair(by_id[a], by_id[b], meta),
+            "pair": _best_pair(by_id[a], by_id[b], meta), "inferred": inferred,
             "a": info(a, True), "b": info(b, True), "levels": list(levels), "hubThreshold": hub, "hubsSkipped": skipped,
             "direct": ({"a": a, "b": b, **views[key(a, b)]} if key(a, b) in views else None),
             "paths": [{"hops": len(p) - 1, "strength": round(sc, 4), "nodes": [info(k) for k in p],
