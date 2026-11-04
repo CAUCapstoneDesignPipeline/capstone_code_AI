@@ -39,15 +39,19 @@ class PairScreen:
     def model(self) -> str:
         return self.llm.model
 
-    def screen(self, pairs: list[dict]) -> dict[str, dict]:
+    def screen(self, pairs: list[dict], on_event=None) -> dict[str, dict]:
         """pairs: [{id, a: {keyword, text}, b: {keyword, text}}] → id → {label, conclusion, cached}.
-        모델이 빠뜨린 쌍은 한 번만 더 묻고, 그래도 없으면 label 이 unsure 다."""
+        모델이 빠뜨린 쌍은 한 번만 더 묻고, 그래도 없으면 label 이 unsure 다.
+        on_event(dict) (여러 묶음이 병렬이라 여러 스레드에서 불린다): pair(id, field: label|conclusion, delta|value) — 쓰이는 대로,
+        pair_done(id, label, conclusion, cached) — 그 쌍이 확정됐을 때. 저장된 쌍은 시작하자마자 pair_done 이다. 콜백이 예외를 던지면 모델 호출을 멈춘다."""
+        emit = on_event or (lambda e: None)
         out: dict[str, dict] = {}
         todo = []
         for p in pairs:
             hit = self._cache_get(self._key(p))
             if hit is not None:
                 out[p["id"]] = {**hit, "cached": True}
+                emit({"type": "pair_done", "id": p["id"], "label": hit["label"], "conclusion": hit["conclusion"], "cached": True})
             else:
                 todo.append(p)
         for size in (self.batch, 3):
@@ -55,19 +59,36 @@ class PairScreen:
                 break
             chunks = [todo[i:i + size] for i in range(0, len(todo), size)]
             with ThreadPoolExecutor(min(4, len(chunks))) as ex:
-                for part in ex.map(self._call, chunks):
+                for part in ex.map(lambda c: self._call(c, on_event), chunks):
                     for p, res in part:
                         if res is not None:
                             self._cache_put(self._key(p), res)
                             out[p["id"]] = {**res, "cached": False}
+                            emit({"type": "pair_done", "id": p["id"], "label": res["label"], "conclusion": res["conclusion"], "cached": False})
             todo = [p for p in todo if p["id"] not in out]
         for p in todo:
             out[p["id"]] = {"label": UNSURE, "conclusion": "", "cached": False}
+            emit({"type": "pair_done", "id": p["id"], "label": UNSURE, "conclusion": "", "cached": False})
         return out
 
-    def _call(self, chunk: list[dict]):
+    def _call(self, chunk: list[dict], on_event=None):
         user = "\n\n".join(f"id: {p['id']}\nA [{p['a']['keyword']}]: {p['a']['text']}\nB [{p['b']['keyword']}]: {p['b']['text']}" for p in chunk)
-        data = self.llm.complete_json(SYSTEM, user, SCHEMA, "pair_screen").data
+        if on_event and hasattr(self.llm, "stream_json"):
+            ids: dict[int, str] = {}                             # 결과 배열의 몇 번째가 어느 쌍인지: results.N.id 가 끝나면 안다
+            valid = {p["id"] for p in chunk}
+
+            def listener(e):
+                parts = e["path"].split(".")
+                if len(parts) != 3 or parts[0] != "results" or not parts[1].isdigit():
+                    return
+                i, field = int(parts[1]), parts[2]
+                if field == "id" and "value" in e:
+                    ids[i] = e["value"]
+                elif field in ("label", "conclusion") and ids.get(i) in valid:
+                    on_event({"type": "pair", "id": ids[i], "field": field, **{k: e[k] for k in ("delta", "value") if k in e}})
+            data = self.llm.stream_json(SYSTEM, user, SCHEMA, "pair_screen", on_event=listener).data
+        else:
+            data = self.llm.complete_json(SYSTEM, user, SCHEMA, "pair_screen").data
         got = {r["id"]: r for r in data.get("results", []) if isinstance(r, dict) and r.get("label") in LABELS}
         return [(p, ({"label": got[p["id"]]["label"], "conclusion": str(got[p["id"]].get("conclusion", "")).strip()}
                      if p["id"] in got else None)) for p in chunk]

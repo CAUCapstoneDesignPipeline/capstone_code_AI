@@ -20,7 +20,7 @@ class Fake:
     def __init__(self, data, sources=({"url": URL, "title": "ARIES"},)):
         self.data, self.sources, self.calls = data, list(sources), 0
 
-    def complete_web(self, system, user, schema, name, max_searches=3):
+    def complete_web(self, system, user, schema, name, max_searches=3, submit=None):
         self.calls += 1
         return WebResult(self.data, self.provider, self.model, self.sources, 2)
 
@@ -72,7 +72,7 @@ def test_search_tool_is_passed_through_only_when_chosen():
     seen = []
 
     class Tool(Fake):
-        def complete_web(self, system, user, schema, name, max_searches=3, tool="default"):
+        def complete_web(self, system, user, schema, name, max_searches=3, tool="default", submit=None):
             seen.append(tool)
             return super().complete_web(system, user, schema, name, max_searches)
 
@@ -83,7 +83,7 @@ def test_search_tool_is_passed_through_only_when_chosen():
 
 def test_generator_reports_progress_and_a_stopped_listener_leaves_no_cache(tmp_path):
     class Fake2(Fake):
-        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None):
+        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None, submit=None):
             on_event({"type": "search", "query": "q"})
             return super().complete_web(system, user, schema, name, max_searches)
 

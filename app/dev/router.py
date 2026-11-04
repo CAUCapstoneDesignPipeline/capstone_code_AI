@@ -12,7 +12,9 @@
   POST /dev/proposals/candidates {noteId?, text?, limit}  새 지식을 만들 요소 쌍 후보 (결정적)
   POST /dev/proposals/screen {pairs}  후보 쌍을 LLM 으로 거른다 (눌렀을 때만)
   POST /dev/proposals/generate {a, b}  두 요소 + 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만)
-  POST /dev/proposals/generate/stream {a, b}  같은 일을 진행 상황과 함께 SSE 로 (화면이 쓰는 쪽)
+  POST /dev/proposals/generate/stream {a, b}  같은 일을 진행 상황과 결론이 쓰이는 대로 SSE 로 (화면이 쓰는 쪽)
+  POST /dev/proposals/screen/stream {pairs}  LLM 선별을 쌍마다 라벨·메모가 쓰이는 대로 SSE 로
+  POST /dev/keyword-relation/stream {a, b, evidence}  관계 확인을 판정이 쓰이는 대로 SSE 로
   POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
@@ -987,42 +989,33 @@ class _Cancelled(Exception):
     """화면이 연결을 끊었다. 모델 호출을 멈추려고 진행 알림 콜백에서 던진다."""
 
 
-@router.post("/proposals/generate/stream")
-async def proposal_generate_stream(q: GenerateQuery, request: Request):
-    """/proposals/generate 와 같은 일을 하되, 진행 상황을 SSE(text/event-stream) 로 그때그때 보낸다.
-    이벤트 (event: 이름 / data: JSON, 모두 t = 시작 뒤 초):
-      start(model, tool) · cached · thinking · search_start · search(query) · search_results(results[{url,title}]) ·
-      writing(chars) · validating(sources) · result(result = /proposals/generate 의 응답) · error(status, message)
-    연결을 끊으면 모델 호출도 멈춘다 (검색·토큰을 더 쓰지 않는다). 사전 검사 실패(403·503·400)는 보통 HTTP 오류로 돌려준다."""
-    from app.client import uid
+def _sse_job(request: Request, work) -> StreamingResponse:
+    """work(emit) 를 스레드에서 돌리고 emit 한 이벤트(dict, "type" 이 SSE 이벤트 이름)를 text/event-stream 으로 흘린다.
+    모든 이벤트에 t = 시작 뒤 초가 붙는다. 10초 동안 조용하면 `: keep-alive` 를 보낸다. 모델 오류는 error 이벤트로 끝낸다.
+    연결이 끊기면 다음 emit 에서 _Cancelled 가 올라가 일이 멈춘다 (모델 스트림이 닫혀 토큰을 더 쓰지 않는다)."""
     from app.services.llm import LLMError
 
-    if not _loopback(request):
-        raise HTTPException(403, "로컬에서만 부를 수 있다")
-    gen = _knowledge_generator(request.app.state)
-    if q.a.note == q.b.note:
-        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
-    a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
     loop, queue, cancelled, t0 = asyncio.get_running_loop(), asyncio.Queue(), threading.Event(), time.monotonic()
+    stamp = lambda ev: {**ev, "t": round(time.monotonic() - t0, 1)}
 
     def emit(ev: dict):
         if cancelled.is_set():
             raise _Cancelled()
-        loop.call_soon_threadsafe(queue.put_nowait, {**ev, "t": round(time.monotonic() - t0, 1)})
+        loop.call_soon_threadsafe(queue.put_nowait, stamp(ev))
 
-    def work():
+    def runner():
         try:
-            emit({"type": "result", "result": gen.generate(a, b, uid("generated", q.a.conceptId, q.b.conceptId), on_event=emit)})
+            work(emit)
         except _Cancelled:
             pass
         except LLMError as e:
-            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "status": 502, "message": f"생성 LLM 오류: {e.kind}", "t": round(time.monotonic() - t0, 1)})
+            loop.call_soon_threadsafe(queue.put_nowait, stamp({"type": "error", "status": 502, "message": f"LLM 오류: {e.kind}"}))
         except Exception as e:                                        # 스트림이 말없이 끊기지 않게 끝을 알린다
-            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "status": 500, "message": f"{type(e).__name__}", "t": round(time.monotonic() - t0, 1)})
+            loop.call_soon_threadsafe(queue.put_nowait, stamp({"type": "error", "status": 500, "message": f"{type(e).__name__}"}))
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
-    task = asyncio.ensure_future(run_in_threadpool(work))
+    task = asyncio.ensure_future(run_in_threadpool(runner))
 
     async def stream():
         try:
@@ -1042,6 +1035,71 @@ async def proposal_generate_stream(q: GenerateQuery, request: Request):
             task.done()                                               # task 를 끝까지 붙들어 둔다 (참조가 사라지면 일이 취소될 수 있다)
 
     return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/proposals/generate/stream")
+async def proposal_generate_stream(q: GenerateQuery, request: Request):
+    """/proposals/generate 와 같은 일을 하되, 진행 상황과 **결론이 쓰이는 대로** SSE(text/event-stream) 로 보낸다.
+    이벤트 (event: 이름 / data: JSON, 모두 t = 시작 뒤 초):
+      start(model, tool) · cached · thinking · search_start · search(query) · search_results(results[{url,title}]) · writing(chars) ·
+      field(path, delta | value: 모델이 쓰는 JSON 의 newKeyword·conclusion·reason 등이 토큰마다) · validating(sources) · result(result) · error(status, message)
+    연결을 끊으면 모델 호출도 멈춘다 (검색·토큰을 더 쓰지 않는다). 사전 검사 실패(403·503·400)는 보통 HTTP 오류로 돌려준다."""
+    from app.client import uid
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    gen = _knowledge_generator(request.app.state)
+    if q.a.note == q.b.note:
+        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
+    a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
+    cid = uid("generated", q.a.conceptId, q.b.conceptId)
+    return _sse_job(request, lambda emit: emit({"type": "result", "result": gen.generate(a, b, cid, on_event=emit)}))
+
+
+def _screen_judge(state):
+    from app.services.links.pair_screen import PairScreen
+
+    judge = getattr(state, "pair_screen", None)
+    if judge is None:
+        _, llm = _proposal_llm(state, "screen", "pair_screen", "low", default_model=SCREEN_MODEL)
+        judge = state.pair_screen = PairScreen(llm, Path("data/private/cache/pair-screens"))
+    return judge
+
+
+@router.post("/proposals/screen/stream")
+async def proposal_screen_stream(q: ScreenQuery, request: Request):
+    """/proposals/screen 과 같은 일을 하되, 쌍마다 라벨과 메모가 **쓰이는 대로** SSE 로 보낸다.
+    이벤트: pair(id, field: label|conclusion, delta | value) — 쓰이는 대로 · pair_done(id, label, conclusion, cached) — 그 쌍이 확정 ·
+    result(results, model, promptVersion) · error. 저장된 쌍은 시작하자마자 pair_done 이다."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not 1 <= len(q.pairs) <= 30:
+        raise HTTPException(400, "쌍은 1~30개")
+    judge = _screen_judge(request.app.state)
+    pairs = [{"id": p.id, "a": {"keyword": p.a.keyword[:100], "text": p.a.text[:600]}, "b": {"keyword": p.b.keyword[:100], "text": p.b.text[:600]}}
+             for p in q.pairs]
+    return _sse_job(request, lambda emit: emit({"type": "result", "results": judge.screen(pairs, on_event=emit), "model": judge.model,
+                                                "promptVersion": judge.prompt_version}))
+
+
+@router.post("/keyword-relation/stream")
+async def keyword_relation_stream(q: RelationQuery, request: Request):
+    """/keyword-relation 과 같은 일을 하되, 판정의 verdict·type·direction·reason 이 **쓰이는 대로** SSE 로 보낸다.
+    이벤트: cached · field(path, delta | value) · result(result = /keyword-relation 의 응답) · error."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not 1 <= len(q.evidence) <= 12:
+        raise HTTPException(400, "증거는 1~12개")
+    if any(e.level not in ("sentence", "heading", "paragraph", "path") for e in q.evidence):
+        raise HTTPException(400, "level 은 sentence · heading · paragraph · path")
+    side = lambda x: {"name": x.name[:100], "concepts": [c[:400] for c in x.concepts[:6]]}
+    ev = [{"level": e.level, "label": e.label[:200], "note": e.note[:200], "text": e.text[:800]} for e in q.evidence]
+    judge = _relation_judge(request.app.state)
+
+    def work(emit):
+        res = judge.judge(side(q.a), side(q.b), ev, on_event=emit)
+        emit({"type": "result", "result": {**res, "model": judge.model, "promptVersion": judge.prompt_version}})
+    return _sse_job(request, work)
 
 
 # ---- 관계 연결 그래프 ----

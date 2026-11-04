@@ -64,22 +64,25 @@ class KeywordRelationJudge:
     def model(self) -> str:
         return self.llm.model
 
-    def judge(self, a: dict, b: dict, evidence: list[dict]) -> dict:
+    def judge(self, a: dict, b: dict, evidence: list[dict], on_event=None) -> dict:
         """a, b: {name, concepts: [설명]}. evidence: [{level, label?, note, text}] (id 는 여기서 E1.. 로 붙인다).
-        반환: {verdict, type, direction, reason, evidence: [id], cached}. verdict 는 related | weak | unrelated | unsure."""
+        반환: {verdict, type, direction, reason, evidence: [id], cached}. verdict 는 related | weak | unrelated | unsure.
+        on_event(dict): cached · field(path, delta | value) — 모델이 쓰는 verdict·type·direction·reason 이 쓰이는 대로 (콜백이 예외를 던지면 호출을 멈춘다)."""
         items = [{"id": f"E{i}", "level": e["level"], "label": e.get("label", ""), "note": e["note"], "text": e["text"]}
                  for i, e in enumerate(evidence, 1)]
         payload = {"a": a, "b": b, "evidence": items}
         key = self._key(payload)
         cached = self._cache_get(key)
         if cached is not None:
+            if on_event:
+                on_event({"type": "cached"})
             return {**cached, "cached": True}
-        result = self._call(payload)
+        result = self._call(payload, on_event)
         out = self._validate(result, items)
         self._cache_put(key, out)
         return {**out, "cached": False}
 
-    def _call(self, payload: dict) -> dict:
+    def _call(self, payload: dict, on_event=None) -> dict:
         schema = {
             "type": "object", "additionalProperties": False,
             "required": ["verdict", "type", "direction", "reason", "evidence"],
@@ -92,7 +95,10 @@ class KeywordRelationJudge:
             },
         }
         system = SYSTEM.format(types="\n".join(f"- {c}: {d}" for c, d in TYPES.items()))
-        return self.llm.complete_json(system, json.dumps(payload, ensure_ascii=False), schema, name="keyword_relation").data
+        user = json.dumps(payload, ensure_ascii=False)
+        if on_event and hasattr(self.llm, "stream_json"):
+            return self.llm.stream_json(system, user, schema, "keyword_relation", on_event=on_event).data
+        return self.llm.complete_json(system, user, schema, name="keyword_relation").data
 
     @staticmethod
     def _validate(r: dict, items: list[dict]) -> dict:

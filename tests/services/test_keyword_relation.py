@@ -71,3 +71,19 @@ def test_cache_is_keyed_by_input_and_model(tmp_path):
     assert j.judge(A, B, EV)["cached"] is False and j.judge(A, B, EV)["cached"] is True and len(fake.seen) == 1
     j.judge(A, B, EV[:1])                                           # 증거가 다르면 다시 묻는다
     assert len(fake.seen) == 2
+
+
+def test_judge_streams_fields_and_reports_a_cached_result_without_calling_the_model(tmp_path):
+    class S(Fake):
+        def stream_json(self, system, user, schema, name, on_event=None):
+            for e in ({"path": "verdict", "value": "related"}, {"path": "reason", "delta": "둘을 "}, {"path": "reason", "delta": "대비한다."}):
+                on_event({"type": "field", **e})
+            return self.complete_json(system, user, schema, name)
+
+    fake = S(reply())
+    j = KeywordRelationJudge(fake, tmp_path)
+    seen = []
+    assert j.judge(A, B, EV, on_event=seen.append)["verdict"] == "related"
+    assert [e["type"] for e in seen] == ["field"] * 3 and "".join(e["delta"] for e in seen if "delta" in e) == "둘을 대비한다."
+    seen.clear()
+    assert j.judge(A, B, EV, on_event=seen.append)["cached"] is True and seen == [{"type": "cached"}] and len(fake.seen) == 1
