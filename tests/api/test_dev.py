@@ -369,7 +369,7 @@ def test_proposal_screen_and_generate_endpoints(tmp_path, monkeypatch):
         def complete_json(self, system, user, schema, name):
             ids = [l[4:] for l in user.splitlines() if l.startswith("id: ")]
             return LLMResult({"results": [{"id": i, "label": "useful", "conclusion": "결론"} for i in ids]}, self.provider, self.model)
-        def complete_web(self, system, user, schema, name, max_searches=3):
+        def complete_web(self, system, user, schema, name, max_searches=3, submit=None):
             return WebResult({"status": "ok", "newKeyword": "새 키워드", "fromA": "로그를 먼저", "fromB": "전부 반영",
                               "conclusion": "로그를 먼저 쓰기 때문에 전부 반영되거나 전혀 반영되지 않는 성질을 지킬 수 있어요.",
                               "external": [{"url": "https://example.com/p", "title": "T", "quote": "q", "supports": "s"}], "reason": "r"},
@@ -432,9 +432,11 @@ def test_proposal_generate_stream_reports_progress_then_the_result(tmp_path):
 
     class Fake:
         provider, model = "anthropic", "fake"
-        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None):
+        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None, submit=None):
             for ev in ({"type": "thinking"}, {"type": "search_start"}, {"type": "search", "query": "write ahead log os page cache"},
-                       {"type": "search_results", "results": [{"url": "https://example.com/p", "title": "T"}]}, {"type": "writing", "chars": 0}):
+                       {"type": "search_results", "results": [{"url": "https://example.com/p", "title": "T"}]}, {"type": "writing", "chars": 0},
+                       {"type": "field", "path": "newKeyword", "value": "새 키워드"}, {"type": "field", "path": "conclusion", "delta": "로그를 먼저 쓰기 때문에 "},
+                       {"type": "field", "path": "conclusion", "delta": "전부 반영되거나 전혀 반영되지 않는 성질을 지킬 수 있어요."}):
                 on_event(ev)
             return WebResult({"status": "ok", "newKeyword": "새 키워드", "fromA": "로그를 먼저", "fromB": "전부 반영",
                               "conclusion": "로그를 먼저 쓰기 때문에 전부 반영되거나 전혀 반영되지 않는 성질을 지킬 수 있어요.",
@@ -450,7 +452,8 @@ def test_proposal_generate_stream_reports_progress_then_the_result(tmp_path):
         r = c.post("/dev/proposals/generate/stream", json={"a": a, "b": b})
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream") and r.headers["cache-control"] == "no-cache"
         evs = _sse(r.text)
-        assert [e["type"] for e in evs] == ["start", "thinking", "search_start", "search", "search_results", "writing", "validating", "result"]
+        assert [e["type"] for e in evs] == ["start", "thinking", "search_start", "search", "search_results", "writing", "field", "field", "field", "validating", "result"]
+        assert "".join(e["delta"] for e in evs if e["type"] == "field" and e["path"] == "conclusion") .startswith("로그를 먼저 쓰기 때문에 전부")   # 결론이 쓰이는 대로 온다
         assert evs[3]["query"] == "write ahead log os page cache" and evs[4]["results"][0]["url"] == "https://example.com/p"
         assert all("t" in e for e in evs) and evs[0]["model"] == "fake"
         assert evs[-1]["result"]["status"] == "candidate" and evs[-1]["result"]["concept"]["origin"] == "generated"
@@ -477,3 +480,96 @@ def test_proposal_generate_stream_turns_model_errors_into_an_error_event():
     with TestClient(app, client=LOCAL) as c:
         evs = _sse(c.post("/dev/proposals/generate/stream", json={"a": s("A", N1, "c1"), "b": s("B", N2, "c2")}).text)
         assert [e["type"] for e in evs] == ["start", "error"] and "rate_limit" in evs[-1]["message"] and evs[-1]["status"] == 502
+
+
+def _chain_notes(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    (tmp_path / "DB-WAL.md").write_text("# WAL\n\n**WAL**은 **트랜잭션** 로그를 디스크에 먼저 기록해서 장애에 대비하는 방식이다.\n", encoding="utf-8")
+    (tmp_path / "ACID.md").write_text("# ACID\n\n**트랜잭션**은 **원자성**을 지켜야 하는 작업 단위라는 뜻이다.\n", encoding="utf-8")
+    (tmp_path / "ISO.md").write_text("# 격리\n\n**원자성**은 **격리성**과 함께 ACID 를 이루는 성질이라고 부른다.\n", encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    monkeypatch.setattr(dev, "INFER_MIN_SCORE", -99.0)               # 작은 시험 그래프라 문턱을 없앤다
+    _no_embeddings(monkeypatch)
+
+
+def test_inferred_links_join_keywords_that_never_share_a_sentence_or_paragraph(tmp_path, monkeypatch):
+    _chain_notes(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        base = c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "scope": "note", "limit": 30, "levels": ["sentence"]}).json()
+        t = {n["id"]: n["title"] for n in base["nodes"]}
+        assert not any("inferred" in e["counts"] for e in base["edges"]) and base["inferredEdges"] == 0 and base["semantic"] is None
+        g = c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "scope": "note", "limit": 30, "levels": ["sentence", "inferred"]}).json()
+        t = {n["id"]: n["title"] for n in g["nodes"]}
+        inf = [e for e in g["edges"] if "inferred" in e["counts"]]
+        assert g["inferredEdges"] == len(inf) >= 1 and g["semantic"] is False
+        e = next(e for e in inf if sorted((t[e["a"]], t[e["b"]])) == ["WAL", "원자성"])      # 같은 문장·문단에 나온 적 없다
+        assert e["via"] == ["트랜잭션"] and e["evidence"][0]["level"] == "inferred" and "공통 이웃 1개: 트랜잭션" in e["evidence"][0]["text"]
+        assert 0.1 <= e["score"] <= 0.5 and e["pages"] == 0
+        far = next(n for n in g["nodes"] if n["title"] == "격리성")                           # 3걸음 거리라 증거 이웃으로는 안 올라오고 추정으로만 올라온다
+        assert far["inferred"] is True and far["inNote"] is False and not next(n for n in g["nodes"] if n["title"] == "원자성")["inferred"]
+        assert any(sorted((t[x["a"]], t[x["b"]])) == ["WAL", "격리성"] and "inferred" in x["counts"] for x in g["edges"])
+        assert not any(sorted((t[x["a"]], t[x["b"]])) == ["WAL", "트랜잭션"] and "inferred" in x["counts"] for x in g["edges"])   # 이미 이어진 쌍은 아니다
+        assert c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "levels": ["inferred"]}).status_code == 400   # 증거 수준이 하나는 있어야 한다
+
+
+def test_connect_shows_the_inferred_score_only_for_pairs_without_evidence(tmp_path, monkeypatch):
+    _chain_notes(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        g = c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "scope": "note", "limit": 30, "levels": ["sentence", "inferred"]}).json()
+        ids = {n["title"]: n["id"] for n in g["nodes"]}
+        r = c.post("/dev/keyword-connect", json={"a": ids["WAL"], "b": ids["원자성"], "levels": ["sentence", "inferred"]}).json()
+        assert r["direct"] is None and [v["name"] for v in r["inferred"]["via"]] == ["트랜잭션"] and r["inferred"]["semantic"] is False
+        assert any([n["name"] for n in p["nodes"]] == ["WAL", "트랜잭션", "원자성"] for p in r["paths"])
+        linked = c.post("/dev/keyword-connect", json={"a": ids["WAL"], "b": ids["트랜잭션"], "levels": ["sentence", "inferred"]}).json()
+        assert linked["direct"] and linked["inferred"] is None                               # 증거로 이어진 쌍은 추정하지 않는다
+        off = c.post("/dev/keyword-connect", json={"a": ids["WAL"], "b": ids["원자성"], "levels": ["sentence"]}).json()
+        assert off["inferred"] is None
+
+
+def test_screen_and_relation_streams_report_tokens_then_the_result(tmp_path):
+    from app.services.links.pair_screen import PairScreen
+    from app.services.links.relation_llm import KeywordRelationJudge
+    from app.services.llm import LLMResult
+
+    class Fake:
+        provider, model = "anthropic", "fake-model"
+        def complete_json(self, system, user, schema, name):
+            if name == "pair_screen":
+                ids = [l[4:] for l in user.splitlines() if l.startswith("id: ")]
+                return LLMResult({"results": [{"id": i, "label": "useful", "conclusion": "결론"} for i in ids]}, self.provider, self.model)
+            return LLMResult({"verdict": "related", "type": "is_a", "direction": "a_to_b", "reason": "TCP 는 전송 프로토콜의 한 종류다.", "evidence": ["E1"]}, self.provider, self.model)
+        def stream_json(self, system, user, schema, name, on_event=None):
+            if name == "pair_screen":
+                for n, i in enumerate(l[4:] for l in user.splitlines() if l.startswith("id: ")):
+                    for e in ({"path": f"results.{n}.id", "value": i}, {"path": f"results.{n}.label", "value": "useful"},
+                              {"path": f"results.{n}.conclusion", "delta": "결"}, {"path": f"results.{n}.conclusion", "delta": "론"}):
+                        on_event({"type": "field", **e})
+            else:
+                for e in ({"path": "verdict", "value": "related"}, {"path": "reason", "delta": "TCP 는 "}, {"path": "reason", "delta": "전송 프로토콜의 한 종류다."}):
+                    on_event({"type": "field", **e})
+            return self.complete_json(system, user, schema, name)
+
+    app = dev_app()
+    app.state.pair_screen = PairScreen(Fake(), None)
+    app.state.kwrel = KeywordRelationJudge(Fake(), None)
+    pair = {"id": "p1", "a": {"keyword": "TCP", "text": "TCP는 전송 프로토콜의 일종이다."}, "b": {"keyword": "UDP", "text": "UDP는 전송 프로토콜의 일종이다."}}
+    rel = {"a": {"name": "TCP", "concepts": []}, "b": {"name": "전송 프로토콜", "concepts": []},
+           "evidence": [{"level": "sentence", "note": "n", "text": "TCP는 전송 프로토콜의 일종이다."}]}
+    with TestClient(app, client=LOCAL) as c:
+        r = c.post("/dev/proposals/screen/stream", json={"pairs": [pair]})
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+        evs = _sse(r.text)
+        kinds = [e["type"] for e in evs]
+        assert kinds[-1] == "result" and "pair_done" in kinds and kinds.index("pair") < kinds.index("pair_done")
+        assert "".join(e["delta"] for e in evs if e["type"] == "pair" and e.get("field") == "conclusion" and "delta" in e) == "결론"
+        assert evs[-1]["results"]["p1"]["label"] == "useful" and evs[-1]["model"] == "fake-model"
+        evs = _sse(c.post("/dev/keyword-relation/stream", json=rel).text)
+        assert [e["type"] for e in evs] == ["field", "field", "field", "result"]
+        assert "".join(e["delta"] for e in evs if e["type"] == "field" and "delta" in e) == "TCP 는 전송 프로토콜의 한 종류다."
+        assert evs[-1]["result"]["verdict"] == "related" and evs[-1]["result"]["promptVersion"] == "kwrel-llm-1"
+        assert c.post("/dev/proposals/screen/stream", json={"pairs": []}).status_code == 400
+        assert c.post("/dev/keyword-relation/stream", json={**rel, "evidence": []}).status_code == 400
+    with TestClient(app, client=("10.0.0.5", 50000)) as c:
+        assert c.post("/dev/proposals/screen/stream", json={"pairs": [pair]}).status_code == 403
+        assert c.post("/dev/keyword-relation/stream", json=rel).status_code == 403

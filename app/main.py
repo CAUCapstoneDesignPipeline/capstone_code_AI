@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
+from app.api.v1 import chat as chat_api
 from app.api.v1 import derive, embeddings, extract, health, links, reasoning
 from app.api.v1.deps import UUID_RE
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES, Settings
@@ -65,7 +66,7 @@ def explain_llm_config():
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
                explanation_judge=None, merge_judge=None, concept_filter=None, fact_extractor=None,
-               soundness_judge=None) -> FastAPI:
+               soundness_judge=None, chat=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -118,6 +119,25 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 log.info("soundness 판정 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
             except Exception as e:      # derive-sound-1 만 준비되지 않은 상태로 둔다
                 log.error("soundness 판정 LLM 을 만들지 못했다: %s", e)
+        if st.chat is None and settings.chat_llm:
+            try:
+                import os
+
+                import anthropic
+                from dataclasses import replace
+
+                from app.services.chat import DEFAULT_MODEL, ChatService
+                cfg = role_llm_config("chat", "low")
+                if cfg is None:
+                    raise ValueError("챗봇 LLM 제공자가 없다 (AI_CHAT_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
+                if cfg.provider != "anthropic":
+                    raise ValueError(f"챗봇은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
+                if not any(os.environ.get(n) for n in ("AI_CHAT_LLM_MODEL", "AI_LLM_MODEL")):
+                    cfg = replace(cfg, model=DEFAULT_MODEL)        # 모델을 따로 정하지 않았으면 챗봇은 작은 모델
+                st.chat = ChatService(anthropic.AsyncAnthropic(api_key=cfg.api_key, max_retries=0, timeout=cfg.timeout), cfg.model, cfg.effort)
+                log.info("챗봇 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
+            except Exception as e:      # /chat 만 준비되지 않은 상태로 둔다
+                log.error("챗봇 LLM 을 만들지 못했다: %s", e)
         if st.explainer is None and settings.explain_llm:
             from app.services.llm import make_llm
             from app.services.reasoning.explain_llm import ExplainLLM
@@ -171,6 +191,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.concept_filter = concept_filter
     app.state.fact_extractor = fact_extractor
     app.state.soundness_judge = soundness_judge
+    app.state.chat = chat
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()
@@ -191,7 +212,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
         return response
 
     install_handlers(app)
-    for router in (extract.router, embeddings.router, reasoning.router, links.router, derive.router, health.router):
+    for router in (extract.router, embeddings.router, reasoning.router, links.router, derive.router, chat_api.router, health.router):
         app.include_router(router, prefix=API_PREFIX)
     if settings.dev_ui:                 # 개발용 playground. 로컬 노트를 읽으므로 배포에서는 켜지 않는다
         from pathlib import Path

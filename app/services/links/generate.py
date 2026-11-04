@@ -21,7 +21,8 @@ from pydantic import ValidationError
 from app.schemas.common import Span
 from app.schemas.knowledge import Concept, ExternalSource, PageSource
 
-PROMPT_VERSION = "newknowledge-llm-2"      # 1: 검색 3번까지 · 출처마다 title·supports 를 모델이 씀
+PROMPT_VERSION = "newknowledge-llm-3"      # 2: 검색 한 번 · url·quote 만 / 1: 검색 3번까지 · title·supports 도 모델이 씀. 3: 결과를 구조화 출력이 아니라 submit_knowledge 도구로 받아 결론이 쓰이는 대로 보인다
+SUBMIT = "submit_knowledge"
 MAX_EXTERNAL = 3
 MAX_SEARCHES = 1                          # 검색 한 번이 약 9초다. 한 번에 9개쯤 받으므로 두 번째는 대개 같은 내용이다
 SIMILAR = 0.85          # 결론이 노트 문장과 이만큼 같으면 새 지식이 아니다
@@ -30,7 +31,7 @@ SYSTEM = """너는 공부 노트에서 뽑은 두 문장(A, B)과 웹에서 찾�
 새 지식 = A 와 B 어느 한쪽에도 쓰여 있지 않고, 둘을 합친 뒤 외부 자료로 이어야 비로소 말할 수 있는 결론이다.
 
 순서: (1) A 와 B 를 읽고 어떤 결론이 가능한지 정한다. (2) 웹 검색으로 그 결론을 이어 주거나 확인해 주는 자료를 찾는다. 검색은 한 번만 할 수 있으니 검색어를 신중히 고른다.
-(3) 아래 규칙대로 JSON 으로 답한다.
+(3) 아래 규칙대로 결과를 만들어 submit_knowledge 도구를 한 번 호출해 제출한다 (일반 글로 답하지 않는다).
 
 규칙:
 - conclusion 은 쉬운 말로 쓴다. 해요체로, "~는 ~에요" 처럼 친절하게, 2~4문장. 전문 용어는 처음 나올 때 풀어 쓴다.
@@ -90,7 +91,7 @@ class KnowledgeGenerator:
         emit({"type": "start", "model": self.llm.model, "tool": self.tool or ""})
         user = json.dumps({"A": {k: a[k] for k in ("keyword", "note", "text")}, "B": {k: b[k] for k in ("keyword", "note", "text")}},
                           ensure_ascii=False)
-        extra = {"on_event": on_event} if on_event else {}                  # 알림을 받지 않는 호출자와 가짜 LLM 은 그대로
+        extra = {"on_event": on_event, "submit": SUBMIT} if on_event else {"submit": SUBMIT}   # 결과는 submit_knowledge 도구로 받는다 (쓰이는 대로 보이게)
         res = (self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES, self.tool, **extra) if self.tool
                else self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES, **extra))
         emit({"type": "validating", "sources": len(res.sources)})

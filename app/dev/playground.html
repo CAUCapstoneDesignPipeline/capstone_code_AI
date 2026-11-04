@@ -131,6 +131,15 @@ ul.prog .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular
 ul.prog .plinks { margin: 3px 0 0; padding-left: 16px; font-size: 12px; }
 ul.prog .spin { margin: 2px 0 0; }
 .progBox { margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: var(--soft); }
+.chat { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.msgs { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+.msg { display: flex; }
+.msg.user { justify-content: flex-end; }
+.bub { max-width: 88%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--soft); }
+.msg.user .bub { background: var(--accent); color: #fff; }
+.cardJson { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--bg); color: var(--ink); font-family: ui-monospace, monospace; font-size: 12px; margin-top: 6px; }
+.chatRow { display: flex; gap: 8px; margin-top: 8px; }
+.chatRow input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--bg); color: var(--ink); }
 .sg .sgSide { margin: 8px 0; }
 .sg h4 { font-size: 13px; margin: 12px 0 4px; color: var(--muted); }
 .sg .gen { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
@@ -139,6 +148,8 @@ ul.prog .spin { margin: 2px 0 0; }
 .sg a { color: var(--accent); }
 .act[aria-pressed="true"] { background: var(--accent); color: #fff; }
 pre.json { max-height: 260px; overflow: auto; background: var(--soft); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.aEdge.inf { stroke-dasharray: 5 4; }
+.aNode.inf circle { stroke-dasharray: 3 2; stroke: var(--muted); }
 .tag { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
 .act { border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 8px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
 .act:disabled { opacity: .4; }
@@ -191,6 +202,7 @@ pre.json { max-height: 260px; overflow: auto; background: var(--soft); border-ra
         <button data-mode="concepts" aria-pressed="false" title="이 노트에서 키워드와 키워드마다 설명(원문 문장)을 뽑는다">키워드 및 설명 추출</button>
         <button data-mode="keywords" aria-pressed="false" title="노드 = 키워드, 그 안에 개념(설명 + 소스 페이지)">키워드</button>
         <button data-mode="links" aria-pressed="false" title="키워드가 어떻게 이어져 있는지 보여 준다 (노드 = 키워드, 선 = 같은 문장에 같이 나옴). 문서 노드로도 볼 수 있다">문서 연결</button>
+        <button data-mode="chat" aria-pressed="false" title="새 지식 카드를 컨텍스트로 여러 턴 대화한다. 답이 토큰마다 흘러온다">챗봇</button>
         <button data-mode="suggest" aria-pressed="false" title="키워드 A 의 요소 + 키워드 B 의 요소 + 인터넷 지식으로 사용자가 모르는 새 지식을 만든다">지식 제안</button>
       </div>
       <label class="thr">유효 키워드 신뢰도 ≥
@@ -208,7 +220,7 @@ const S = { cfg: null, notes: [], note: null, text: "", free: "", mode: null, th
             scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 },
             kw: null, kq: "", kscope: "note", kmulti: false,
             glens: "keywords", kg: null, kgSel: null, kgEdge: null, kgTab: "sel", kgRel: null,
-            glevels: { sentence: true, heading: true, paragraph: false },
+            glevels: { sentence: true, heading: true, paragraph: false, inferred: false },
             cn: { a: null, b: null, qa: "", qb: "", ca: [], cb: [], data: null, rel: null } };
 const name = (id) => (id === FREE ? "직접 입력" : id);
 const valid = (c) => c.confidence >= S.thr;
@@ -261,7 +273,7 @@ $("#thr").addEventListener("input", (e) => {
 
 function run() {
   const links = () => (S.glens === "keywords" ? runKg() : S.scope === "all" ? runAll() : runLinks());
-  return ({ links, suggest: runSuggest, keywords: runKeywords })[S.mode]?.() ?? runConcepts();
+  return ({ links, suggest: runSuggest, keywords: runKeywords, chat: render })[S.mode]?.() ?? runConcepts();
 }
 
 // ---------- 키워드: 노드 하나 = 키워드, 그 안에 개념 여러 개 ----------
@@ -333,20 +345,28 @@ async function runSuggest() {
 async function runScreen() {
   const D = S.sg.data;
   if (!D || D === "loading" || D.error || S.sg.screening) return;
-  S.sg.screening = true; render();
+  S.sg.screening = true; S.sg.screen = {}; S.sg.screenError = null; render();
   const pairs = D.candidates.map((c) => ({ id: c.id, a: { keyword: c.a.keyword, text: c.a.text }, b: { keyword: c.b.keyword, text: c.b.text } }));
+  const at = (id) => (S.sg.screen[id] ||= { label: null, conclusion: "", live: true });
   try {
-    const res = await fetch("/dev/proposals/screen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pairs }) });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) { S.sg.screen = data.results; S.sg.screenModel = data.model; } else S.sg.screenError = data.detail || `HTTP ${res.status}`;
-  } catch (e) { S.sg.screenError = String(e); }
+    const res = await fetch("/dev/proposals/screen/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pairs }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+    await readSse(res, (name, d) => {
+      if (name === "pair") {                                  // 라벨과 메모가 쓰이는 대로: 그 카드의 칸만 고친다
+        const x = at(d.id);
+        if (d.field === "label" && "value" in d) x.label = d.value;
+        else if (d.field === "conclusion") x.conclusion = "value" in d ? d.value : x.conclusion + d.delta;
+        paintScreen(d.id);
+      } else if (name === "pair_done") { Object.assign(at(d.id), { label: d.label, conclusion: d.conclusion, cached: d.cached, live: false }); paintScreen(d.id); }
+      else if (name === "result") { S.sg.screen = d.results; S.sg.screenModel = d.model; }
+      else if (name === "error") S.sg.screenError = d.message;
+    });
+  } catch (e) { S.sg.screenError = String(e.message || e); }
   S.sg.screening = false; render();
 }
 const GEN_FIELDS = ["keyword", "note", "noteId", "conceptId", "text", "start", "end", "quote"];
 // 새 지식 만들기는 SSE 로 진행 상황을 받는다 (POST 라서 EventSource 대신 fetch 스트림을 읽는다)
-async function streamGenerate(body, onEvent, signal) {
-  const res = await fetch("/dev/proposals/generate/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+async function readSse(res, onEvent) {                      // text/event-stream 을 읽어 (이벤트 이름, data) 를 하나씩 넘긴다
   const reader = res.body.getReader(), dec = new TextDecoder();
   let buf = "";
   for (;;) {
@@ -355,11 +375,17 @@ async function streamGenerate(body, onEvent, signal) {
     buf += dec.decode(value, { stream: true });
     let i;
     while ((i = buf.indexOf("\n\n")) >= 0) {
-      const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data: "));
+      const lines = buf.slice(0, i).split("\n");
       buf = buf.slice(i + 2);
-      if (line) onEvent(JSON.parse(line.slice(6)));
+      const name = lines.find((l) => l.startsWith("event: ")), data = lines.find((l) => l.startsWith("data: "));
+      if (data) onEvent(name ? name.slice(7) : "message", JSON.parse(data.slice(6)));
     }
   }
+}
+async function streamGenerate(body, onEvent, signal) {
+  const res = await fetch("/dev/proposals/generate/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+  await readSse(res, (_, d) => onEvent(d));
 }
 async function startGen(id, c, set) {
   const ctl = new AbortController();
@@ -370,7 +396,11 @@ async function startGen(id, c, set) {
     await streamGenerate({ a: pick(c.a), b: pick(c.b) }, (ev) => {
       if (ev.type === "result") set(ev.result);
       else if (ev.type === "error") set({ error: ev.message });
-      else { S.sg.prog[id].events.push(ev); paintProg(id); }
+      else if (ev.type === "field") {                          // 모델이 쓰는 JSON 의 newKeyword·conclusion·reason 이 글자가 오는 대로
+        const f = (S.sg.prog[id].fields ||= {});
+        f[ev.path] = "value" in ev ? ev.value : (f[ev.path] || "") + ev.delta;
+        paintProg(id);
+      } else { S.sg.prog[id].events.push(ev); paintProg(id); }
     }, ctl.signal);
   } catch (e) { set({ error: e.name === "AbortError" ? "중단했어요. 모델 호출도 멈췄어요." : String(e.message || e) }); }
   delete S.sg.abort[id];
@@ -390,6 +420,109 @@ async function generateTop(n) {
 const SG_LABEL = { useful: "합쳐 볼 만해요", vague: "모호", redundant: "겹침", unrelated: "관계 없음", unusable: "문장이 불완전", unsure: "판정 못 함" };
 const SG_CH = { terms: "공유 낱말", pivot: "공통 키워드", embed: "의미 비슷" };
 const pairKey = (c) => `${c.a.conceptId}|${c.b.conceptId}`;
+
+// ---------- 챗봇: 이해가 안 됨 → 카드를 컨텍스트로 여러 턴 대화, 답이 토큰마다 흘러온다 (실제 /internal/v1/chat) ----------
+S.chats = {};
+async function sha256Hex(bytes) {
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+const newChat = () => ({ messages: [], busy: false, ctl: null, error: null, usage: null });
+const chatState = (c) => (S.chats[pairKey(c)] ||= newChat());
+function cardKnowledge(c, g) {
+  return { newKeyword: g.newKeyword || "", conclusion: g.conclusion,
+           evidence: [["A", c.a], ["B", c.b]].map(([label, e]) => ({ label, keyword: e.keyword, note: e.note, text: e.text })),
+           external: g.external.map((e) => ({ url: e.url, title: e.title || null, quote: e.quote || null })) };
+}
+const SAMPLE_CARD = { newKeyword: "이중 버퍼링",
+  conclusion: "DB도 자기 메모리(buffer pool)에 페이지를 올려 두고, OS도 읽은 데이터를 RAM(페이지 캐시)에 담아 둬요. 그래서 같은 페이지가 메모리에 두 번 올라갈 수 있고, InnoDB에서는 O_DIRECT로 OS 캐시를 건너뛰게 해서 이를 줄여요.",
+  evidence: [{ label: "A", keyword: "디스크", note: "DB-WAL", text: "DB는 Data page를 곧장 디스크에 쓰지 않고, buffer pool (메모리)에 해당 페이지를 올려놓고 거기서 수정한다." },
+             { label: "B", keyword: "페이지 캐싱", note: "OS-페이지-캐시", text: "디스크에서 읽은 데이터를 RAM에 저장해 재사용하는 것을 페이지 캐싱이라고 한다." }],
+  external: [{ url: "https://releem.com/docs/mysql-performance-tuning/innodb_flush_method", title: "innodb_flush_method", quote: "O_DIRECT는 데이터 파일 I/O에서 OS 페이지 캐시를 거치지 않는다." }] };
+S.ct = Object.assign(newChat(), { src: "sample", json: JSON.stringify(SAMPLE_CARD, null, 2) });
+
+// 한 턴: 지금까지의 대화 + 카드를 보내고 SSE 로 오는 글을 말풍선에 이어 붙인다. paint() 는 글이 올 때마다 말풍선만 고친다
+async function chatRun(st, knowledge, text, paint) {
+  text = text.trim();
+  if (!text || st.busy) return;
+  const t0 = performance.now();
+  st.messages.push({ role: "user", content: text }, { role: "assistant", content: "", stats: { t0, first: null, chunks: 0, ms: null } });
+  st.busy = true; st.error = null; st.usage = null; st.ctl = new AbortController(); render(); paint();
+  const live = st.messages[st.messages.length - 1];
+  const raw = new TextEncoder().encode(JSON.stringify({ conversationId: crypto.randomUUID(), knowledge, messages: st.messages.slice(0, -1).map(({ role, content }) => ({ role, content })) }));
+  try {
+    const res = await fetch(S.cfg.apiPrefix + "/chat", { method: "POST", signal: st.ctl.signal, body: raw, headers: {
+      "Authorization": "Bearer " + (S.cfg.token || ""), "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID(), "X-Input-SHA256": await sha256Hex(raw) } });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error?.message || `HTTP ${res.status}`);
+    await readSse(res, (name, d) => {
+      if (name === "delta") {
+        if (live.stats.first === null) live.stats.first = performance.now() - t0;
+        live.stats.chunks++; live.content += d.text; paint();
+      } else if (name === "done") st.usage = d.usage;
+      else if (name === "error") st.error = d.message;
+    });
+  } catch (e) { st.error = e.name === "AbortError" ? "중단했어요." : String(e.message || e); }
+  live.stats.ms = performance.now() - t0;
+  if (!live.content) st.messages.splice(-2, 2, ...(st.error ? [st.messages[st.messages.length - 2]] : []));      // 글이 하나도 안 왔으면 빈 말풍선은 지운다
+  st.busy = false; st.ctl = null; render(); paint();
+}
+const chatId = (c) => "chat-" + pairKey(c).replace(/[^0-9a-z]/gi, "");
+const statLine = (m, live) => {
+  const x = m.stats; if (!x) return "";
+  const sec = (ms) => (ms / 1000).toFixed(1);
+  return live ? `${x.first == null ? "기다리는 중…" : `첫 글자 ${sec(x.first)}초`} · ${x.chunks}조각 · ${sec(performance.now() - x.t0)}초…`
+              : `첫 글자 ${x.first == null ? "–" : sec(x.first) + "초"} · ${x.chunks}조각 · 끝까지 ${sec(x.ms)}초`;
+};
+function paintChat(id, st) {                                  // 글이 올 때마다 마지막 말풍선과 통계 줄만 고친다 (전체를 다시 그리지 않는다)
+  const m = st.messages[st.messages.length - 1], el = document.getElementById(id + "-live"), stat = document.getElementById(id + "-stat");
+  if (el && m) el.textContent = m.content + (st.busy ? " ▍" : "");
+  if (stat && m) stat.textContent = statLine(m, st.busy);
+  chatScroll(id);
+}
+function chatScroll(id) { const box = document.getElementById(id); if (box) box.scrollTop = box.scrollHeight; }
+// a = { send, stop, input } 버튼·입력칸에 붙일 속성 (카드 안 챗봇과 챗봇 탭이 같이 쓴다)
+function chatView(id, st, a, hint) {
+  const last = st.messages.length - 1;
+  const bubbles = st.messages.map((m, i) => {
+    const live = st.busy && i === last;
+    return `<div class="msg ${m.role}"><div class="bub"${live ? ` id="${id}-live"` : ""}>${esc(m.content)}${live ? " ▍" : ""}</div></div>`
+      + (m.role === "assistant" && m.stats ? `<div class="msg"><span class="path"${live ? ` id="${id}-stat"` : ""}>${esc(statLine(m, live))}</span></div>` : "");
+  }).join("");
+  return `<div class="chat"><p class="path"><b>챗봇</b> · ${hint}</p>
+    <div class="msgs" id="${id}">${bubbles || `<p class="note">궁금한 점을 물어보세요.</p>`}</div>
+    ${st.error ? `<p class="error">${esc(st.error)}</p>` : ""}
+    <div class="chatRow"><input id="${id}-in" ${a.input} placeholder="이해가 안 돼요 / 더 쉽게 / 예를 들어 줘" autocomplete="off" ${st.busy ? "disabled" : ""}>
+      ${st.busy ? `<button class="act" ${a.stop}>중단</button>` : `<button class="act" ${a.send}>보내기</button>`}</div>
+    ${st.usage ? `<p class="path">입력 ${st.usage.inputTokens}토큰 (캐시 ${st.usage.cacheReadTokens}) · 출력 ${st.usage.outputTokens}토큰</p>` : ""}</div>`;
+}
+const chatSend = (c, g, text) => chatRun(chatState(c), cardKnowledge(c, g), text, () => paintChat(chatId(c), chatState(c)));
+const chatBox = (c, g) => chatView(chatId(c), chatState(c), { send: `data-sg="chatsend:${c.id}"`, stop: `data-sg="chatstop:${c.id}"`, input: `data-chat-in="${esc(c.id)}"` },
+                                   "카드를 보고 쉽게 풀어 줘요 (대화는 서버에 저장하지 않고 매번 함께 보내요)");
+
+// ---- 챗봇 탭: 카드를 골라 바로 대화한다 (새 지식을 만들지 않아도 된다) ----
+const ctCards = () => Object.entries(S.sg.gen).filter(([, g]) => g && g !== "loading" && !g.error && g.conclusion)
+  .map(([id, g]) => ({ id, c: cardFor(id), g })).filter((x) => x.c);
+function chatTabView() {
+  const T = S.ct, cards = ctCards(), id = "chat-tab";
+  let bad = "";
+  try { JSON.parse(T.json); } catch (e) { bad = `카드 JSON 이 올바르지 않아요: ${e.message}`; }
+  return `<h1>챗봇</h1>
+    <p class="count">새 지식 카드를 컨텍스트로 두고 여러 턴 대화해요. 대화는 서버에 저장하지 않고 매 턴 카드와 지금까지의 대화를 함께 보내요 (<code>POST ${esc(S.cfg.apiPrefix)}/chat</code>, SSE).
+      답이 오는 대로 글이 늘고, 말풍선 아래에 첫 글자까지 걸린 시간과 조각 수가 보여요.</p>
+    <div class="kwTools"><label>카드 <select data-ct-src ${T.busy ? "disabled" : ""}>
+        <option value="sample" ${T.src === "sample" ? "selected" : ""}>샘플 (이중 버퍼링)</option>
+        ${cards.map((x) => `<option value="${esc(x.id)}" ${T.src === x.id ? "selected" : ""}>지식 제안에서 만든 카드: ${esc(x.c.a.keyword)} × ${esc(x.c.b.keyword)}</option>`).join("")}
+        <option value="custom" ${T.src === "custom" ? "selected" : ""}>직접 고친 JSON</option></select></label>
+      <button class="linkBtn" data-ct="reset" ${T.busy ? "disabled" : ""}>새 대화</button></div>
+    <details><summary>카드(knowledge) JSON — 고쳐서 시험할 수 있어요</summary><textarea class="cardJson" data-ct-json rows="9" ${T.busy ? "disabled" : ""}>${esc(T.json)}</textarea>${bad ? `<p class="error">${esc(bad)}</p>` : ""}</details>
+    ${chatView(id, T, { send: `data-ct="send"`, stop: `data-ct="stop"`, input: `data-ct-in="1"` }, "카드를 보고 쉽게 풀어 줘요")}`;
+}
+async function ctSend(text) {
+  let k;
+  try { k = JSON.parse(S.ct.json); } catch (e) { S.ct.error = "카드 JSON 이 올바르지 않아요."; return render(); }
+  await chatRun(S.ct, k, text, () => paintChat("chat-tab", S.ct));
+}
+const cardFor = (id) => (id === "cn" ? S.cn.pairCand : S.sg.data?.candidates.find((x) => x.id === id));
+const genFor = (id) => (id === "cn" ? S.cn.gen : S.sg.gen[id]);
 // 선별 결과가 있으면 useful → vague 순으로 앞에 두고, 나머지는 따로 접어 둔다. 알고 있던 내용으로 버린 쌍은 숨긴다
 function sgOrdered() {
   const cs = S.sg.data.candidates, scr = S.sg.screen, screened = Object.keys(scr).length > 0;
@@ -419,10 +552,13 @@ function progLines(evs) {
   return out;
 }
 function progInner(id) {
-  const lines = progLines(S.sg.prog[id]?.events || []);
-  if (!lines.length) return `<p class="count"><span class="spin"></span>연결하는 중이에요…</p>`;
-  return `<ul class="prog">${lines.map((l, i) => `<li class="${i === lines.length - 1 ? "now" : "done"}">${i === lines.length - 1 ? `<span class="spin"></span>` : `<span class="ck">✓</span>`}
-    <div>${l.html}</div><span class="t">${l.t != null ? l.t + "초" : ""}</span></li>`).join("")}</ul>`;
+  const P = S.sg.prog[id], lines = progLines(P?.events || []), f = P?.fields || {};
+  if (!lines.length && !Object.keys(f).length) return `<p class="count"><span class="spin"></span>연결하는 중이에요…</p>`;
+  // 쓰이는 중인 결론: 글자가 오는 대로 늘어난다. 결론이 아닌 판정(no_new_knowledge·conflict)이면 이유가 늘어난다
+  const live = f.conclusion ? `<div class="know"><span class="tag">새 키워드</span> <b>${esc(f.newKeyword || "")}</b><p>${esc(f.conclusion)} ▍</p></div>`
+    : f.status && f.status !== "ok" && f.reason ? `<p class="path">${esc(f.reason)} ▍</p>` : "";
+  return `<ul class="prog">${lines.map((l, i) => `<li class="${i === lines.length - 1 && !live ? "now" : "done"}">${i === lines.length - 1 && !live ? `<span class="spin"></span>` : `<span class="ck">✓</span>`}
+    <div>${l.html}</div><span class="t">${l.t != null ? l.t + "초" : ""}</span></li>`).join("")}</ul>${live}`;
 }
 function paintProg(id) { const el = document.getElementById("prog-" + id); if (el) el.innerHTML = progInner(id); }
 const progBox = (id) => `<div class="progBox"><div id="prog-${id}">${progInner(id)}</div><p class="actions"><button class="linkBtn" data-sg="cancel:${id}">중단</button></p></div>`;
@@ -439,22 +575,38 @@ function genBlock(c, g) {
       <button class="act" data-sg="react:${c.id}:known">알고 있던 내용</button>
       <button class="act" data-sg="react:${c.id}:confused" aria-pressed="${react === "confused"}">이해가 안 됨</button></p>` : "";
   const ok = react === "ok" && g.concept ? `<details open><summary>이해함 → 기능용 그래프에 들어갈 개념 (generated)</summary><pre class="json">${esc(JSON.stringify(g.concept, null, 2))}</pre></details>` : "";
-  const confused = react === "confused" ? `<details open><summary>챗봇에 넘길 컨텍스트</summary><pre class="json">${esc(
-    `근거 A [${c.a.keyword}] (${c.a.note})\n${c.a.text}\n\n근거 B [${c.b.keyword}] (${c.b.note})\n${c.b.text}\n\n외부 지식\n${g.external.map((e) => `- ${e.title} ${e.url}\n  ${e.quote}`).join("\n")}\n\n결론\n${g.conclusion}`)}</pre></details>` : "";
+  const confused = react === "confused" ? chatBox(c, g) : "";
   return `<div class="gen"><div class="cardHead"><span class="status ${ST[0]}">${ST[1]}</span><span class="path">${esc(g.model)} · 검색 ${g.searches}번${g.cached ? " · 저장된 결과" : ""}</span></div>
     ${why}${ext ? `<h4>외부 지식</h4><ul class="steps">${ext}</ul>` : ""}${conclusion}${buttons}${ok}${confused}</div>`;
 }
 
+// 선별 결과 칸: 쓰이는 대로 이 두 칸만 고친다 (paintScreen)
+function scrChip(c) {
+  const scr = S.sg.screen[c.id];
+  if (scr?.label) return `<span class="status ${scr.label === "useful" ? "candidate" : scr.label === "vague" ? "hypothesis" : "excluded"}">${SG_LABEL[scr.label] || esc(scr.label)}</span>`;
+  return S.sg.screening ? `<span class="path"><span class="spin"></span>선별 중…</span>` : "";
+}
+function scrMemo(c) {
+  const scr = S.sg.screen[c.id];
+  return scr?.conclusion ? `선별 모델 메모: ${esc(scr.conclusion)}${scr.live ? " ▍" : ""}` : "";
+}
+function paintScreen(id) {
+  const c = S.sg.data?.candidates.find((x) => x.id === id);
+  if (!c) return;
+  const chip = document.getElementById("scr-" + id), memo = document.getElementById("scrm-" + id);
+  if (chip) chip.innerHTML = scrChip(c);
+  if (memo) memo.innerHTML = scrMemo(c);
+}
 function sgCard(c) {
-  const scr = S.sg.screen[c.id], g = S.sg.gen[c.id];
+  const g = S.sg.gen[c.id];
   const chips = [...c.channels.map((ch) => `<span class="tag" title="${esc(ch === "terms" ? "공유 낱말: " + c.shared.join(", ") : ch === "pivot" ? "둘 다 언급하는 키워드: " + c.via.join(", ") : "임베딩 코사인 " + c.cos)}">${SG_CH[ch]}${ch === "embed" && c.cos != null ? " " + c.cos : ""}</span>`),
-    scr ? `<span class="status ${scr.label === "useful" ? "candidate" : scr.label === "vague" ? "hypothesis" : "excluded"}">${SG_LABEL[scr.label]}</span>` : ""].join(" ");
+    `<span id="scr-${c.id}">${scrChip(c)}</span>`].join(" ");
   const side = (e, w) => `<div class="sgSide"><p class="path"><b>근거 ${w}</b> · ${esc(e.keyword)} · <button class="linkBtn" data-open="${esc(e.note)}" title="${esc(e.note)}">${esc(shortTitle(e.note, 28))}</button></p>
       <div class="quote">${esc(e.text)}</div></div>`;
   const foot = g ? genBlock(c, g) : `<p class="actions"><button class="act" data-sg="gen:${c.id}">새 지식 만들기 (웹 검색)</button></p>`;
   return `<div class="card sg"><div class="cardHead"><b>${esc(c.a.keyword)} × ${esc(c.b.keyword)}</b><span class="path">${chips}</span></div>
     ${side(c.a, "A")}${side(c.b, "B")}
-    ${scr?.conclusion ? `<p class="path">선별 모델 메모: ${esc(scr.conclusion)}</p>` : ""}${foot}</div>`;
+    <p class="path" id="scrm-${c.id}">${scrMemo(c)}</p>${foot}</div>`;
 }
 
 function suggestView(source) {
@@ -476,6 +628,28 @@ function suggestView(source) {
     ${o.hidden.length ? `<p class="note">알고 있던 내용으로 숨긴 쌍 ${o.hidden.length}개 · <button class="linkBtn" data-sg="unhide">다시 보기</button></p>` : ""}`;
 }
 
+$("#body").addEventListener("keydown", (e) => {              // 챗봇 입력칸에서 Enter 로 보낸다 (한글 조합 중에는 보내지 않는다)
+  if (e.key !== "Enter" || e.isComposing) return;
+  const id = e.target.dataset?.chatIn;
+  if (id) { e.preventDefault(); const c = cardFor(id); chatSend(c, genFor(id), e.target.value); }
+  else if (e.target.dataset?.ctIn) { e.preventDefault(); ctSend(e.target.value); }
+});
+$("#body").addEventListener("click", (e) => {                // 챗봇 탭의 버튼
+  const t = e.target.closest("[data-ct]");
+  if (!t) return;
+  if (t.dataset.ct === "send") ctSend(document.getElementById("chat-tab-in")?.value || "");
+  else if (t.dataset.ct === "stop") S.ct.ctl?.abort();
+  else if (t.dataset.ct === "reset") { Object.assign(S.ct, newChat()); render(); }
+});
+$("#body").addEventListener("input", (e) => { if (e.target.matches("[data-ct-json]")) { S.ct.json = e.target.value; S.ct.src = "custom"; } });
+$("#body").addEventListener("change", (e) => {              // 카드를 바꾸면 대화를 새로 시작한다
+  if (!e.target.matches("[data-ct-src]")) return;
+  const v = e.target.value;
+  Object.assign(S.ct, newChat(), { src: v });
+  if (v === "sample") S.ct.json = JSON.stringify(SAMPLE_CARD, null, 2);
+  else if (v !== "custom") { const x = ctCards().find((y) => y.id === v); if (x) S.ct.json = JSON.stringify(cardKnowledge(x.c, x.g), null, 2); }
+  render();
+});
 $("#body").addEventListener("change", (e) => {
   if (!e.target.matches("[data-auto]")) return;
   S.sg.auto = e.target.checked;
@@ -493,10 +667,13 @@ $("#body").addEventListener("click", (e) => {
   else if (k === "gen") (id === "cn" ? runConnectGenerate() : runGenerate(id));
   else if (k === "unhide") { for (const x of S.sg.data.candidates) if (S.sg.react[pairKey(x)] === "known") delete S.sg.react[pairKey(x)]; saveReact(); render(); }
   else if (k === "react") {
-    const c = id === "cn" ? S.cn.pairCand : S.sg.data.candidates.find((x) => x.id === id), key = pairKey(c);
+    const c = cardFor(id), key = pairKey(c);
     if (S.sg.react[key] === kind && kind !== "known") delete S.sg.react[key]; else S.sg.react[key] = kind;
     saveReact(); render();
+    if (kind === "confused" && S.sg.react[key] === "confused" && !chatState(c).messages.length) chatSend(c, genFor(id), "이해가 안 돼요");     // 첫 말은 자동으로
   }
+  else if (k === "chatsend") { const c = cardFor(id), inp = document.getElementById(chatId(c) + "-in"); chatSend(c, genFor(id), inp?.value || ""); }
+  else if (k === "chatstop") chatState(cardFor(id)).ctl?.abort();
 });
 
 async function runConcepts() {
@@ -590,14 +767,14 @@ function kgSvg(K) {
   const top = new Set([...K.nodes].sort((x, y) => y.degree - x.degree).slice(0, own ? 99 : 14).map((v) => v.id));
   const lines = K.edges.map((e) => {
     const k = edgeKey(e), touch = sel && (e.a === sel || e.b === sel);
-    const cls = k === S.kgEdge ? " on" : touch ? " hl" : sel ? " dim" : "";
+    const cls = (k === S.kgEdge ? " on" : touch ? " hl" : sel ? " dim" : "") + (e.counts.inferred ? " inf" : "");
     const ab = `data-la="${esc(e.a)}" data-lb="${esc(e.b)}"`;
     return `<line class="aEdge${cls}" ${ab} stroke-width="${(0.8 + 4.5 * e.score / max).toFixed(1)}"/>
       <line class="gHit" data-aedge="${esc(k)}" ${ab}><title>${esc(title[e.a])} ↔ ${esc(title[e.b])} · 같은 문장 ${e.sentences}번</title></line>`;
   }).join("");
   const nodes = K.nodes.map((v) => {
     const r = (own ? 8 : 4) + 1.6 * Math.sqrt(v.degree);
-    const cls = v.id === sel ? " sel" : v.inNote ? " cur" : sel && !nb.has(v.id) ? " dim" : "";
+    const cls = (v.id === sel ? " sel" : v.inNote ? " cur" : sel && !nb.has(v.id) ? " dim" : "") + (v.inferred ? " inf" : "");
     const show = v.id === sel || nb.has(v.id) || v.inNote || top.has(v.id);
     return `<g class="aNode${cls}" data-anode="${esc(v.id)}" data-pid="${esc(v.id)}"><title>${esc(v.title)} · 페이지 ${v.pages} · 연결 ${v.degree}</title>
       <circle r="${r.toFixed(1)}"/>${show ? `<text y="${(-r - 4).toFixed(1)}" text-anchor="middle">${esc(shortTitle(v.title, 16))}</text>` : ""}</g>`;
@@ -606,8 +783,8 @@ function kgSvg(K) {
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="키워드 연결 그래프"><g id="vp" transform="translate(${x} ${y}) scale(${k})">${lines}${nodes}</g></svg>`;
 }
 
-const LEVEL_KO = { sentence: "같은 문장", heading: "제목과 본문", paragraph: "같은 문단", path: "경로" };
-const LEVEL_HINT = { sentence: "두 키워드가 한 문장에 같이 나옴", heading: "한쪽이 제목, 다른 쪽이 그 절 본문에 나옴", paragraph: "같은 문단에 나옴 (느슨함)" };
+const LEVEL_KO = { sentence: "같은 문장", heading: "제목과 본문", paragraph: "같은 문단", inferred: "추정 연결", path: "경로" };
+const LEVEL_HINT = { sentence: "두 키워드가 한 문장에 같이 나옴", heading: "한쪽이 제목, 다른 쪽이 그 절 본문에 나옴", paragraph: "같은 문단에 나옴 (느슨함)", inferred: "같이 나온 적 없지만 구조(공통 이웃·걸음 수)와 의미 유사도로 이어질 만하다고 추정. 증거가 아니다. 처음 켤 때 임베딩 때문에 1분쯤 걸린다" };
 const VERDICT_KO = { related: "관계 있음", weak: "약한 관계", unrelated: "관계 없음", unsure: "판정 못 함" };
 const TYPE_KO = { is_a: "종류", part_of: "구성", causes: "원인", requires: "필요", used_for: "용도", contrasts_with: "대비",
                   example_of: "예시", analogous_to: "유사", related: "관련", none: "—" };
@@ -619,12 +796,18 @@ function kgConcepts(n) {
     <div class="quote">${esc(clean(c.explanation))}</div></div>`).join("");
 }
 const evCard = (v) => `<div class="card" style="padding:8px 12px"><span class="tag" title="${esc(LEVEL_HINT[v.level] || "")}">${LEVEL_KO[v.level] || v.level}</span>
-  <button class="linkBtn" data-open="${esc(v.note)}">${esc(shortTitle(v.note, 34))}</button><div class="quote">${esc(clean(v.text))}</div></div>`;
+  ${v.note ? `<button class="linkBtn" data-open="${esc(v.note)}">${esc(shortTitle(v.note, 34))}</button>` : ""}<div class="quote">${esc(clean(v.text))}</div></div>`;
 
 // 관계 확인 (LLM) 결과 상자. rel = { loading | error | data, items }
+function relLive(rel) {                                       // 판정이 쓰이는 중: verdict·type 은 나오는 대로, 이유는 글자가 오는 대로
+  const f = rel.live || {};
+  if (!Object.keys(f).length) return `<p class="count"><span class="spin"></span>관계를 확인하는 중… (모델에 노트 내용이 전달된다)</p>`;
+  return `<div class="card rel"><div class="cardHead">${f.verdict ? `<span class="status vd-${esc(f.verdict)}">${VERDICT_KO[f.verdict] || esc(f.verdict)}</span>` : `<span class="spin"></span>`}
+    ${f.type && f.type !== "none" ? `<b>${esc(TYPE_KO[f.type] || f.type)}</b>` : ""}</div>${f.reason ? `<p class="know">${esc(f.reason)} ▍</p>` : ""}</div>`;
+}
 function relBox(rel, aName, bName) {
   if (!rel) return "";
-  if (rel.loading) return `<p class="count"><span class="spin"></span>관계를 확인하는 중… (모델에 노트 내용이 전달된다)</p>`;
+  if (rel.loading) return `<div id="rel-live">${relLive(rel)}</div>`;
   if (rel.error) return `<p class="error">${esc(rel.error)}</p>`;
   const d = rel.data;
   const dir = d.type === "none" ? "" : d.direction === "a_to_b" ? `${esc(aName)} → ${esc(bName)}` : d.direction === "b_to_a" ? `${esc(bName)} → ${esc(aName)}` : "방향 없음 (대칭)";
@@ -647,8 +830,11 @@ function kgPanel(K) {
     return `<h3>${esc(A.title)} ↔ ${esc(B.title)}</h3>
       <p class="note">${esc(counts)} · 페이지 ${e.pages}개 · 연결 점수 ${e.score}
         · <button class="linkBtn" data-ksel="${esc(A.id)}">${esc(shortTitle(A.title, 12))}</button> · <button class="linkBtn" data-ksel="${esc(B.id)}">${esc(shortTitle(B.title, 12))}</button></p>
-      <p class="actions">${relButton("edge")} <button class="act" data-conn="${esc(A.id)}|${esc(B.id)}">경로까지 보기</button></p>
-      ${relBox(rel, A.title, B.title)}
+      ${e.counts.inferred
+        ? `<p class="note">증거가 아니라 추정이에요 (추정 점수 ${e.inferredScore}${e.cos != null ? ` · 의미 유사도 ${e.cos}` : " · 임베딩 없이 구조만"}). 관계가 실제로 있는지는 경로의 문장으로 확인해요.</p>
+           <p class="actions"><button class="act" data-conn="${esc(A.id)}|${esc(B.id)}">경로까지 보고 관계 확인</button></p>`
+        : `<p class="actions">${relButton("edge")} <button class="act" data-conn="${esc(A.id)}|${esc(B.id)}">경로까지 보기</button></p>
+      ${relBox(rel, A.title, B.title)}`}
       <h4>증거${e.evidence.length < Object.values(e.counts).reduce((x, y) => x + y, 0) ? ` (${e.evidence.length}개만)` : ""}</h4>
       ${e.evidence.map(evCard).join("")}
       <details><summary>${esc(A.title)} 의 개념</summary>${kgConcepts(A)}</details>
@@ -706,7 +892,9 @@ function connectPanel() {
   const paths = D.paths.length ? D.paths.map(pathView).join("")
     : `<p class="note">다른 키워드를 거쳐 3칸 안에 이어지는 길이 없다. 증거 수준을 넓혀 본다.</p>`;
   const rel = C.rel;
-  return out + `<h4>직접 연결</h4>${direct}
+  const inf = D.inferred ? `<div class="card" style="padding:8px 12px"><span class="tag">추정 연결</span> 추정 점수 <b>${D.inferred.score}</b>${D.inferred.cos != null ? ` · 의미 유사도 ${D.inferred.cos}` : " · 임베딩 없이 구조만"}
+      · 공통 이웃 ${D.inferred.via.length ? D.inferred.via.map((v) => esc(v.name)).join(", ") : "없음"}<p class="note">증거가 아니라 구조와 의미로 한 추정이에요 (3 이상이면 선으로 이을 만한 점수). 아래 길의 문장으로 실제 관계를 확인해요.</p></div>` : "";
+  return out + `<h4>직접 연결</h4>${direct}${inf}
     <h4>다른 키워드를 거치는 길 ${D.paths.length}${D.hubsSkipped ? ` <small>· 연결 ${D.hubThreshold}개 넘는 허브 ${D.hubsSkipped}개는 건너뜀</small>` : ""}</h4>${paths}
     <h4>새 지식</h4>${connectKnowledge(C)}
     <h4>관계 확인</h4><p class="actions">${relButton("connect")}</p>${relBox(rel, D.a.name, D.b.name)}
@@ -726,13 +914,13 @@ function kgView(source) {
     `<label title="${esc(LEVEL_HINT[l])}"><input type="checkbox" data-level="${l}" ${S.glevels[l] ? "checked" : ""}>${LEVEL_KO[l]}</label>`).join("")}<span class="note">증거 수준</span></div>`;
   if (!K || K === "loading" || K.error) {
     return `<div class="col">${toggle}${lv}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
-      ${K === "loading" ? `<p class="count"><span class="spin"></span>실행 중…</p>` : K?.error ? `<p class="error">${esc(K.error)}</p>` : ""}</div>`;
+      ${K === "loading" ? `<p class="count"><span class="spin"></span>실행 중…${S.glevels.inferred ? " (추정 연결은 처음 한 번 임베딩 때문에 1분쯤 걸려요)" : ""}</p>` : K?.error ? `<p class="error">${esc(K.error)}</p>` : ""}</div>`;
   }
   const info = K.scope === "note"
     ? `이 노트의 키워드 ${K.mine}개 중 ${K.mineLinked}개가 다른 키워드와 이어진다 · 강조한 점 = 이 노트의 키워드, 회색 = 다른 페이지에서 이어진 키워드`
     : `전체 키워드 ${K.keywords}개 중 ${K.linkedKeywords}개가 이어져 있다 · 둘 이상의 페이지에 걸치고 연결이 센 ${K.nodes.length}개만 그린다`;
   return `<div class="col">${toggle}${lv}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
-      <p class="count">${info} · 선 ${K.edges.length}개 · 신뢰도 ${S.thr.toFixed(2)} 이상 · ${K.ms}ms</p>
+      <p class="count">${info} · 선 ${K.edges.length}개${K.semantic != null ? ` (추정 ${K.inferredEdges}개, 점선${K.semantic ? "" : " · 임베딩 없이 구조만"})` : ""} · 신뢰도 ${S.thr.toFixed(2)} 이상 · ${K.ms}ms</p>
       ${K.nodes.length ? `<div class="graphWrap allWrap">${kgSvg(K)}</div>` : `<p class="empty">이어진 키워드가 없다. 증거 수준을 넓히거나 기준을 낮춰 본다.</p>`}</div>
     <div class="col side">${kgSide(K)}</div>`;
 }
@@ -784,12 +972,19 @@ async function runRelation(kind) {
     set = (v) => { S.cn.rel = v; };
   }
   if (!evidence.length) { set({ error: "확인할 증거가 없다." }); return render(); }
-  set({ loading: true }); render();
+  const live = {};
+  set({ loading: true, live }); render();
   try {
-    const res = await fetch("/dev/keyword-relation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a, b, evidence }) });
-    const data = await res.json().catch(() => ({}));
-    set(res.ok ? { data, items: evidence } : { error: data.detail || `HTTP ${res.status}` });
-  } catch (e) { set({ error: String(e) }); }
+    const res = await fetch("/dev/keyword-relation/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a, b, evidence }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+    await readSse(res, (name, d) => {
+      if (name === "field") {
+        live[d.path] = "value" in d ? d.value : (live[d.path] || "") + d.delta;
+        const el = document.getElementById("rel-live"); if (el) el.innerHTML = relLive({ live });     // 그 칸만 고친다
+      } else if (name === "result") set({ data: d.result, items: evidence });
+      else if (name === "error") set({ error: d.message });
+    });
+  } catch (e) { set({ error: String(e.message || e) }); }
   render();
 }
 
@@ -820,7 +1015,7 @@ $("#body").addEventListener("change", (e) => {
   const l = e.target.dataset?.level;
   if (!l) return;
   S.glevels[l] = e.target.checked;
-  if (!levelsOn().length) { S.glevels[l] = true; e.target.checked = true; return; }      // 하나는 켜 둔다
+  if (!levelsOn().some((x) => x !== "inferred")) { S.glevels[l] = true; e.target.checked = true; return; }      // 증거 수준은 하나 켜 둔다
   S.cn.data = null; run();
   if (S.kgTab === "connect" && S.cn.a && S.cn.b) runConnect();
 });
@@ -1086,6 +1281,10 @@ function render() {
     body.innerHTML = `<div class="col">${suggestView(source)}</div>`;
     body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
     body.querySelector("[data-sg-toggle]")?.addEventListener("toggle", (ev) => { S.sg.showRest = ev.target.open; });
+  } else if (S.mode === "chat") {
+    body.className = "body single";
+    body.innerHTML = `<div class="col">${chatTabView()}</div>`;
+    chatScroll("chat-tab");
   } else if (S.mode === "keywords") {
     body.className = "body single";
     body.innerHTML = keywordsView(source);
