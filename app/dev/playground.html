@@ -97,7 +97,9 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .gNode { cursor: pointer; }
 .gNode text { fill: var(--ink); font-size: 13px; }
 .gLabel { fill: var(--muted); font-size: 11px; pointer-events: none; }
+.scopes { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 10px; }
 .scope { display: inline-flex; gap: 4px; margin: 0 0 10px; }
+.scopes .scope { margin: 0; }
 .scope button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 12px; font-size: 13px; color: var(--muted); }
 .scope button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .allWrap svg { cursor: grab; touch-action: none; }
@@ -119,9 +121,48 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .side h3 { font-size: 15px; margin: 0 0 4px; overflow-wrap: anywhere; }
 .side h4 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); }
 .side .note { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
-.side .chain { font-size: 13px; margin: 6px 0; }
-.side .rule { font-size: 11px; padding: 0 6px; border-radius: 99px; background: var(--soft); color: var(--muted); }
-.side .rule.yes { background: var(--accent-soft); color: var(--accent); }
+.desc { margin: 0 12px 9px 14px; padding-left: 8px; border-left: 3px solid var(--line); color: var(--ink); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.desc.none { color: var(--muted); }
+ul.prog { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+ul.prog li { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: start; }
+ul.prog li.done { color: var(--muted); }
+ul.prog .ck { color: var(--accent); font-weight: 700; }
+ul.prog .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+ul.prog .plinks { margin: 3px 0 0; padding-left: 16px; font-size: 12px; }
+ul.prog .spin { margin: 2px 0 0; }
+.progBox { margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: var(--soft); }
+.sg .sgSide { margin: 8px 0; }
+.sg h4 { font-size: 13px; margin: 12px 0 4px; color: var(--muted); }
+.sg .gen { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.sg .know { margin: 8px 0; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); }
+.sg .know p { margin: 4px 0 0; }
+.sg a { color: var(--accent); }
+.act[aria-pressed="true"] { background: var(--accent); color: #fff; }
+pre.json { max-height: 260px; overflow: auto; background: var(--soft); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tag { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.act { border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 8px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
+.act:disabled { opacity: .4; }
+.actions { margin: 8px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.tabs2 { margin: 0 0 12px; }
+.pickRow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.pickBox label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.pickBox input { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; background: var(--bg); color: var(--ink); }
+.chosen { margin: 4px 0; font-size: 13px; }
+.chain { font-size: 13px; margin: 6px 0 2px; }
+.chain small { color: var(--muted); font-weight: 400; }
+.quote.hop { margin-left: 16px; font-size: 12px; color: var(--muted); }
+.card.rel .cardHead { gap: 8px; }
+.status.vd-related { background: #d3f9d8; color: #2b8a3e; }
+.status.vd-weak { background: #fff3bf; color: #946200; }
+.status.vd-unrelated, .status.vd-unsure { background: var(--soft); color: var(--muted); }
+.kwTools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
+.kwTools input[type="search"] { border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; background: var(--bg); min-width: 180px; }
+.kwTools label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.alias { color: var(--muted); font-size: 12px; font-weight: 400; }
+.kw .alias { color: var(--muted); font-size: 12px; font-weight: 400; }
+.kw .cardHead b { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.kw li .quote { border-left-color: var(--line); }
+.kw li.cur .quote { border-left-color: var(--accent); }
 .empty { color: var(--muted); padding: 40px 0; text-align: center; }
 .error { color: var(--err); white-space: pre-wrap; }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%;
@@ -147,11 +188,12 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
   <main>
     <div class="bar">
       <div class="api" role="group" aria-label="API">
-        <button data-mode="concepts" aria-pressed="false">개념 추출</button>
-        <button data-mode="links" aria-pressed="false">관계 연결</button>
-        <button data-mode="suggest" aria-pressed="false">지식 제안</button>
+        <button data-mode="concepts" aria-pressed="false" title="이 노트에서 키워드와 키워드마다 설명(원문 문장)을 뽑는다">키워드 및 설명 추출</button>
+        <button data-mode="keywords" aria-pressed="false" title="노드 = 키워드, 그 안에 개념(설명 + 소스 페이지)">키워드</button>
+        <button data-mode="links" aria-pressed="false" title="키워드가 어떻게 이어져 있는지 보여 준다 (노드 = 키워드, 선 = 같은 문장에 같이 나옴). 문서 노드로도 볼 수 있다">문서 연결</button>
+        <button data-mode="suggest" aria-pressed="false" title="키워드 A 의 요소 + 키워드 B 의 요소 + 인터넷 지식으로 사용자가 모르는 새 지식을 만든다">지식 제안</button>
       </div>
-      <label class="thr">유효 개념 신뢰도 ≥
+      <label class="thr">유효 키워드 신뢰도 ≥
         <input type="range" id="thr" min="0.25" max="1" step="0.01" value="0.35"><b id="thrVal">0.35</b></label>
     </div>
     <div class="body single" id="body"><p class="empty">노트를 고른다</p></div>
@@ -163,7 +205,11 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const FREE = "\u0000free";
 const S = { cfg: null, notes: [], note: null, text: "", free: "", mode: null, thr: 0.35, concepts: null, links: null, sel: null, edge: null, run: 0,
-            scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 } };
+            scope: "note", all: null, allSel: null, allEdge: null, allDetail: null, view: { x: 0, y: 0, k: 1 },
+            kw: null, kq: "", kscope: "note", kmulti: false,
+            glens: "keywords", kg: null, kgSel: null, kgEdge: null, kgTab: "sel", kgRel: null,
+            glevels: { sentence: true, heading: true, paragraph: false },
+            cn: { a: null, b: null, qa: "", qb: "", ca: [], cb: [], data: null, rel: null } };
 const name = (id) => (id === FREE ? "직접 입력" : id);
 const valid = (c) => c.confidence >= S.thr;
 
@@ -187,7 +233,7 @@ $("#search").addEventListener("input", renderNotes);
 
 async function openNote(id) {
   if (S.note === FREE) S.free = $("#free")?.value ?? S.free;
-  S.note = id; S.concepts = null; S.links = null; S.suggest = null; S.sel = null;
+  S.note = id; S.concepts = null; S.links = null; S.sg.data = null; S.kw = null; S.kg = null; S.kgSel = null; S.kgEdge = null; S.sel = null;
   S.text = id === FREE ? S.free : (await (await fetch("/dev/notes/" + encodeURIComponent(id))).json()).body;
   renderNotes(); render();
 }
@@ -213,48 +259,257 @@ $("#thr").addEventListener("input", (e) => {
   else { clearTimeout(thrTimer); thrTimer = setTimeout(run, 250); }   // 연결은 유효 개념이 바뀌었으니 다시 찾는다
 });
 
-function run() { return ({ links: () => (S.scope === "all" ? runAll() : runLinks()), suggest: runSuggest })[S.mode]?.() ?? runConcepts(); }
+function run() {
+  const links = () => (S.glens === "keywords" ? runKg() : S.scope === "all" ? runAll() : runLinks());
+  return ({ links, suggest: runSuggest, keywords: runKeywords })[S.mode]?.() ?? runConcepts();
+}
+
+// ---------- 키워드: 노드 하나 = 키워드, 그 안에 개념 여러 개 ----------
+async function runKeywords(quiet = false) {          // quiet: 검색어를 치는 중에는 입력칸을 다시 그리지 않는다
+  const text = currentText();
+  const own = S.kscope === "note";
+  if (own && !text.trim()) { S.kw = null; return render(); }
+  const r = ++S.run;
+  if (!quiet) { S.kw = "loading"; render(); }
+  const body = { minConfidence: S.thr, q: S.kq, minPages: S.kmulti ? 2 : 1, limit: 80,
+                 ...(own ? (S.note === FREE ? { text } : { noteId: S.note }) : {}) };
+  try {
+    const res = await fetch("/dev/keywords", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (r !== S.run) return;
+    S.kw = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+  } catch (e) { if (r === S.run) S.kw = { error: String(e) }; }
+  render();
+}
+function keywordCard(k) {
+  const mine = (c) => c.note === S.note;
+  const aliases = k.aliases.length ? ` <span class="alias">${esc(k.aliases.slice(0, 4).join(" · "))}${k.aliases.length > 4 ? " …" : ""}</span>` : "";
+  return `<div class="card kw"><div class="cardHead"><b>${esc(k.name)}${aliases}</b>
+      <span class="path">페이지 ${k.pages} · 개념 ${k.concepts.length}</span></div>
+    <ul class="steps">${k.concepts.map((c) => `<li class="${mine(c) ? "cur" : ""}">
+      <button class="linkBtn" data-open="${esc(c.note)}" title="${esc(c.note)}">${esc(shortTitle(c.note, 34))}</button>
+      <span class="path">${c.confidence == null ? "" : `신뢰도 ${c.confidence.toFixed(2)}`}</span>
+      <div class="quote">${esc(c.explanation)}</div></li>`).join("")}</ul></div>`;
+}
+function keywordsView(source) {
+  const K = S.kw, own = S.kscope === "note";
+  const tools = `<div class="scope" role="group" aria-label="범위">
+      <button data-kscope="note" aria-pressed="${own}">이 노트의 키워드</button>
+      <button data-kscope="all" aria-pressed="${!own}">전체 키워드</button></div>
+    <div class="kwTools"><input type="search" id="kq" placeholder="키워드 검색" value="${esc(S.kq)}" autocomplete="off">
+      <label><input type="checkbox" id="kmulti" ${S.kmulti ? "checked" : ""}>둘 이상의 페이지에 걸친 것만</label></div>`;
+  let out = tools;
+  if (K === "loading" || !K) out += `<p class="count"><span class="spin"></span>실행 중…</p>`;
+  else if (K.error) out += `<p class="error">${esc(K.error)}</p>`;
+  else out += `<p class="count">키워드 ${K.total}개${K.total > K.keywords.length ? ` 중 ${K.keywords.length}개` : ""} (노트 ${K.notes}개 전체 ${K.all}개)
+      · 같은 표기·별칭으로 묶은 후보다. 표기가 같아도 뜻이 다른 개념이 섞일 수 있다 · ${K.ms}ms</p>
+      ${K.keywords.map(keywordCard).join("") || `<p class="empty">조건에 맞는 키워드가 없다.</p>`}`;
+  return `<div class="col">${own ? `<h1>${esc(name(S.note))}</h1>${S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : ""}` : ""}${out}</div>`;
+}
+
+// ---------- 지식 제안: 키워드 A 의 요소 + 키워드 B 의 요소 + 외부 지식 → 새 지식 ----------
+const REACT_KEY = "playground-reactions-v1";
+const loadReact = () => { try { return JSON.parse(localStorage.getItem(REACT_KEY) || "{}"); } catch (e) { return {}; } };
+const saveReact = () => { try { localStorage.setItem(REACT_KEY, JSON.stringify(S.sg.react)); } catch (e) { /* 저장하지 못해도 화면은 된다 */ } };
+const AUTO_KEY = "playground-auto-generate-v1", AUTO_N = 3;
+const loadAuto = () => { try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch (e) { return true; } };
+S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, react: loadReact(), showKnown: false, showRest: false, auto: loadAuto(), prog: {}, abort: {} };
 
 async function runSuggest() {
   const text = currentText();
-  if (!text.trim()) { S.suggest = null; return render(); }
+  if (!text.trim()) { S.sg.data = null; return render(); }
   const r = ++S.run;
-  S.suggest = "loading"; render();
-  const body = { k: 5, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
+  S.sg.data = "loading"; S.sg.screen = {}; S.sg.gen = {}; render();
+  const body = { limit: 12, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
   try {
-    const res = await fetch("/dev/suggest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetch("/dev/proposals/candidates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
     if (r !== S.run) return;
-    S.suggest = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
-  } catch (e) { if (r === S.run) S.suggest = { error: String(e) }; }
+    S.sg.data = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+  } catch (e) { if (r === S.run) S.sg.data = { error: String(e) }; }
+  render();
+  if (r === S.run && S.sg.auto && S.sg.data?.candidates?.length) generateTop(AUTO_N);       // 요소 쌍이 이어지면 새 지식을 바로 만든다
+}
+async function runScreen() {
+  const D = S.sg.data;
+  if (!D || D === "loading" || D.error || S.sg.screening) return;
+  S.sg.screening = true; render();
+  const pairs = D.candidates.map((c) => ({ id: c.id, a: { keyword: c.a.keyword, text: c.a.text }, b: { keyword: c.b.keyword, text: c.b.text } }));
+  try {
+    const res = await fetch("/dev/proposals/screen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pairs }) });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { S.sg.screen = data.results; S.sg.screenModel = data.model; } else S.sg.screenError = data.detail || `HTTP ${res.status}`;
+  } catch (e) { S.sg.screenError = String(e); }
+  S.sg.screening = false; render();
+}
+const GEN_FIELDS = ["keyword", "note", "noteId", "conceptId", "text", "start", "end", "quote"];
+// 새 지식 만들기는 SSE 로 진행 상황을 받는다 (POST 라서 EventSource 대신 fetch 스트림을 읽는다)
+async function streamGenerate(body, onEvent, signal) {
+  const res = await fetch("/dev/proposals/generate/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data: "));
+      buf = buf.slice(i + 2);
+      if (line) onEvent(JSON.parse(line.slice(6)));
+    }
+  }
+}
+async function startGen(id, c, set) {
+  const ctl = new AbortController();
+  S.sg.abort[id] = ctl; S.sg.prog[id] = { events: [], t0: Date.now() };
+  set("loading"); render();
+  const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
+  try {
+    await streamGenerate({ a: pick(c.a), b: pick(c.b) }, (ev) => {
+      if (ev.type === "result") set(ev.result);
+      else if (ev.type === "error") set({ error: ev.message });
+      else { S.sg.prog[id].events.push(ev); paintProg(id); }
+    }, ctl.signal);
+  } catch (e) { set({ error: e.name === "AbortError" ? "중단했어요. 모델 호출도 멈췄어요." : String(e.message || e) }); }
+  delete S.sg.abort[id];
   render();
 }
-
-async function sha256Hex(bytes) {
-  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+async function runGenerate(id) {
+  const c = S.sg.data.candidates.find((x) => x.id === id);
+  if (!c || S.sg.gen[id] === "loading") return;
+  await startGen(id, c, (v) => { S.sg.gen[id] = v; });
 }
+async function generateTop(n) {
+  if (!Object.keys(S.sg.screen).length) await runScreen();
+  const ids = sgOrdered().main.filter((c) => !S.sg.gen[c.id]).slice(0, n).map((c) => c.id);
+  await Promise.all(ids.map(runGenerate));
+}
+
+const SG_LABEL = { useful: "합쳐 볼 만해요", vague: "모호", redundant: "겹침", unrelated: "관계 없음", unusable: "문장이 불완전", unsure: "판정 못 함" };
+const SG_CH = { terms: "공유 낱말", pivot: "공통 키워드", embed: "의미 비슷" };
+const pairKey = (c) => `${c.a.conceptId}|${c.b.conceptId}`;
+// 선별 결과가 있으면 useful → vague 순으로 앞에 두고, 나머지는 따로 접어 둔다. 알고 있던 내용으로 버린 쌍은 숨긴다
+function sgOrdered() {
+  const cs = S.sg.data.candidates, scr = S.sg.screen, screened = Object.keys(scr).length > 0;
+  const hidden = cs.filter((c) => S.sg.react[pairKey(c)] === "known");
+  const shown = cs.filter((c) => S.sg.react[pairKey(c)] !== "known");
+  const rank = (c) => ({ useful: 0, vague: 1 }[scr[c.id]?.label] ?? 2);
+  const sorted = [...shown].sort((x, y) => (screened ? rank(x) - rank(y) : 0));
+  return { main: screened ? sorted.filter((c) => rank(c) < 2) : sorted, rest: screened ? sorted.filter((c) => rank(c) >= 2) : [], hidden, screened };
+}
+
+const isUrl = (u) => /^https?:\/\//.test(u);
+// 진행 상황: 이벤트를 줄로 줄인다 (생각·쓰기는 이어지면 한 줄, 쓰기는 마지막 글자 수만)
+function progLines(evs) {
+  const out = [];
+  const last = () => out[out.length - 1];
+  for (const e of evs) {
+    if (e.type === "start") out.push({ t: e.t, html: `요청을 보냈어요 · ${esc(e.model)}${e.tool ? ` · ${esc(e.tool)}` : ""}` });
+    else if (e.type === "cached") out.push({ t: e.t, html: "저장된 결과를 불러와요" });
+    else if (e.type === "thinking") { if (last()?.key !== "thinking") out.push({ key: "thinking", t: e.t, html: "무엇을 찾아볼지 생각하는 중이에요" }); }
+    else if (e.type === "search_start") out.push({ key: "search", t: e.t, html: "웹을 검색하는 중이에요" });
+    else if (e.type === "search") { const l = [...out].reverse().find((x) => x.key === "search"); const h = `웹 검색: <b>${esc(e.query)}</b>`; if (l) { l.html = h; l.t = e.t; } else out.push({ key: "search", t: e.t, html: h }); }
+    else if (e.type === "search_results") out.push({ t: e.t, html: `검색 결과 ${e.results.length}개를 받았어요` + (e.results.length ? `<ul class="plinks">${e.results.slice(0, 4).map((r) =>
+      `<li>${isUrl(r.url) ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title || r.url)}</a>` : esc(r.title || r.url)}</li>`).join("")}${e.results.length > 4 ? `<li class="path">…외 ${e.results.length - 4}개</li>` : ""}</ul>` : "") });
+    else if (e.type === "writing") { if (last()?.key === "writing") { last().html = `결론을 쓰는 중이에요${e.chars ? ` (${e.chars}자)` : ""}`; last().t = e.t; } else out.push({ key: "writing", t: e.t, html: `결론을 쓰는 중이에요${e.chars ? ` (${e.chars}자)` : ""}` }); }
+    else if (e.type === "validating") out.push({ t: e.t, html: `출처 ${e.sources}개와 노트 인용을 확인하는 중이에요` });
+  }
+  return out;
+}
+function progInner(id) {
+  const lines = progLines(S.sg.prog[id]?.events || []);
+  if (!lines.length) return `<p class="count"><span class="spin"></span>연결하는 중이에요…</p>`;
+  return `<ul class="prog">${lines.map((l, i) => `<li class="${i === lines.length - 1 ? "now" : "done"}">${i === lines.length - 1 ? `<span class="spin"></span>` : `<span class="ck">✓</span>`}
+    <div>${l.html}</div><span class="t">${l.t != null ? l.t + "초" : ""}</span></li>`).join("")}</ul>`;
+}
+function paintProg(id) { const el = document.getElementById("prog-" + id); if (el) el.innerHTML = progInner(id); }
+const progBox = (id) => `<div class="progBox"><div id="prog-${id}">${progInner(id)}</div><p class="actions"><button class="linkBtn" data-sg="cancel:${id}">중단</button></p></div>`;
+function genBlock(c, g) {
+  if (g === "loading") return progBox(c.id);
+  if (g?.error) return `<p class="error">${esc(g.error)}</p>`;
+  const ST = { candidate: ["candidate", "후보"], held: ["hypothesis", "가설"], known: ["excluded", "이미 노트에 있어요"] }[g.status] || ["hypothesis", g.status];
+  const ext = g.external.map((e) => `<li>${isUrl(e.url) ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.title || e.url)}</a>` : esc(e.title || e.url)}
+      <div class="quote">${esc(e.quote)}</div></li>`).join("");
+  const why = g.reasons.length ? `<p class="path">${g.reasons.map(esc).join(" · ")}${g.reason ? ` — ${esc(g.reason)}` : ""}</p>` : "";
+  const conclusion = g.conclusion ? `<div class="know"><span class="tag">새 키워드</span> <b>${esc(g.newKeyword)}</b><p>${esc(g.conclusion)}</p></div>` : "";
+  const react = S.sg.react[pairKey(c)];
+  const buttons = g.status === "candidate" ? `<p class="actions"><button class="act" data-sg="react:${c.id}:ok" aria-pressed="${react === "ok"}">이해함</button>
+      <button class="act" data-sg="react:${c.id}:known">알고 있던 내용</button>
+      <button class="act" data-sg="react:${c.id}:confused" aria-pressed="${react === "confused"}">이해가 안 됨</button></p>` : "";
+  const ok = react === "ok" && g.concept ? `<details open><summary>이해함 → 기능용 그래프에 들어갈 개념 (generated)</summary><pre class="json">${esc(JSON.stringify(g.concept, null, 2))}</pre></details>` : "";
+  const confused = react === "confused" ? `<details open><summary>챗봇에 넘길 컨텍스트</summary><pre class="json">${esc(
+    `근거 A [${c.a.keyword}] (${c.a.note})\n${c.a.text}\n\n근거 B [${c.b.keyword}] (${c.b.note})\n${c.b.text}\n\n외부 지식\n${g.external.map((e) => `- ${e.title} ${e.url}\n  ${e.quote}`).join("\n")}\n\n결론\n${g.conclusion}`)}</pre></details>` : "";
+  return `<div class="gen"><div class="cardHead"><span class="status ${ST[0]}">${ST[1]}</span><span class="path">${esc(g.model)} · 검색 ${g.searches}번${g.cached ? " · 저장된 결과" : ""}</span></div>
+    ${why}${ext ? `<h4>외부 지식</h4><ul class="steps">${ext}</ul>` : ""}${conclusion}${buttons}${ok}${confused}</div>`;
+}
+
+function sgCard(c) {
+  const scr = S.sg.screen[c.id], g = S.sg.gen[c.id];
+  const chips = [...c.channels.map((ch) => `<span class="tag" title="${esc(ch === "terms" ? "공유 낱말: " + c.shared.join(", ") : ch === "pivot" ? "둘 다 언급하는 키워드: " + c.via.join(", ") : "임베딩 코사인 " + c.cos)}">${SG_CH[ch]}${ch === "embed" && c.cos != null ? " " + c.cos : ""}</span>`),
+    scr ? `<span class="status ${scr.label === "useful" ? "candidate" : scr.label === "vague" ? "hypothesis" : "excluded"}">${SG_LABEL[scr.label]}</span>` : ""].join(" ");
+  const side = (e, w) => `<div class="sgSide"><p class="path"><b>근거 ${w}</b> · ${esc(e.keyword)} · <button class="linkBtn" data-open="${esc(e.note)}" title="${esc(e.note)}">${esc(shortTitle(e.note, 28))}</button></p>
+      <div class="quote">${esc(e.text)}</div></div>`;
+  const foot = g ? genBlock(c, g) : `<p class="actions"><button class="act" data-sg="gen:${c.id}">새 지식 만들기 (웹 검색)</button></p>`;
+  return `<div class="card sg"><div class="cardHead"><b>${esc(c.a.keyword)} × ${esc(c.b.keyword)}</b><span class="path">${chips}</span></div>
+    ${side(c.a, "A")}${side(c.b, "B")}
+    ${scr?.conclusion ? `<p class="path">선별 모델 메모: ${esc(scr.conclusion)}</p>` : ""}${foot}</div>`;
+}
+
+function suggestView(source) {
+  const D = S.sg.data;
+  const head = `<h1>${esc(name(S.note))}</h1>` + (S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : "");
+  if (!D) return head;
+  if (D === "loading") return `${head}<p class="count"><span class="spin"></span>요소 쌍 후보를 찾는 중이에요… (처음 한 번은 임베딩 때문에 1분쯤 걸려요)</p>`;
+  if (D.error) return `${head}<p class="error">${esc(D.error)}</p>`;
+  const o = sgOrdered(), ch = D.channels;
+  const stats = `이 노트의 요소 ${D.anchors}개 · 전체 요소 ${D.elements}개 → 후보 ${D.candidates.length}개 (공유 낱말 ${ch.terms || 0} · 공통 키워드 ${ch.pivot || 0} · 의미 비슷 ${ch.embed || 0}${D.embeddings ? ` · 코사인 ${D.cosineFloor} 미만은 뺌` : " · 임베딩 없음"}) · ${D.ms}ms`;
+  const tools = `<p class="actions"><button class="act" data-sg="screen" ${S.sg.screening || !D.candidates.length ? "disabled" : ""}>${S.sg.screening ? "선별하는 중…" : "LLM 선별"}</button>
+    <button class="act" data-sg="top" ${D.candidates.length ? "" : "disabled"}>상위 ${AUTO_N}개 새 지식 만들기</button>
+    <label class="note"><input type="checkbox" data-auto ${S.sg.auto ? "checked" : ""}>이어지면 자동으로 선별하고 상위 ${AUTO_N}개의 새 지식을 만들기</label>
+    <span class="note">선별과 새 지식 만들기는 노트 문장과 검색어를 모델 제공자에게 보내고 검색 비용이 들어요. 끄면 버튼을 눌렀을 때만 해요.</span></p>`;
+  const scrNote = S.sg.screenError ? `<p class="error">${esc(S.sg.screenError)}</p>` : o.screened ? `<p class="count">선별 ${esc(S.sg.screenModel)} · 합쳐 볼 만한 쌍 ${o.main.filter((c) => S.sg.screen[c.id]?.label === "useful").length}개</p>` : "";
+  return `${head}<p class="count">${stats}</p>${tools}${scrNote}
+    ${o.main.map(sgCard).join("") || `<p class="empty">후보가 없어요. 신뢰도를 낮추거나 다른 노트를 골라 보세요.</p>`}
+    ${o.rest.length ? `<details ${S.sg.showRest ? "open" : ""} data-sg-toggle="rest"><summary>선별에서 걸러진 후보 ${o.rest.length}개</summary>${o.rest.map(sgCard).join("")}</details>` : ""}
+    ${o.hidden.length ? `<p class="note">알고 있던 내용으로 숨긴 쌍 ${o.hidden.length}개 · <button class="linkBtn" data-sg="unhide">다시 보기</button></p>` : ""}`;
+}
+
+$("#body").addEventListener("change", (e) => {
+  if (!e.target.matches("[data-auto]")) return;
+  S.sg.auto = e.target.checked;
+  try { localStorage.setItem(AUTO_KEY, S.sg.auto ? "1" : "0"); } catch (err) { /* 저장하지 못해도 화면은 된다 */ }
+  if (S.sg.auto && S.mode === "suggest" && S.sg.data?.candidates?.length) generateTop(AUTO_N);
+  render();
+});
+$("#body").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-sg]");
+  if (!t) return;
+  const [k, id, kind] = t.dataset.sg.split(":");
+  if (k === "cancel") S.sg.abort[id]?.abort();
+  else if (k === "screen") runScreen();
+  else if (k === "top") generateTop(3);
+  else if (k === "gen") (id === "cn" ? runConnectGenerate() : runGenerate(id));
+  else if (k === "unhide") { for (const x of S.sg.data.candidates) if (S.sg.react[pairKey(x)] === "known") delete S.sg.react[pairKey(x)]; saveReact(); render(); }
+  else if (k === "react") {
+    const c = id === "cn" ? S.cn.pairCand : S.sg.data.candidates.find((x) => x.id === id), key = pairKey(c);
+    if (S.sg.react[key] === kind && kind !== "known") delete S.sg.react[key]; else S.sg.react[key] = kind;
+    saveReact(); render();
+  }
+});
 
 async function runConcepts() {
   const text = currentText();
   if (!text.trim()) { S.concepts = null; return render(); }
   const r = ++S.run;
   S.concepts = "loading"; render();
-  const id = crypto.randomUUID();
-  const types = [...S.cfg.relationTypes, { code: "analogous_to", label: "유사", description: "두 개념이 비슷한 원리로 동작한다" }];
-  const ctx = { analysisJobId: crypto.randomUUID(), stageExecutionId: crypto.randomUUID(), userId: crypto.randomUUID(),
-                noteId: id, noteVersion: 1, inputRevision: 1, graphRevision: 1, pipelineVersion: "playground" };
-  const body = { context: ctx, profileVersion: S.cfg.extractProfiles.find((p) => p.default).id,
-    note: { noteId: id, noteVersion: 1, inputRevision: 1, title: name(S.note).slice(0, 200), body: text,
-            bodySha256: await sha256Hex(new TextEncoder().encode(text)), topic: { id: null, name: "미분류" } },
-    policy: { version: "playground", relationTypes: types, compositionRules: [] } };
-  const raw = new TextEncoder().encode(JSON.stringify(body));
   try {
-    const res = await fetch(S.cfg.apiPrefix + "/extract", { method: "POST", body: raw, headers: {
-      "Authorization": "Bearer " + (S.cfg.token || ""), "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID(),
-      "X-Attempt-Id": crypto.randomUUID(), "Idempotency-Key": ctx.stageExecutionId, "X-Input-SHA256": await sha256Hex(raw) } });
+    const res = await fetch("/dev/extract", { method: "POST", headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify(S.note === FREE ? { text } : { noteId: S.note }) });
     const data = await res.json().catch(() => null);
     if (r !== S.run) return;
-    S.concepts = res.ok ? data.concepts : { error: data?.error ? `${data.error.code}: ${data.error.message}` : `HTTP ${res.status}` };
+    S.concepts = res.ok ? data.keywords : { error: data?.detail || `HTTP ${res.status}` };
   } catch (e) { if (r === S.run) S.concepts = { error: String(e) }; }
   render();
 }
@@ -279,11 +534,297 @@ async function runLinks() {
 }
 
 // ---------- 관계 연결 그래프 ----------
-const TYPE_KO = { is_a: "종류", part_of: "구성", causes: "원인", requires: "필요", used_for: "용도",
-                  contrasts_with: "대비", example_of: "예시", analogous_to: "유사" };
-const scopeToggle = () => `<div class="scope" role="group" aria-label="범위">
+const scopeToggle = () => `<div class="scopes"><div class="scope" role="group" aria-label="노드">
+  <button data-lens="keywords" aria-pressed="${S.glens === "keywords"}" title="노드 = 키워드, 선 = 같은 문장에 같이 나옴">키워드 노드</button>
+  <button data-lens="pages" aria-pressed="${S.glens === "pages"}" title="노드 = 문서, 선 = 같은 키워드에 개념을 넣음">문서 노드</button></div>
+  <div class="scope" role="group" aria-label="범위">
   <button data-scope="note" aria-pressed="${S.scope === "note"}">이 노트</button>
-  <button data-scope="all" aria-pressed="${S.scope === "all"}">전체 문서</button></div>`;
+  <button data-scope="all" aria-pressed="${S.scope === "all"}">전체 ${S.glens === "keywords" ? "키워드" : "문서"}</button></div></div>`;
+$("#body").addEventListener("click", (e) => {                       // 노드 종류 바꾸기 (그래프를 다시 그려도 붙어 있게 body 에 건다)
+  const b = e.target.closest("[data-lens]");
+  if (b && b.dataset.lens !== S.glens) { S.glens = b.dataset.lens; run(); }
+});
+
+// ---------- 키워드 연결 그래프: 노드 = 키워드, 선 = 같은 문장에 같이 나온 키워드 ----------
+async function runKg() {
+  const text = currentText();
+  if (!text.trim() && S.scope === "note") { S.kg = null; return render(); }
+  const r = ++S.run;
+  S.kg = "loading"; S.kgSel = null; S.kgEdge = null; S.kgRel = null; render();
+  const body = { scope: S.scope, minConfidence: S.thr, levels: levelsOn(), ...(S.note === FREE ? { text } : { noteId: S.note }) };
+  try {
+    const res = await fetch("/dev/keyword-graph", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (r !== S.run) return;
+    S.kg = res.ok ? data : { error: data.detail || `HTTP ${res.status}` };
+    S.view = { x: 0, y: 0, k: 1 };
+  } catch (e) { if (r === S.run) S.kg = { error: String(e) }; }
+  render();
+}
+
+function kgSvg(K) {
+  const own = K.scope === "note", W = own ? 760 : 1000, H = own ? 540 : 720;
+  if (!K.sim) {
+    const iso = K.nodes.filter((v) => !v.degree), isoIdx = {};
+    iso.forEach((v, i) => { isoIdx[v.id] = i; });
+    K.sim = makeSim(K.nodes, K.edges, {
+      W, H, charge: own ? 420 : 60, spring: 0.6, gravity: own ? 0.05 : 0.03,
+      len: (s) => (own ? 140 - 70 * s : 50 - 20 * s),
+      radius: (v) => (own ? 16 : 6) + 1.8 * Math.sqrt(v.degree),
+      start: (v, i) => {
+        if (v.id in isoIdx) {                                                    // 이 화면에서 연결 없는 키워드는 맨 아래 줄에 고정
+          const x = 40 + (W - 80) * (isoIdx[v.id] + 0.5) / iso.length;
+          return [x, H - 25, x, H - 25];
+        }
+        const r = (own ? 60 : 27) * Math.sqrt(i + 1), t = i * 2.39996;
+        return [W / 2 + r * Math.cos(t), (H - 60) / 2 + r * Math.sin(t) * 0.75];
+      },
+    });
+    K.sim.N.forEach((v) => { if (v.fx != null) v.pinned = true; });
+    K.sim.o.H = H - 50;
+  }
+  const max = Math.max(...K.edges.map((e) => e.score), 1e-9);
+  const sel = S.kgSel, nb = new Set();
+  if (sel) K.edges.forEach((e) => { if (e.a === sel) nb.add(e.b); if (e.b === sel) nb.add(e.a); });
+  const title = Object.fromEntries(K.nodes.map((n) => [n.id, n.title]));
+  const top = new Set([...K.nodes].sort((x, y) => y.degree - x.degree).slice(0, own ? 99 : 14).map((v) => v.id));
+  const lines = K.edges.map((e) => {
+    const k = edgeKey(e), touch = sel && (e.a === sel || e.b === sel);
+    const cls = k === S.kgEdge ? " on" : touch ? " hl" : sel ? " dim" : "";
+    const ab = `data-la="${esc(e.a)}" data-lb="${esc(e.b)}"`;
+    return `<line class="aEdge${cls}" ${ab} stroke-width="${(0.8 + 4.5 * e.score / max).toFixed(1)}"/>
+      <line class="gHit" data-aedge="${esc(k)}" ${ab}><title>${esc(title[e.a])} ↔ ${esc(title[e.b])} · 같은 문장 ${e.sentences}번</title></line>`;
+  }).join("");
+  const nodes = K.nodes.map((v) => {
+    const r = (own ? 8 : 4) + 1.6 * Math.sqrt(v.degree);
+    const cls = v.id === sel ? " sel" : v.inNote ? " cur" : sel && !nb.has(v.id) ? " dim" : "";
+    const show = v.id === sel || nb.has(v.id) || v.inNote || top.has(v.id);
+    return `<g class="aNode${cls}" data-anode="${esc(v.id)}" data-pid="${esc(v.id)}"><title>${esc(v.title)} · 페이지 ${v.pages} · 연결 ${v.degree}</title>
+      <circle r="${r.toFixed(1)}"/>${show ? `<text y="${(-r - 4).toFixed(1)}" text-anchor="middle">${esc(shortTitle(v.title, 16))}</text>` : ""}</g>`;
+  }).join("");
+  const { x, y, k } = S.view;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="키워드 연결 그래프"><g id="vp" transform="translate(${x} ${y}) scale(${k})">${lines}${nodes}</g></svg>`;
+}
+
+const LEVEL_KO = { sentence: "같은 문장", heading: "제목과 본문", paragraph: "같은 문단", path: "경로" };
+const LEVEL_HINT = { sentence: "두 키워드가 한 문장에 같이 나옴", heading: "한쪽이 제목, 다른 쪽이 그 절 본문에 나옴", paragraph: "같은 문단에 나옴 (느슨함)" };
+const VERDICT_KO = { related: "관계 있음", weak: "약한 관계", unrelated: "관계 없음", unsure: "판정 못 함" };
+const TYPE_KO = { is_a: "종류", part_of: "구성", causes: "원인", requires: "필요", used_for: "용도", contrasts_with: "대비",
+                  example_of: "예시", analogous_to: "유사", related: "관련", none: "—" };
+const levelsOn = () => Object.keys(S.glevels).filter((k) => S.glevels[k]);
+const clean = (t) => String(t ?? "").replace(/\*\*|__/g, "");
+
+function kgConcepts(n) {
+  return n.concepts.map((c) => `<div class="card" style="padding:8px 12px"><button class="linkBtn" data-open="${esc(c.note)}">${esc(shortTitle(c.note, 34))}</button>
+    <div class="quote">${esc(clean(c.explanation))}</div></div>`).join("");
+}
+const evCard = (v) => `<div class="card" style="padding:8px 12px"><span class="tag" title="${esc(LEVEL_HINT[v.level] || "")}">${LEVEL_KO[v.level] || v.level}</span>
+  <button class="linkBtn" data-open="${esc(v.note)}">${esc(shortTitle(v.note, 34))}</button><div class="quote">${esc(clean(v.text))}</div></div>`;
+
+// 관계 확인 (LLM) 결과 상자. rel = { loading | error | data, items }
+function relBox(rel, aName, bName) {
+  if (!rel) return "";
+  if (rel.loading) return `<p class="count"><span class="spin"></span>관계를 확인하는 중… (모델에 노트 내용이 전달된다)</p>`;
+  if (rel.error) return `<p class="error">${esc(rel.error)}</p>`;
+  const d = rel.data;
+  const dir = d.type === "none" ? "" : d.direction === "a_to_b" ? `${esc(aName)} → ${esc(bName)}` : d.direction === "b_to_a" ? `${esc(bName)} → ${esc(aName)}` : "방향 없음 (대칭)";
+  const cited = d.evidence.map((id) => rel.items[Number(id.slice(1)) - 1]).filter(Boolean);
+  return `<div class="card rel ${esc(d.verdict)}"><div class="cardHead"><span class="status vd-${esc(d.verdict)}">${VERDICT_KO[d.verdict] || d.verdict}</span>
+      ${d.type !== "none" ? `<b>${esc(TYPE_KO[d.type] || d.type)}</b>` : ""}<span class="path">${dir}</span></div>
+    <p class="know">${esc(d.reason)}</p>
+    ${cited.length ? `<details><summary>인용한 증거 ${cited.length}개</summary>${cited.map(evCard).join("")}</details>` : ""}
+    <p class="path">${esc(d.model)} · ${esc(d.promptVersion)}${d.cached ? " · 저장된 결과" : ""}</p></div>`;
+}
+const relButton = (key) => `<button class="act" data-rel="${esc(key)}">관계 확인 (LLM)</button>`;
+
+function kgPanel(K) {
+  const t = Object.fromEntries(K.nodes.map((n) => [n.id, n]));
+  const e = S.kgEdge && K.edges.find((x) => edgeKey(x) === S.kgEdge);
+  if (e) {
+    const A = t[e.a], B = t[e.b];
+    const counts = Object.entries(e.counts).map(([l, n]) => `${LEVEL_KO[l]} ${n}`).join(" · ");
+    const rel = S.kgRel && S.kgRel.key === S.kgEdge ? S.kgRel : null;
+    return `<h3>${esc(A.title)} ↔ ${esc(B.title)}</h3>
+      <p class="note">${esc(counts)} · 페이지 ${e.pages}개 · 연결 점수 ${e.score}
+        · <button class="linkBtn" data-ksel="${esc(A.id)}">${esc(shortTitle(A.title, 12))}</button> · <button class="linkBtn" data-ksel="${esc(B.id)}">${esc(shortTitle(B.title, 12))}</button></p>
+      <p class="actions">${relButton("edge")} <button class="act" data-conn="${esc(A.id)}|${esc(B.id)}">경로까지 보기</button></p>
+      ${relBox(rel, A.title, B.title)}
+      <h4>증거${e.evidence.length < Object.values(e.counts).reduce((x, y) => x + y, 0) ? ` (${e.evidence.length}개만)` : ""}</h4>
+      ${e.evidence.map(evCard).join("")}
+      <details><summary>${esc(A.title)} 의 개념</summary>${kgConcepts(A)}</details>
+      <details><summary>${esc(B.title)} 의 개념</summary>${kgConcepts(B)}</details>`;
+  }
+  const n = S.kgSel && t[S.kgSel];
+  if (n) {
+    const mine = K.edges.filter((x) => x.a === n.id || x.b === n.id).sort((x, y) => y.score - x.score);
+    return `<h3>${esc(n.title)}${n.aliases.length ? ` <span class="alias">${esc(n.aliases.join(" · "))}</span>` : ""}</h3>
+      <p class="note">페이지 ${n.pages} · 이 화면에서 연결 ${mine.length}
+        · <button class="linkBtn" data-pick="a" data-id="${esc(n.id)}" data-name="${esc(n.title)}">A 로 지정</button>
+        · <button class="linkBtn" data-pick="b" data-id="${esc(n.id)}" data-name="${esc(n.title)}">B 로 지정</button></p>
+      <h4>이어진 키워드 (눌러서 근거 보기)</h4>
+      <ul class="list2">${mine.map((x) => { const o = t[x.a === n.id ? x.b : x.a]; const top = x.counts.sentence ? "문장" : x.counts.heading ? "제목" : "문단";
+        return `<li><button data-kedge="${esc(edgeKey(x))}">${esc(shortTitle(o.title, 26))}<small>${top} ${Object.values(x.counts).reduce((p, q) => p + q, 0)}</small></button></li>`; }).join("") || `<li class="note">이 화면에서는 이어진 키워드가 없다.</li>`}</ul>
+      <h4>개념 ${n.concepts.length}</h4>${kgConcepts(n)}`;
+  }
+  return `<p class="empty">점(키워드)이나 선을 누른다. 휠로 확대, 끌어서 이동한다.</p>`;
+}
+
+// ---------- 두 키워드의 연결 ----------
+const candItems = (w) => (S.cn["c" + w] || []).map((k) => `<li><button data-cand="${w}" data-id="${esc(k.keywordId)}" data-name="${esc(k.name)}">${esc(k.name)}<small>페이지 ${k.pages}</small></button></li>`).join("");
+function pickBox(w) {
+  const C = S.cn;
+  return `<div class="pickBox"><label>${w.toUpperCase()}<input id="cq${w}" placeholder="키워드 이름 검색" autocomplete="off" value="${esc(C["q" + w])}"></label>
+    ${C[w] ? `<div class="chosen"><b>${esc(C[w].name)}</b> <button class="linkBtn" data-clear="${w}">지우기</button></div>` : ""}
+    <ul class="list2" id="cand${w}">${candItems(w)}</ul></div>`;
+}
+function pathView(p) {
+  const last = p.nodes.length - 1;
+  return `<div class="card" style="padding:8px 12px"><p class="note">${p.hops}칸 · 가장 약한 연결 ${p.strength}</p>${p.nodes.map((n, i) => {
+    const ev = i < last ? p.edges[i].evidence[0] : null;
+    return `<div class="chain"><b>${esc(n.name)}</b>${i > 0 && i < last ? ` <small>페이지 ${n.pages} · 연결 ${n.degree}</small>` : ""}</div>`
+      + (ev ? `<div class="quote hop"><span class="tag">${LEVEL_KO[ev.level]}</span> ${esc(clean(ev.text))}</div>` : "");
+  }).join("")}</div>`;
+}
+function connectKnowledge(C) {
+  const c = C.pairCand;
+  if (!c) return `<p class="note">두 키워드에 서로 다른 노트에서 온 혼자 읽을 수 있는 설명이 없어서 새 지식을 만들 수 없어요.</p>`;
+  const side = (e, w) => `<p class="path"><b>근거 ${w}</b> · ${esc(e.keyword)} · ${esc(shortTitle(e.note, 28))}</p><div class="quote">${esc(e.text)}</div>`;
+  const foot = C.gen ? genBlock(c, C.gen) : `<p class="actions"><button class="act" data-sg="gen:cn">새 지식 만들기 (웹 검색)</button> <span class="note">자동 만들기를 꺼 두었어요.</span></p>`;
+  return `<div class="sg">${side(c.a, "A")}${side(c.b, "B")}${foot}</div>`;
+}
+function connectPanel() {
+  const C = S.cn, D = C.data;
+  let out = `<h3>두 키워드의 연결</h3><p class="note">아무 두 키워드나 골라 직접 증거와, 다른 키워드를 거치는 경로를 본다. 증거 수준은 위 체크박스를 따른다.</p>
+    <div class="pickRow">${pickBox("a")}${pickBox("b")}</div>
+    <p class="actions"><button class="act" data-conn="go" ${C.a && C.b ? "" : "disabled"}>연결 보기</button> <button class="linkBtn" data-swap="1">A↔B 바꾸기</button></p>`;
+  if (D === "loading") return out + `<p class="count"><span class="spin"></span>찾는 중…</p>`;
+  if (D?.error) return out + `<p class="error">${esc(D.error)}</p>`;
+  if (!D) return out;
+  const direct = D.direct
+    ? `<p class="note">${Object.entries(D.direct.counts).map(([l, n]) => `${LEVEL_KO[l]} ${n}`).join(" · ")} · 페이지 ${D.direct.pages}개 · 점수 ${D.direct.score}</p>${D.direct.evidence.map(evCard).join("")}`
+    : `<p class="note">고른 증거 수준(${D.levels.map((l) => LEVEL_KO[l]).join(" · ")})에서는 두 키워드가 같이 나온 곳이 없다.</p>`;
+  const paths = D.paths.length ? D.paths.map(pathView).join("")
+    : `<p class="note">다른 키워드를 거쳐 3칸 안에 이어지는 길이 없다. 증거 수준을 넓혀 본다.</p>`;
+  const rel = C.rel;
+  return out + `<h4>직접 연결</h4>${direct}
+    <h4>다른 키워드를 거치는 길 ${D.paths.length}${D.hubsSkipped ? ` <small>· 연결 ${D.hubThreshold}개 넘는 허브 ${D.hubsSkipped}개는 건너뜀</small>` : ""}</h4>${paths}
+    <h4>새 지식</h4>${connectKnowledge(C)}
+    <h4>관계 확인</h4><p class="actions">${relButton("connect")}</p>${relBox(rel, D.a.name, D.b.name)}
+    <details><summary>${esc(D.a.name)} 의 개념</summary>${kgConcepts(D.a)}</details>
+    <details><summary>${esc(D.b.name)} 의 개념</summary>${kgConcepts(D.b)}</details>`;
+}
+
+function kgSide(K) {
+  const tab = (k, label) => `<button data-ktab="${k}" aria-pressed="${S.kgTab === k}">${label}</button>`;
+  return `<div class="scope tabs2" role="group" aria-label="패널">${tab("sel", "선택한 것")}${tab("connect", "두 키워드 연결")}</div>`
+    + (S.kgTab === "connect" ? connectPanel() : (K ? kgPanel(K) : ""));
+}
+
+function kgView(source) {
+  const K = S.kg, toggle = scopeToggle(), head = S.scope === "note" ? `<h1>${esc(name(S.note))}</h1>` : "";
+  const lv = `<div class="kwTools">${Object.keys(LEVEL_KO).filter((l) => l !== "path").map((l) =>
+    `<label title="${esc(LEVEL_HINT[l])}"><input type="checkbox" data-level="${l}" ${S.glevels[l] ? "checked" : ""}>${LEVEL_KO[l]}</label>`).join("")}<span class="note">증거 수준</span></div>`;
+  if (!K || K === "loading" || K.error) {
+    return `<div class="col">${toggle}${lv}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
+      ${K === "loading" ? `<p class="count"><span class="spin"></span>실행 중…</p>` : K?.error ? `<p class="error">${esc(K.error)}</p>` : ""}</div>`;
+  }
+  const info = K.scope === "note"
+    ? `이 노트의 키워드 ${K.mine}개 중 ${K.mineLinked}개가 다른 키워드와 이어진다 · 강조한 점 = 이 노트의 키워드, 회색 = 다른 페이지에서 이어진 키워드`
+    : `전체 키워드 ${K.keywords}개 중 ${K.linkedKeywords}개가 이어져 있다 · 둘 이상의 페이지에 걸치고 연결이 센 ${K.nodes.length}개만 그린다`;
+  return `<div class="col">${toggle}${lv}${head}${S.note === FREE && S.scope === "note" ? `<div style="margin-bottom:12px">${source}</div>` : ""}
+      <p class="count">${info} · 선 ${K.edges.length}개 · 신뢰도 ${S.thr.toFixed(2)} 이상 · ${K.ms}ms</p>
+      ${K.nodes.length ? `<div class="graphWrap allWrap">${kgSvg(K)}</div>` : `<p class="empty">이어진 키워드가 없다. 증거 수준을 넓히거나 기준을 낮춰 본다.</p>`}</div>
+    <div class="col side">${kgSide(K)}</div>`;
+}
+
+// ---------- 두 키워드 연결: 검색·연결 찾기·관계 확인 ----------
+let cqTimer = {};
+async function searchKw(w) {
+  const q = S.cn["q" + w].trim();
+  if (!q) { S.cn["c" + w] = []; const ul = $("#cand" + w); if (ul) ul.innerHTML = ""; return; }
+  const body = { q, limit: 8, minPages: 1, everywhere: true, minConfidence: S.thr, ...(S.note === FREE ? { text: currentText() } : {}) };
+  const res = await fetch("/dev/keywords", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  S.cn["c" + w] = res.ok ? data.keywords : [];
+  const ul = $("#cand" + w); if (ul) ul.innerHTML = candItems(w);
+}
+async function runConnect() {
+  const C = S.cn;
+  if (!C.a || !C.b) return;
+  C.data = "loading"; C.rel = null; render();
+  const body = { a: C.a.id, b: C.b.id, minConfidence: S.thr, levels: levelsOn(), ...(S.note === FREE ? { text: currentText() } : {}) };
+  try {
+    const res = await fetch("/dev/keyword-connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    C.data = res.ok ? data : { error: res.status === 404 ? "키워드를 찾지 못했다. 다시 검색해서 고른다." : (data.detail || `HTTP ${res.status}`) };
+  } catch (e) { C.data = { error: String(e) }; }
+  C.gen = null; C.pairCand = C.data?.pair ? { id: "cn", a: C.data.pair.a, b: C.data.pair.b } : null;
+  render();
+  if (S.sg.auto && C.pairCand) runConnectGenerate();                    // 두 키워드가 이어지면 새 지식을 바로 만든다
+}
+async function runConnectGenerate() {
+  const C = S.cn, c = C.pairCand;
+  if (!c || C.gen === "loading") return;
+  await startGen("cn", c, (v) => { C.gen = v; });
+}
+async function runRelation(kind) {
+  let a, b, evidence, set;
+  if (kind === "edge") {
+    const K = S.kg, e = K.edges.find((x) => edgeKey(x) === S.kgEdge), t = Object.fromEntries(K.nodes.map((n) => [n.id, n]));
+    a = t[e.a]; b = t[e.b]; evidence = e.evidence.map((v) => ({ level: v.level, note: v.note, text: v.text }));
+    a = { name: a.title, concepts: a.concepts.map((c) => c.explanation) }; b = { name: b.title, concepts: b.concepts.map((c) => c.explanation) };
+    set = (v) => { S.kgRel = { key: S.kgEdge, ...v }; };
+  } else {
+    const D = S.cn.data;
+    a = { name: D.a.name, concepts: D.a.concepts.map((c) => c.explanation) }; b = { name: D.b.name, concepts: D.b.concepts.map((c) => c.explanation) };
+    evidence = (D.direct ? D.direct.evidence.map((v) => ({ level: v.level, note: v.note, text: v.text })) : []);
+    for (const p of D.paths.slice(0, 3)) p.edges.forEach((ed, i) => {
+      const v = ed.evidence[0]; if (v && evidence.length < 12) evidence.push({ level: "path", label: `${p.nodes[i].name} — ${p.nodes[i + 1].name}`, note: v.note, text: v.text });
+    });
+    set = (v) => { S.cn.rel = v; };
+  }
+  if (!evidence.length) { set({ error: "확인할 증거가 없다." }); return render(); }
+  set({ loading: true }); render();
+  try {
+    const res = await fetch("/dev/keyword-relation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a, b, evidence }) });
+    const data = await res.json().catch(() => ({}));
+    set(res.ok ? { data, items: evidence } : { error: data.detail || `HTTP ${res.status}` });
+  } catch (e) { set({ error: String(e) }); }
+  render();
+}
+
+// 패널 안 버튼·입력은 그래프를 다시 그려도 붙어 있게 body 에서 한꺼번에 받는다
+$("#body").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-ktab],[data-pick],[data-cand],[data-clear],[data-swap],[data-conn],[data-rel]");
+  if (!t) return;
+  const d = t.dataset, C = S.cn;
+  if (d.ktab) { S.kgTab = d.ktab; render(); }
+  else if (d.pick) { C[d.pick] = { id: d.id, name: d.name }; C["q" + d.pick] = ""; C["c" + d.pick] = []; C.data = null; S.kgTab = "connect"; render(); }
+  else if (d.cand) { C[d.cand] = { id: d.id, name: d.name }; C["q" + d.cand] = ""; C["c" + d.cand] = []; C.data = null; render(); }
+  else if (d.clear) { C[d.clear] = null; C.data = null; render(); }
+  else if (d.swap) { [C.a, C.b] = [C.b, C.a]; C.data = null; render(); if (C.a && C.b) runConnect(); }
+  else if (d.conn) {
+    if (d.conn !== "go") {
+      const [x, y] = d.conn.split("|"), t2 = Object.fromEntries(S.kg.nodes.map((n) => [n.id, n]));
+      C.a = { id: x, name: t2[x].title }; C.b = { id: y, name: t2[y].title }; S.kgTab = "connect";
+    }
+    runConnect();
+  } else if (d.rel) runRelation(d.rel);
+});
+$("#body").addEventListener("input", (e) => {
+  const w = e.target.id === "cqa" ? "a" : e.target.id === "cqb" ? "b" : null;
+  if (!w) return;
+  S.cn["q" + w] = e.target.value; clearTimeout(cqTimer[w]); cqTimer[w] = setTimeout(() => searchKw(w), 250);
+});
+$("#body").addEventListener("change", (e) => {
+  const l = e.target.dataset?.level;
+  if (!l) return;
+  S.glevels[l] = e.target.checked;
+  if (!levelsOn().length) { S.glevels[l] = true; e.target.checked = true; return; }      // 하나는 켜 둔다
+  S.cn.data = null; run();
+  if (S.kgTab === "connect" && S.cn.a && S.cn.b) runConnect();
+});
+
 const edgeKey = (e) => [e.a, e.b].sort().join("\u0001");
 const shortTitle = (id, n = 16) => {
   const t = (id === FREE ? "직접 입력" : id).replace(/\s+[0-9a-f]{32}$/, "");
@@ -410,7 +951,7 @@ function graphSvg(L) {
 
 function edgePanel(L) {
   const e = L.edges.find((x) => edgeKey(x) === S.edge);
-  if (!e) return `<p class="empty">선을 누르면 두 노트가 어떻게 이어지는지 여기에 나온다.</p>`;
+  if (!e) return `<p class="empty">선을 누르면 두 노트가 어떤 키워드를 같이 쓰는지 여기에 나온다.</p>`;
   return edgeDetail(e, L.center);
 }
 
@@ -420,18 +961,10 @@ function edgeDetail(e, center) {
       <b>${esc(b.labelA === b.labelB ? b.labelA : `${b.labelA} = ${b.labelB}`)}</b>
       <p class="note">${esc(A)}</p><div class="quote">${esc(b.quoteA || "—")}</div>
       <p class="note">${esc(B)}</p><div class="quote">${esc(b.quoteB || "—")}</div></div>`).join("");
-  const chains = e.paths.map((p) => {
-    const [s1, s2] = p.steps;
-    const step = (st) => `<div class="chain">${esc(st.from)} <span class="rule">${esc(TYPE_KO[st.type] || st.type)}</span> ${esc(st.to)}
-        <p class="note">${esc(shortTitle(st.note, 28))}</p>${st.quote ? `<div class="quote">${esc(st.quote)}</div>` : ""}</div>`;
-    return `<div class="card" style="padding:10px 12px">${step(s1)}${step(s2)}
-      <p class="note">→ <b>${esc(s1.from)}</b> 와 <b>${esc(s2.to)}</b> ${p.rule ? `<span class="rule yes">${esc(TYPE_KO[p.rule] || p.rule)}</span>` : `<span class="rule">규칙 없음</span>`}</p></div>`;
-  }).join("");
   return `<h3>${esc(A)} ↔ ${esc(B)}</h3>
     <p class="note">연결 점수 ${e.score} · ${center ? `<button class="linkBtn" data-open="${esc(e.a === center ? e.b : e.a)}">이 노트로 →</button>`
       : `<button class="linkBtn" data-focus="${esc(e.a)}">${esc(shortTitle(e.a, 14))} 중심으로 →</button> · <button class="linkBtn" data-focus="${esc(e.b)}">${esc(shortTitle(e.b, 14))} 중심으로 →</button>`}</p>
-    <h4>함께 다루는 개념 ${e.bridges.length}</h4>${concepts}
-    ${chains ? `<h4>두 노트를 가로지르는 관계 ${e.paths.length}</h4>${chains}` : `<h4>두 노트를 가로지르는 관계</h4><p class="note">한 노트의 관계가 다른 노트의 관계로 이어지는 곳은 없다.</p>`}`;
+    <h4>같은 키워드 ${e.bridges.length}</h4>${concepts}`;
 }
 
 // ---------- 전체 문서 그래프 ----------
@@ -527,7 +1060,7 @@ async function loadEdge(key) {
 function bindPanZoom(svg) {
   const vp = svg.querySelector("#vp");
   const apply = () => vp.setAttribute("transform", `translate(${S.view.x} ${S.view.y}) scale(${S.view.k})`);
-  const toSvg = (ev) => { const r = svg.getBoundingClientRect(); return [(ev.clientX - r.left) * 1000 / r.width, (ev.clientY - r.top) * 720 / r.height]; };
+  const toSvg = (ev) => { const r = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal; return [(ev.clientX - r.left) * vb.width / r.width, (ev.clientY - r.top) * vb.height / r.height]; };
   svg.addEventListener("wheel", (ev) => {
     ev.preventDefault();
     const [mx, my] = toSvg(ev), f = ev.deltaY < 0 ? 1.15 : 1 / 1.15, k = Math.min(6, Math.max(0.5, S.view.k * f));
@@ -537,14 +1070,6 @@ function bindPanZoom(svg) {
   svg.addEventListener("pointerdown", (ev) => { if (ev.target.closest("[data-anode],[data-aedge]")) return; drag = [...toSvg(ev), S.view.x, S.view.y]; try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* 합성 이벤트 등 */ } });
   svg.addEventListener("pointermove", (ev) => { if (!drag) return; const [mx, my] = toSvg(ev); S.view.x = drag[2] + mx - drag[0]; S.view.y = drag[3] + my - drag[1]; apply(); });
   svg.addEventListener("pointerup", () => { drag = null; });
-}
-
-// 보조 전제: 단계 근거가 아니라 같은 노트의 문맥 근거로 뒷받침한 사실 (결론이 이것을 써서 풀어 쓴다)
-function support(s) {
-  const stepEv = new Set((s.stepEvidenceIds || []).flat());
-  const extra = s.explanation.claims.filter((c) => c.kind === "premise" && !c.evidenceIds.some((x) => stepEv.has(x)));
-  if (!extra.length) return "";
-  return `<ul class="steps">${extra.map((c) => `<li>보조 전제 — ${esc(c.text)}</li>`).join("")}</ul>`;
 }
 
 // ---------- 화면 ----------
@@ -558,43 +1083,37 @@ function render() {
 
   if (S.mode === "suggest") {
     body.className = "body single";
-    const G = S.suggest;
-    let out = S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : "";
-    const STATUS = { candidate: "후보", hypothesis: "가설", excluded: "제외" };
-    const OUT = { entailed: "근거 있음", contradicted: "근거가 부정", unknown: "근거 불분명", same: "같은 개념", different: "다른 개념",
-                  uncertain: "애매", pass: "통과", fail: "실패" };
-    if (G === "loading") out += `<p class="count"><span class="spin"></span>연결 찾기 → 매개 개념·간선 검증 → 설명 생성 → 설명 검증…</p>`;
-    else if (G?.error) out += `<p class="error">${esc(G.error)}</p>`;
-    else if (G) {
-      const sc = G.screened || {};
-      out += `<p class="count">이어진 노트 ${G.links.length}개 · 두 노트의 관계를 이어 만든 제안 ${G.suggestions.length}개`
-        + `${sc.merged ? ` · 같은 지식 ${sc.merged}개 합침` : ""}${sc.rejected?.length ? ` · 검증에서 뺀 제안 ${sc.rejected.length}개` : ""} · ${G.ms}ms</p>`;
-      out += G.suggestions.map((s) => {
-        const [s1, s2] = s.steps;
-        const step = (st) => `<li>${esc(st.fromLabel)} —${esc(st.typeCode)}→ ${esc(st.toLabel)} <span class="path">· ${esc(st.note)}</span>
-          ${st.evidence.map((e) => `<div class="quote">${esc(e.quote)}</div>`).join("")}</li>`;
-        const bv = s.bridgeVerdict, ev = s.edgeVerdicts, xv = s.explanationVerdict;
-        return `<div class="card"><div class="cardHead"><span class="status ${s.status}">${STATUS[s.status]}</span>
-            <button data-open="${esc(s.note)}" title="${esc(s.note)}">${esc(s.note)}</button></div>
-          <p class="know">${esc(s.knowledge)}</p>
-          <p class="path">${esc(s.explainedBy.model)} 가 씀</p>
-          <p class="path"><b>${esc(s.source)}</b> → ${esc(s.bridge)} → <b>${esc(s.target)}</b>${s.statusReasons.length && s.status !== "candidate" ? ` · ${esc(s.statusReasons.join(", "))}` : ""}</p>
-          <div class="checks"><span>매개 개념: ${OUT[bv?.decision] || "검증 못 함"}</span>
-            ${ev.map((v, i) => `<span>간선 ${i + 1}: ${OUT[v.outcome]}</span>`).join("")}<span>설명: ${OUT[xv.overall]}</span></div>
-          <details><summary>근거와 판정 이유</summary><ul class="steps">${step(s1)}${step(s2)}</ul>
-            ${support(s)}
-            <ul class="steps">${bv ? `<li>매개 개념 — ${esc(bv.reason)}</li>` : ""}${ev.map((v, i) => `<li>간선 ${i + 1} — ${esc(v.reason)}</li>`).join("")}
-              ${xv.claimVerdicts.map((c) => `<li>${esc(c.claimRef)}: ${OUT[c.outcome]} — ${esc(c.reason)}</li>`).join("")}
-              ${xv.gaps.map((g) => `<li>빈 단계${g.stepOrder ? " " + g.stepOrder : ""} — ${esc(g.reason)}</li>`).join("")}</ul></details>
-        </div>`;
-      }).join("") || `<p class="empty">제안이 없다. 한 노트의 관계(A→B)와 다른 노트의 관계(B→C)가 같은 개념 B 로 이어질 때 제안이 생긴다.</p>`;
-      if (sc.rejected?.length) out += `<details><summary>검증에서 뺀 제안</summary><ul class="steps">${sc.rejected.map((r) =>
-        `<li>${esc(r.source)} → ${esc(r.bridge)} → ${esc(r.target)} — ${esc(r.reasons.join(", "))}
-          ${r.explanationVerdict.claimVerdicts.filter((c) => c.outcome === "fail").map((c) => `<div class="quote">${esc(c.reason)}</div>`).join("")}</li>`).join("")}</ul></details>`;
-      out += `<details><summary>합성 규칙 (예시 정책)</summary><p class="path">${G.rules.map(esc).join(" · ")}</p></details>`;
-    }
-    body.innerHTML = `<div class="col">${head}${out}</div>`;
+    body.innerHTML = `<div class="col">${suggestView(source)}</div>`;
     body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+    body.querySelector("[data-sg-toggle]")?.addEventListener("toggle", (ev) => { S.sg.showRest = ev.target.open; });
+  } else if (S.mode === "keywords") {
+    body.className = "body single";
+    body.innerHTML = keywordsView(source);
+    body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+    body.querySelectorAll("[data-kscope]").forEach((b) => b.addEventListener("click", () => { S.kscope = b.dataset.kscope; run(); }));
+    $("#kmulti")?.addEventListener("change", (e) => { S.kmulti = e.target.checked; run(); });
+    let kt;
+    $("#kq")?.addEventListener("input", (e) => {
+      S.kq = e.target.value; clearTimeout(kt);
+      kt = setTimeout(async () => { await runKeywords(true); const q = $("#kq"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }, 300);
+    });
+  } else if (S.mode === "links" && S.glens === "keywords") {
+    const K = S.kg, loaded = K && K !== "loading" && !K.error;
+    body.className = loaded ? "body" : "body single";
+    body.innerHTML = kgView(source);
+    if (loaded && K.nodes.length) {
+      bindPanZoom(body.querySelector(".allWrap svg"));
+      attachSim(body.querySelector(".allWrap svg"), K.sim);
+      body.querySelectorAll("[data-anode]").forEach((el) => el.addEventListener("click", () => {
+        if (wasDragged(el)) return;
+        S.kgSel = S.kgSel === el.dataset.anode ? null : el.dataset.anode; S.kgEdge = null; S.kgTab = "sel"; render();
+      }));
+      body.querySelectorAll("[data-aedge]").forEach((el) => el.addEventListener("click", () => { S.kgEdge = el.dataset.aedge; S.kgTab = "sel"; render(); }));
+    }
+    body.querySelectorAll("[data-kedge]").forEach((b) => b.addEventListener("click", () => { S.kgEdge = b.dataset.kedge; render(); }));
+    body.querySelectorAll("[data-ksel]").forEach((b) => b.addEventListener("click", () => { S.kgSel = b.dataset.ksel; S.kgEdge = null; render(); }));
+    body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open).then(run)));
+    body.querySelectorAll("[data-scope]").forEach((b) => b.addEventListener("click", () => { S.scope = b.dataset.scope; run(); }));
   } else if (S.mode === "links" && S.scope === "all") {
     const G = S.all, toggle = scopeToggle();
     if (!G || G === "loading" || G.error) {
@@ -603,7 +1122,7 @@ function render() {
     } else {
       body.className = "body";
       body.innerHTML = `<div class="col">${toggle}
-          <p class="count">노트 ${G.nodes.length}개 · 노트마다 가장 강한 연결 3개를 선으로 · 신뢰도 ${S.thr.toFixed(2)} 이상인 개념만 · 맨 아래 줄은 연결이 없는 노트 · 점을 끌어 옮길 수 있다</p>
+          <p class="count">노트 ${G.nodes.length}개 · 같은 키워드로 이어진 노트끼리 선 하나 (노트마다 가장 강한 3개) · 신뢰도 ${S.thr.toFixed(2)} 이상인 개념만 · 맨 아래 줄은 연결이 없는 노트 · 점을 끌어 옮길 수 있다</p>
           <div class="graphWrap allWrap">${allSvg(G)}</div></div><div class="col side">${allPanel(G)}</div>`;
       bindPanZoom(body.querySelector(".allWrap svg"));
       attachSim(body.querySelector(".allWrap svg"), G.sim);
@@ -628,7 +1147,7 @@ function render() {
       body.className = "body";
       const lonely = L.nodes.length < 2;
       body.innerHTML = `<div class="col">${scopeToggle()}${head}${S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : ""}
-          <p class="count">이어진 노트 ${L.nodes.length - 1}개 · 선 ${L.edges.length}개 · 선을 누르면 두 노트가 어떻게 이어지는지 보여 준다. 노트를 누르면 가운데로 옮기고, 끌면 자리를 옮긴다.</p>
+          <p class="count">같은 키워드로 이어진 노트 ${L.nodes.length - 1}개 · 선 ${L.edges.length}개 · 두 노트가 같은 키워드에 개념을 넣으면 선 하나로 잇는다. 선을 누르면 그 키워드와 양쪽 설명을 보여 준다. 노트를 누르면 가운데로 옮기고, 끌면 자리를 옮긴다.</p>
           ${lonely ? `<p class="empty">이어진 노트가 없다. 기준을 낮춰 본다.</p>` : `<div class="graphWrap">${graphSvg(L)}</div>`}</div>
         <div class="col side">${edgePanel(L)}</div>`;
       if (!lonely) attachSim(body.querySelector(".graphWrap svg"), L.sim);
@@ -649,8 +1168,9 @@ function render() {
       const ok = C.filter(valid), low = C.filter((c) => !valid(c));
       const row = (c) => `<li class="${valid(c) ? "" : "invalid"}"><button class="row" data-c="${c.ref}" aria-current="${c.ref === S.sel}">
         <span class="lbl">${esc(c.label)}</span><span class="meter"><i style="width:${Math.round(c.confidence * 100)}%"></i></span>
-        <span class="conf">${c.confidence.toFixed(2)}</span></button></li>`;
-      side = `<p class="count">유효 개념 ${ok.length} / ${C.length}</p><ul class="list">${ok.map(row).join("")}
+        <span class="conf">${c.confidence.toFixed(2)}</span></button>
+        ${c.description ? `<div class="desc">${esc(c.description.text.replace(/\*\*|__/g, ""))}</div>` : `<div class="desc none">설명 없음</div>`}</li>`;
+      side = `<p class="count">키워드 ${ok.length} / ${C.length} · 키워드마다 노트에서 풀어 쓴 문장 하나를 설명으로 뽑는다</p><ul class="list">${ok.map(row).join("")}
         ${low.length ? `<li class="cut">기준 미만 ${low.length}</li>${low.map(row).join("")}` : ""}</ul>`;
     }
     body.className = "body";

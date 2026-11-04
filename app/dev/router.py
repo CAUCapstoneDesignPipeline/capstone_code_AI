@@ -5,6 +5,15 @@
   GET /dev/notes         노트 폴더(AI_NOTES_DIR, 기본 data/private/notes)의 노트 id 목록
   GET /dev/notes/{id}    노트 원문 (NFC)
   GET /dev/index         노트 전체 색인을 미리 만든다 (노트 사이 연결용)
+  POST /dev/extract      {noteId?, text?} 노트 하나의 키워드와 키워드마다 설명 (결정적)
+  POST /dev/keyword-graph {noteId?, text?, scope, limit, minConfidence, levels} 키워드 노드와 증거가 있는 연결 (결정적)
+  POST /dev/keyword-connect {a, b, …}  두 키워드의 직접 증거와 다른 키워드를 거치는 경로 (결정적)
+  POST /dev/keyword-relation {a, b, evidence}  두 키워드가 관계가 있는지 LLM 으로 확인 (눌렀을 때만)
+  POST /dev/proposals/candidates {noteId?, text?, limit}  새 지식을 만들 요소 쌍 후보 (결정적)
+  POST /dev/proposals/screen {pairs}  후보 쌍을 LLM 으로 거른다 (눌렀을 때만)
+  POST /dev/proposals/generate {a, b}  두 요소 + 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만)
+  POST /dev/proposals/generate/stream {a, b}  같은 일을 진행 상황과 함께 SSE 로 (화면이 쓰는 쪽)
+  POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
   GET/POST/DELETE /dev/llm   관계 판정 LLM (extract-hybrid-1) 을 실행 중에 고르거나 끈다.
@@ -13,6 +22,7 @@
 배포용이 아니다. 로컬 노트를 읽어 보여 주므로 127.0.0.1 에서만 띄운다.
 """
 
+import asyncio
 import json
 import os
 import threading
@@ -22,7 +32,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES
@@ -180,8 +190,12 @@ def _links_corpus_locked(state):
     profile = EXTRACT_PROFILES[EXTRACT_PROFILE]
     t0 = time.monotonic()
     texts = {k: p.read_text(encoding="utf-8") for k, p in paths.items()}
+    if getattr(state, "entry_memo", None) is None:        # 노트마다 한 번만 만들고 디스크에 둔다: 노트 하나를 고쳐도 나머지는 다시 만들지 않고, 서버를 다시 켜도 빠르다
+        from app.services.links.corpus import DiskEntryMemo
+        state.entry_memo = DiskEntryMemo(Path("data/private/cache/note-entries"))
     corpus = build_corpus(texts, state.extractor, lambda ms: select_concepts(ms, profile), _policy_types(),
-                          profile.limits, version=state.extractor.method_version, lock=state.kiwi_lock, typer=typer)
+                          profile.limits, version=state.extractor.method_version, lock=state.kiwi_lock, typer=typer,
+                          memo=state.entry_memo)
     built_ms = int((time.monotonic() - t0) * 1000)
     state.links_cache = (signature, corpus, built_ms)
     return corpus, built_ms
@@ -252,6 +266,380 @@ async def links(q: LinksQuery, request: Request):
                         for b in l.bridges],
         } for l in result],
     }
+
+
+# ---- 키워드와 설명 추출 (노트 하나) ----
+
+class ExtractQuery(BaseModel):
+    noteId: str | None = None
+    text: str | None = None
+
+
+def _extract_note(state, note_id: str, text: str) -> list[dict]:
+    from app.api.v1.extract import concept_label, select_concepts
+    from app.services.concepts.describe import Describer
+    from app.services.concepts.markdown import Utf16Index
+    from app.services.relations.extract import _py_offsets
+
+    profile = EXTRACT_PROFILES[EXTRACT_PROFILE]
+    with state.kiwi_lock:
+        selected = select_concepts(state.extractor.extract(note_id, text), profile)
+    py: dict[str, list[tuple[int, int]]] = {}
+    for o in _py_offsets(text, selected):
+        py.setdefault(o.key, []).append((o.start, o.end))
+    describer, u16 = Describer(text), Utf16Index(text)
+    out = []
+    for key, ms in selected.items():
+        span = describer.of(py.get(key, []))
+        out.append({
+            "ref": key, "label": concept_label(ms), "confidence": round(min(ms[0].score, 2.0) / 2.0, 4),   # /extract 와 같다
+            "mentions": [{"startOffset": m.span.start, "endOffset": m.span.end} for m in ms],
+            "description": None if span is None else {"text": text[span[0]:span[1]],
+                                                      "startOffset": u16(span[0]), "endOffset": u16(span[1])},
+        })
+    return out
+
+
+@router.post("/extract")
+async def extract_keywords(q: ExtractQuery, request: Request):
+    """노트 하나에서 키워드(개념 후보)와 키워드마다 설명(원문 문장 하나)을 뽑는다. 키워드·신뢰도는 /extract 와 같은 추출기·profile 이고
+    (LLM 필터 없음), 설명은 app/services/concepts/describe.py 가 고른다. LLM 호출 없음."""
+    state = request.app.state
+    if state.extractor is None:
+        raise HTTPException(503, "추출기가 준비되지 않았다")
+    if q.text is not None:
+        if not q.text.strip() or len(q.text) > 50000:
+            raise HTTPException(400, "글이 비었거나 50,000자를 넘는다")
+        note_id, text = FREE_ID, _nfc(q.text)
+    else:
+        path = _note_paths().get(_nfc(q.noteId or ""))
+        if path is None:
+            raise HTTPException(404, "노트를 찾지 못했다")
+        note_id, text = _nfc(q.noteId), _nfc(path.read_text(encoding="utf-8"))
+    t0 = time.monotonic()
+    keywords = await run_in_threadpool(_extract_note, state, note_id, text)
+    return {"note": note_id, "keywords": keywords, "ms": int((time.monotonic() - t0) * 1000)}
+
+
+# ---- 키워드 (노드) 와 개념 ----
+
+class KeywordsQuery(BaseModel):
+    noteId: str | None = None   # 이 노트에 개념을 넣은 키워드만. 없으면 전체
+    text: str | None = None     # 붙여넣은 글이나 편집한 원문. 이 글을 노트로 더해서 만든다
+    q: str = ""                 # 키워드 이름·별칭에 들어 있는 글자
+    minPages: int = 1           # 이 수 이상의 페이지(노트)에 걸친 키워드만
+    limit: int = 60
+    minConfidence: float = 0.0
+    everywhere: bool = False    # true 면 text 가 있어도 그 노트의 키워드로 좁히지 않는다 (키워드 고르기용)
+
+
+def _keyword_set(state, corpus, min_confidence: float):
+    """(키워드들, conceptId → {note, confidence}, 키워드 사이 연결). 같은 색인·기준이면 만들어 둔 것을 다시 쓴다."""
+    from app.client import uid
+    from app.services.links import build_keyword_graph
+
+    cached = getattr(state, "keywords_cache", None)
+    if cached and cached[0] is corpus and cached[1] == min_confidence:
+        return cached[2]
+    built = build_keyword_graph(corpus, lambda n: uid("note", n), uid, min_confidence)
+    state.keywords_cache = (corpus, min_confidence, built)
+    return built
+
+
+@router.post("/keywords")
+async def keywords(q: KeywordsQuery, request: Request):
+    """노드 = 키워드, 키워드 안에 개념(설명 + 소스 페이지) 여러 개 (docs/knowledge-graph.md). 응답의 키워드는
+    app/schemas/knowledge.py 의 Keyword 로 검증된 것이고, 화면용으로 노트 이름·신뢰도를 덧붙였다. LLM 호출 없음."""
+    state = request.app.state
+    if state.extractor is None:
+        raise HTTPException(503, "추출기가 준비되지 않았다")
+    t0 = time.monotonic()
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    note_id = _nfc(q.noteId) if q.noteId else None
+    if q.text is not None:
+        if not q.text.strip() or len(q.text) > 50000:
+            raise HTTPException(400, "글이 비었거나 50,000자를 넘는다")
+        note_id = note_id if note_id in corpus.notes else FREE_ID
+        text = _nfc(q.text)
+        if note_id not in corpus.notes or corpus.notes[note_id].text != text:
+            corpus = await run_in_threadpool(_with_text, state, corpus, note_id, text)
+    elif note_id is not None and note_id not in corpus.notes:
+        raise HTTPException(404, "노트를 찾지 못했다")
+    mc = max(0.0, min(q.minConfidence, 1.0))
+    all_keywords, meta, _ = await run_in_threadpool(_keyword_set, state, corpus, mc)
+    needle = _nfc(q.q).strip().lower()
+
+    def wanted(k) -> bool:
+        if len(k.note_ids()) < max(1, q.minPages):
+            return False
+        if needle and not any(needle in s.lower() for s in (k.name, *k.aliases)):
+            return False
+        return note_id is None or q.everywhere or any(meta[c.conceptId]["note"] == note_id for c in k.concepts)
+
+    picked = [k for k in all_keywords if wanted(k)]
+    return {
+        "note": note_id, "notes": len(corpus.notes), "total": len(picked), "all": len(all_keywords),
+        "ms": int((time.monotonic() - t0) * 1000),
+        "keywords": [{
+            **k.model_dump(exclude={"concepts"}), "pages": len(k.note_ids()),
+            "concepts": [{"conceptId": c.conceptId, "origin": c.origin, "note": meta[c.conceptId]["note"],
+                          "confidence": meta[c.conceptId]["confidence"], "explanation": c.explanation,
+                          "startOffset": c.sources[0].span.startOffset, "endOffset": c.sources[0].span.endOffset}
+                         for c in k.concepts],
+        } for k in picked[:max(1, min(q.limit, 200))]],
+    }
+
+
+LEVEL_KO = {"sentence": "같은 문장", "heading": "제목과 본문", "paragraph": "같은 문단"}
+DEFAULT_LEVELS = ["sentence", "heading"]          # 문단은 느슨해서 기본으로는 끈다
+
+
+def _levels(levels: list[str]) -> tuple[str, ...]:
+    from app.services.links.keywords import LEVELS
+    bad = [x for x in levels if x not in LEVELS]
+    if bad or not levels:
+        raise HTTPException(400, f"levels 는 {', '.join(LEVELS)} 중에서 하나 이상")
+    return tuple(x for x in LEVELS if x in levels)
+
+
+def _edge_view(e: dict, levels: tuple[str, ...]) -> dict | None:
+    """고른 증거 수준만 남긴 선. 증거가 없으면 None. 증거는 센 수준부터 6개까지."""
+    score = sum(e["scores"].get(x, 0.0) for x in levels)
+    if score <= 0:
+        return None
+    ev = [{"level": x, "note": v["note"], "text": v["text"]} for x in levels for v in e["evidence"].get(x, [])]
+    pages = set().union(*(e["notes"].get(x, set()) for x in levels))
+    return {"score": round(score, 4), "pages": len(pages), "counts": {x: e["counts"][x] for x in levels if x in e["counts"]},
+            "evidence": ev[:6]}
+
+
+def _edge_index(state, corpus, min_confidence: float, levels: tuple[str, ...]):
+    """고른 증거 수준의 선·이웃·세기·허브 기준을 키워드 집합마다 한 번만 만든다. 요청마다 모든 선을 다시 훑지 않고, 고른 키워드의 이웃만 본다."""
+    from types import SimpleNamespace
+
+    kws, meta, edges = _keyword_set(state, corpus, min_confidence)
+    cached = getattr(state, "edge_index", None)
+    if not cached or cached[0] is not edges:
+        cached = state.edge_index = (edges, {})
+    if levels not in cached[1]:
+        views = {pair: v for pair, e in edges.items() if (v := _edge_view(e, levels))}
+        adj: dict[str, dict[str, float]] = {}
+        for (a, b), v in views.items():
+            adj.setdefault(a, {})[b] = v["score"]
+            adj.setdefault(b, {})[a] = v["score"]
+        degs = sorted(len(n) for n in adj.values())
+        by_note: dict[str, set[str]] = {}
+        for k in kws:
+            for c in k.concepts:
+                by_note.setdefault(meta[c.conceptId]["note"], set()).add(k.keywordId)
+        cached[1][levels] = SimpleNamespace(
+            kws=kws, meta=meta, by_id={k.keywordId: k for k in kws}, by_note=by_note, views=views, adj=adj,
+            strength={k: sum(n.values()) for k, n in adj.items()},
+            hub=max(40, degs[int(len(degs) * 0.99)] if degs else 0))        # 상위 1% 이상으로 이어진 키워드는 허브
+    return cached[1][levels]
+
+
+async def _graph_corpus(state, note_id: str | None, text: str | None):
+    """노트 폴더 색인 (붙여넣은 글이 있으면 그 글을 노트로 더해서). (색인, 노트 이름)."""
+    if state.extractor is None:
+        raise HTTPException(503, "추출기가 준비되지 않았다")
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    note_id = _nfc(note_id) if note_id else None
+    if text is not None:
+        if not text.strip() or len(text) > 50000:
+            raise HTTPException(400, "글이 비었거나 50,000자를 넘는다")
+        note_id = note_id if note_id in corpus.notes else FREE_ID
+        t = _nfc(text)
+        if note_id not in corpus.notes or corpus.notes[note_id].text != t:
+            corpus = await run_in_threadpool(_with_text, state, corpus, note_id, t)
+    elif note_id is not None and note_id not in corpus.notes:
+        raise HTTPException(404, "노트를 찾지 못했다")
+    return corpus, note_id
+
+
+class KeywordGraphQuery(BaseModel):
+    noteId: str | None = None
+    text: str | None = None
+    scope: str = "note"         # note: 이 노트의 키워드와 그 이웃 · all: 전체에서 연결이 센 키워드
+    limit: int = 0              # 가져올 키워드 수 (0 = note 14 / all 200)
+    minConfidence: float = 0.0
+    levels: list[str] = DEFAULT_LEVELS     # 쓸 증거 수준: sentence · heading · paragraph
+
+
+@router.post("/keyword-graph")
+async def keyword_graph(q: KeywordGraphQuery, request: Request):
+    """키워드를 노드로, 증거가 있는 키워드끼리 선으로 (app/services/links/keywords.py build_keyword_graph).
+    증거 수준은 같은 문장 · 제목과 본문 · 같은 문단이고 levels 로 고른다. 선마다 증거 문장을, 노드마다 개념(설명 + 페이지)을 담는다.
+    LLM 호출 없음 (관계 확인은 /dev/keyword-relation)."""
+    state = request.app.state
+    if q.scope not in ("note", "all"):
+        raise HTTPException(400, "scope 는 note 또는 all")
+    levels = _levels(q.levels)
+    t0 = time.monotonic()
+    corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
+    if q.scope == "note" and note_id is None:
+        raise HTTPException(400, "note 범위에는 noteId 또는 text 가 필요하다")
+    mc = max(0.0, min(q.minConfidence, 1.0))
+    ei = await run_in_threadpool(_edge_index, state, corpus, mc, levels)
+    kws, meta, by_id, adj, strength = ei.kws, ei.meta, ei.by_id, ei.adj, ei.strength
+    mine = ei.by_note.get(note_id, set()) if note_id else set()
+    if q.scope == "note":
+        own = sorted((k for k in mine if k in strength), key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 14]
+        near: dict[str, float] = {}
+        for k in own:
+            for y, sc in adj[k].items():
+                if y not in own:
+                    near[y] = near.get(y, 0.0) + sc
+        chosen = own + sorted(near, key=lambda k: (-near[k], by_id[k].name))[:max(6, len(own) * 3 // 4)]
+    else:
+        pool = [k for k in strength if len(by_id[k].note_ids()) >= 2]
+        chosen = sorted(pool, key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 200]
+    inside = set(chosen)
+    out_edges = sorted(({"a": a, "b": b, **ei.views[(a, b)]} for a in chosen for b in adj.get(a, {}) if b in inside and a < b),
+                       key=lambda e: -e["score"])
+    degree: dict[str, int] = {}
+    for e in out_edges:
+        degree[e["a"]] = degree.get(e["a"], 0) + 1
+        degree[e["b"]] = degree.get(e["b"], 0) + 1
+    nodes = [{
+        "id": k, "title": by_id[k].name, "aliases": by_id[k].aliases[:4], "pages": len(by_id[k].note_ids()),
+        "inNote": k in mine, "degree": degree.get(k, 0),
+        "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation} for c in by_id[k].concepts[:6]],
+    } for k in chosen]
+    return {"note": note_id, "scope": q.scope, "levels": list(levels), "nodes": nodes, "edges": out_edges,
+            "notes": len(corpus.notes), "keywords": len(kws), "linkedKeywords": len(strength), "mine": len(mine),
+            "mineLinked": sum(1 for k in mine if k in strength), "ms": int((time.monotonic() - t0) * 1000)}
+
+
+class ConnectQuery(BaseModel):
+    a: str                      # keywordId
+    b: str
+    noteId: str | None = None   # 붙여넣은 글의 키워드를 고를 때만 (색인을 같은 것으로 맞추려고)
+    text: str | None = None
+    minConfidence: float = 0.0
+    levels: list[str] = DEFAULT_LEVELS
+
+
+@router.post("/keyword-connect")
+async def keyword_connect(q: ConnectQuery, request: Request):
+    """두 키워드가 어떻게 이어지는지: 직접 증거와, 다른 키워드를 거치는 경로 (최대 3칸). 그래프에 그리지 않은 키워드도 된다.
+    너무 많은 키워드와 이어진 허브 키워드는 경로의 중간으로 쓰지 않는다 (아무것과도 이어져서 말해 주는 게 없다). LLM 호출 없음."""
+    state = request.app.state
+    levels = _levels(q.levels)
+    corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
+    mc = max(0.0, min(q.minConfidence, 1.0))
+    ei = await run_in_threadpool(_edge_index, state, corpus, mc, levels)
+    meta, by_id, views, adj, hub = ei.meta, ei.by_id, ei.views, ei.adj, ei.hub
+    if q.a not in by_id or q.b not in by_id or q.a == q.b:
+        raise HTTPException(404, "키워드를 찾지 못했다 (같은 키워드 둘이면 안 된다)")
+
+    def work():
+        key = lambda x, y: (x, y) if x < y else (y, x)
+        edge = lambda x, y: {"a": x, "b": y, **views[key(x, y)]}
+        a, b = q.a, q.b
+        na, nb = adj.get(a, {}), adj.get(b, {})
+        skipped = 0
+        paths: list[tuple[int, float, list[str]]] = []
+        for c in set(na) & set(nb) - {a, b}:
+            if len(adj[c]) > hub:
+                skipped += 1
+                continue
+            paths.append((2, min(na[c], nb[c]), [a, c, b]))
+        top = lambda nbr, other: sorted((x for x in nbr if x != other and len(adj[x]) <= hub), key=lambda x: -nbr[x])[:25]
+        for x in top(na, b):
+            for y in top(nb, a):
+                if x != y and y in adj[x]:
+                    paths.append((3, min(na[x], adj[x][y], nb[y]), [a, x, y, b]))
+        paths.sort(key=lambda p: (p[0], -p[1], p[2]))
+        two, three = [p for p in paths if p[0] == 2][:6], [p for p in paths if p[0] == 3][:4]
+        used = {k for p in (*two, *three) for k in p[2]} | {a, b}
+
+        def info(k: str, full: bool = False) -> dict:
+            kw = by_id[k]
+            return {"id": k, "name": kw.name, "aliases": kw.aliases[:4], "pages": len(kw.note_ids()), "degree": len(adj.get(k, {})),
+                    "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation}
+                                 for c in kw.concepts[:6 if full else 2]]}
+        return {
+            "pair": _best_pair(by_id[a], by_id[b], meta),
+            "a": info(a, True), "b": info(b, True), "levels": list(levels), "hubThreshold": hub, "hubsSkipped": skipped,
+            "direct": ({"a": a, "b": b, **views[key(a, b)]} if key(a, b) in views else None),
+            "paths": [{"hops": len(p) - 1, "strength": round(sc, 4), "nodes": [info(k) for k in p],
+                       "edges": [edge(p[i], p[i + 1]) for i in range(len(p) - 1)]} for _, sc, p in (*two, *three)],
+            "nodes": {k: info(k) for k in used},
+        }
+    out = await run_in_threadpool(work)
+    out["note"] = note_id
+    return out
+
+
+def _best_pair(ka, kb, meta) -> dict | None:
+    """두 키워드가 이어졌을 때 새 지식을 만들 요소 쌍: 서로 다른 노트의 혼자 읽을 수 있는 설명 둘. 공유 낱말이 많은 쌍을, 같으면 신뢰도가 높은 쌍을 고른다.
+    (임베딩을 새로 계산하지 않으려고 낱말만 본다.)"""
+    from app.services.links.pairing import TOKEN, elements_from, gate
+
+    els = [e for e in elements_from([ka, kb], meta) if gate(e.text)]
+    best = None
+    for x in (e for e in els if e.keyword_id == ka.keywordId):
+        for y in (e for e in els if e.keyword_id == kb.keywordId):
+            if x.note != y.note:
+                score = (len(set(TOKEN.findall(x.text.lower())) & set(TOKEN.findall(y.text.lower()))), min(x.confidence or 0, y.confidence or 0))
+                if best is None or score > best[0]:
+                    best = (score, x, y)
+    return None if best is None else {"a": _side(best[1]), "b": _side(best[2])}
+
+
+class RelSide(BaseModel):
+    name: str
+    concepts: list[str] = []
+
+
+class RelEvidence(BaseModel):
+    level: str                  # sentence | heading | paragraph | path
+    label: str = ""             # path 일 때 어느 두 키워드 사이의 증거인지
+    note: str
+    text: str
+
+
+class RelationQuery(BaseModel):
+    a: RelSide
+    b: RelSide
+    evidence: list[RelEvidence]
+
+
+def _relation_judge(state):
+    """관계 확인 LLM. AI_KEYWORD_RELATION_LLM_* → AI_LLM_* → ANTHROPIC_API_KEY 의 anthropic 기본 모델, effort low."""
+    judge = getattr(state, "kwrel", None)
+    if judge is None:
+        from app.main import role_llm_config
+        from app.services.links.relation_llm import KeywordRelationJudge
+        from app.services.llm import make_llm
+        cfg = role_llm_config("keyword_relation", "low")
+        if cfg is None:
+            raise HTTPException(503, "관계 확인 LLM 이 없다. .env 에 ANTHROPIC_API_KEY 를 넣거나 AI_KEYWORD_RELATION_LLM_PROVIDER 를 정한다")
+        judge = state.kwrel = KeywordRelationJudge(make_llm(cfg), Path("data/private/cache/keyword-relations"))
+    return judge
+
+
+@router.post("/keyword-relation")
+async def keyword_relation(q: RelationQuery, request: Request):
+    """두 키워드와 그 증거를 LLM 에 보내 관계가 있는지·어떤 관계인지 묻는다 (버튼을 눌렀을 때만 부른다). 증거 id 를 인용하지 못한
+    판정은 받아들이지 않는다. 같은 입력은 디스크 캐시에서 돌려준다. 로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나간다)."""
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not 1 <= len(q.evidence) <= 12:
+        raise HTTPException(400, "증거는 1~12개")
+    if any(e.level not in ("sentence", "heading", "paragraph", "path") for e in q.evidence):
+        raise HTTPException(400, "level 은 sentence · heading · paragraph · path")
+    side = lambda s: {"name": s.name[:100], "concepts": [c[:400] for c in s.concepts[:6]]}
+    ev = [{"level": e.level, "label": e.label[:200], "note": e.note[:200], "text": e.text[:800]} for e in q.evidence]
+    judge = _relation_judge(request.app.state)
+    try:
+        res = await run_in_threadpool(judge.judge, side(q.a), side(q.b), ev)
+    except LLMError as e:
+        raise HTTPException(502, f"관계 확인 LLM 오류: {e.kind}")
+    return {**res, "model": judge.model, "promptVersion": judge.prompt_version}
 
 
 def _with_text(state, corpus, note_id: str, text: str):
@@ -325,14 +713,14 @@ async def suggest(q: SuggestQuery, request: Request):
     t0 = time.monotonic()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=request.app), base_url="http://ai",
                                  timeout=130) as http:
-        # 서버의 동시 처리 한도(AI_MAX_INFLIGHT, playground 기본 8)보다 작게: 설명 6개를 한 번에 보낸다
+        # 서버의 동시 처리 한도(AI_MAX_INFLIGHT, 기본 8)보다 작게: 설명 6개를 한 번에 보낸다
         client = AiClient("http://ai", state.settings.service_token, http,
                           concurrency=max(1, min(6, state.settings.max_inflight - 1)))
         try:
             res = await suggest_knowledge(client, note, candidates, playground_policy(), k=max(1, min(q.k, 30)),
                                           min_confidence=max(0.0, min(q.minConfidence, 1.0)), embedding_profile=emb,
                                           links_profile="links-hybrid-1" if state.typer else "links-det-1",
-                                          edges_profile="edges-llm-1" if state.edge_judge else "edges-det-1",
+                                          edges_profile="edges-llm-2" if state.edge_judge else "edges-det-1",
                                           verify_profile="explanation-hybrid-2" if state.explanation_judge
                                           else "explanation-det-3")
         except AiCallError as e:
@@ -349,6 +737,249 @@ async def suggest(q: SuggestQuery, request: Request):
     res["ms"] = int((time.monotonic() - t0) * 1000)
     res["rules"] = [f"{r['firstType']} + {r['secondType']} → {r['resultType']}" for r in playground_policy()["compositionRules"]]
     return res
+
+
+# ---- 새 지식 제안: 키워드 A 의 요소 + 키워드 B 의 요소 + 외부 지식 ----
+
+EMBEDDING_STORE = Path("data/private/cache/element-embeddings.npz")
+
+
+def _pairing_index(state, corpus, min_confidence: float):
+    """(색인, 임베딩을 썼는지, 만든 ms). 같은 색인·기준이면 만들어 둔 것을 다시 쓴다. 임베딩은 처음에만 오래 걸리고 디스크에 남는다."""
+
+    from app.services.links.pairing import EmbeddingStore, PairingIndex, elements_from
+
+    with _BUILD_LOCK:
+        cached = getattr(state, "pairing_cache", None)
+        if cached and cached[0] is corpus and cached[1] == min_confidence:
+            return cached[2], cached[3], 0
+        t0 = time.monotonic()
+        kws, meta, _ = _keyword_set(state, corpus, min_confidence)
+        elements = elements_from(kws, meta)
+        store = getattr(state, "emb_store", None)
+        if store is None:
+            store = state.emb_store = EmbeddingStore(EMBEDDING_STORE)
+        try:
+            vectors = store.vectors([e.text for e in elements])
+        except Exception:
+            vectors = None
+        index = PairingIndex(elements, vectors)
+        built = int((time.monotonic() - t0) * 1000)
+        state.pairing_cache = (corpus, min_confidence, index, vectors is not None)
+        return index, vectors is not None, built
+
+
+def _side(e) -> dict:
+    return {"keyword": e.keyword, "keywordId": e.keyword_id, "note": e.note, "noteId": e.note_id, "conceptId": e.concept_id,
+            "text": e.text, "start": e.start, "end": e.end, "quote": e.quote, "confidence": e.confidence}
+
+
+class ProposalQuery(BaseModel):
+    noteId: str | None = None
+    text: str | None = None
+    minConfidence: float = 0.0
+    limit: int = 12
+
+
+@router.post("/proposals/candidates")
+async def proposal_candidates(q: ProposalQuery, request: Request):
+    """이 노트의 요소(키워드마다 설명 하나)와 다른 노트의 요소를 이을 후보 쌍. 신호는 공유 낱말 · 공통 키워드 언급 · 임베딩 근접이고,
+    겹칠수록 앞에 둔다 (임베딩이 있으면 코사인 0.5 미만은 버린다). 결정적이고 LLM 호출이 없다.
+    임베딩은 로컬 bge-m3 이고 처음 한 번만 오래 걸린다 (이미 받아 둔 모델만 쓴다, 없으면 임베딩 없이 돈다)."""
+    import hashlib
+
+    from app.services.links.pairing import COSINE_FLOOR
+
+    state = request.app.state
+    corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
+    if note_id is None:
+        raise HTTPException(400, "noteId 또는 text 가 필요하다")
+    mc = max(0.0, min(q.minConfidence, 1.0))
+    t0 = time.monotonic()
+    index, embedded, built_ms = await run_in_threadpool(_pairing_index, state, corpus, mc)
+    anchors = index.anchors(note_id)
+    cands, counts = await run_in_threadpool(index.candidates, anchors, 3, 1, max(1, min(q.limit, 30)))
+    return {
+        "note": note_id, "anchors": len(anchors), "elements": len(index.el), "embeddings": embedded, "cosineFloor": COSINE_FLOOR if embedded else None,
+        "channels": counts, "buildMs": built_ms, "ms": int((time.monotonic() - t0) * 1000),
+        "candidates": [{"id": hashlib.sha1(f"{c.a.concept_id}|{c.b.concept_id}".encode()).hexdigest()[:16], "a": _side(c.a), "b": _side(c.b),
+                        "channels": list(c.channels), "cos": c.cos, "shared": list(c.shared), "via": list(c.via), "score": round(c.score, 3)}
+                       for c in cands],
+    }
+
+
+SCREEN_MODEL = "claude-haiku-5-5"      # 선별은 짧은 판단이라 작은 모델로 충분하다 (275쌍 시험: 정밀도 44% · 재현율 40%, Sonnet 35% · 50%)
+
+
+def _proposal_llm(state, key: str, role: str, effort: str, timeout: float | None = None, default_model: str | None = None):
+    """역할별 LLM (한 번 만들어 state 에 둔다). AI_{ROLE}_LLM_* → AI_LLM_* → ANTHROPIC_API_KEY 의 anthropic 기본 모델.
+    default_model: 환경 변수로 모델을 정하지 않았을 때만 쓰는 이 역할의 기본 모델 (anthropic 일 때)."""
+    cache = state.__dict__.setdefault("proposal_llms", {})
+    if key not in cache:
+        from dataclasses import replace
+
+        from app.main import role_llm_config
+        from app.services.llm import make_llm
+        cfg = role_llm_config(role, effort)
+        if cfg is None:
+            raise HTTPException(503, f"{role} LLM 이 없다. .env 에 ANTHROPIC_API_KEY 를 넣거나 AI_{role.upper()}_LLM_PROVIDER 를 정한다")
+        if timeout:
+            cfg = replace(cfg, timeout=max(cfg.timeout, timeout))
+        explicit = any(os.environ.get(n) for n in (f"AI_{role.upper()}_LLM_MODEL", "AI_LLM_MODEL"))
+        if default_model and cfg.provider == "anthropic" and not explicit:
+            cfg = replace(cfg, model=default_model)
+        cache[key] = (cfg, make_llm(cfg))
+    return cache[key]
+
+
+class ScreenSide(BaseModel):
+    keyword: str
+    text: str
+
+
+class ScreenPair(BaseModel):
+    id: str
+    a: ScreenSide
+    b: ScreenSide
+
+
+class ScreenQuery(BaseModel):
+    pairs: list[ScreenPair]
+
+
+@router.post("/proposals/screen")
+async def proposal_screen(q: ScreenQuery, request: Request):
+    """후보 쌍이 합쳐서 새 지식이 될 만한지 LLM 으로 거른다 (눌렀을 때만). 로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나간다)."""
+    from app.services.links.pair_screen import PairScreen
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not 1 <= len(q.pairs) <= 30:
+        raise HTTPException(400, "쌍은 1~30개")
+    state = request.app.state
+    judge = getattr(state, "pair_screen", None)
+    if judge is None:
+        _, llm = _proposal_llm(state, "screen", "pair_screen", "low", default_model=SCREEN_MODEL)
+        judge = state.pair_screen = PairScreen(llm, Path("data/private/cache/pair-screens"))
+    pairs = [{"id": p.id, "a": {"keyword": p.a.keyword[:100], "text": p.a.text[:600]}, "b": {"keyword": p.b.keyword[:100], "text": p.b.text[:600]}}
+             for p in q.pairs]
+    try:
+        res = await run_in_threadpool(judge.screen, pairs)
+    except LLMError as e:
+        raise HTTPException(502, f"선별 LLM 오류: {e.kind}")
+    return {"results": res, "model": judge.model, "promptVersion": judge.prompt_version}
+
+
+def _knowledge_generator(state):
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm.anthropic_llm import WEB_SEARCH_BASIC
+
+    gen = getattr(state, "knowledge_generator", None)
+    if gen is None:
+        cfg, llm = _proposal_llm(state, "generate", "suggest", "medium", timeout=240)
+        if not hasattr(llm, "complete_web"):
+            raise HTTPException(503, f"웹 검색은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
+        gen = state.knowledge_generator = KnowledgeGenerator(llm, Path("data/private/cache/new-knowledge"),
+                                                             os.environ.get("AI_SEARCH_TOOL") or WEB_SEARCH_BASIC)
+    return gen
+
+
+class GenSide(BaseModel):
+    keyword: str
+    note: str
+    noteId: str
+    conceptId: str
+    text: str
+    start: int
+    end: int
+    quote: str
+
+
+class GenerateQuery(BaseModel):
+    a: GenSide
+    b: GenSide
+
+
+@router.post("/proposals/generate")
+async def proposal_generate(q: GenerateQuery, request: Request):
+    """두 요소와 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만, 검색을 하므로 20~60초). 외부 출처는 검색 결과에 실제로 나온 URL 만 남긴다.
+    로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나가고 검색어에 섞일 수 있다)."""
+    from app.client import uid
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    gen = _knowledge_generator(request.app.state)
+    if q.a.note == q.b.note:
+        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
+    a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
+    try:
+        res = await run_in_threadpool(gen.generate, a, b, uid("generated", q.a.conceptId, q.b.conceptId))
+    except LLMError as e:
+        raise HTTPException(502, f"생성 LLM 오류: {e.kind}")
+    return res
+
+
+class _Cancelled(Exception):
+    """화면이 연결을 끊었다. 모델 호출을 멈추려고 진행 알림 콜백에서 던진다."""
+
+
+@router.post("/proposals/generate/stream")
+async def proposal_generate_stream(q: GenerateQuery, request: Request):
+    """/proposals/generate 와 같은 일을 하되, 진행 상황을 SSE(text/event-stream) 로 그때그때 보낸다.
+    이벤트 (event: 이름 / data: JSON, 모두 t = 시작 뒤 초):
+      start(model, tool) · cached · thinking · search_start · search(query) · search_results(results[{url,title}]) ·
+      writing(chars) · validating(sources) · result(result = /proposals/generate 의 응답) · error(status, message)
+    연결을 끊으면 모델 호출도 멈춘다 (검색·토큰을 더 쓰지 않는다). 사전 검사 실패(403·503·400)는 보통 HTTP 오류로 돌려준다."""
+    from app.client import uid
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    gen = _knowledge_generator(request.app.state)
+    if q.a.note == q.b.note:
+        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
+    a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
+    loop, queue, cancelled, t0 = asyncio.get_running_loop(), asyncio.Queue(), threading.Event(), time.monotonic()
+
+    def emit(ev: dict):
+        if cancelled.is_set():
+            raise _Cancelled()
+        loop.call_soon_threadsafe(queue.put_nowait, {**ev, "t": round(time.monotonic() - t0, 1)})
+
+    def work():
+        try:
+            emit({"type": "result", "result": gen.generate(a, b, uid("generated", q.a.conceptId, q.b.conceptId), on_event=emit)})
+        except _Cancelled:
+            pass
+        except LLMError as e:
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "status": 502, "message": f"생성 LLM 오류: {e.kind}", "t": round(time.monotonic() - t0, 1)})
+        except Exception as e:                                        # 스트림이 말없이 끊기지 않게 끝을 알린다
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "status": 500, "message": f"{type(e).__name__}", "t": round(time.monotonic() - t0, 1)})
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    task = asyncio.ensure_future(run_in_threadpool(work))
+
+    async def stream():
+        try:
+            while True:
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=10)
+                except asyncio.TimeoutError:
+                    if await request.is_disconnected():
+                        break
+                    yield ": keep-alive\n\n"                          # 프록시가 조용한 연결을 끊지 않게
+                    continue
+                if ev is None:
+                    break
+                yield f"event: {ev['type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        finally:
+            cancelled.set()                                           # 화면이 떠났으면 다음 알림에서 모델 호출을 멈춘다
+            task.done()                                               # task 를 끝까지 붙들어 둔다 (참조가 사라지면 일이 취소될 수 있다)
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ---- 관계 연결 그래프 ----

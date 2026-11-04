@@ -80,6 +80,7 @@ def test_request_shapes():
     kw = Recorder.last
     assert kw["output_config"]["format"] == {"type": "json_schema", "schema": SCHEMA}
     assert "fallbacks" not in kw and "betas" not in kw            # 계약: 자동 모델 fallback 금지
+    assert kw["system"] == [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]   # 고정 system 캐시
 
     make_llm(LLMConfig("openai", "m"), client=Recorder(("responses", "create"), openai_reply('{"ok":true}'))) \
         .complete_json("s", "u", SCHEMA, "t")

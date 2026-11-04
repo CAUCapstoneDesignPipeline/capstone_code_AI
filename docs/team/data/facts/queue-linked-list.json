@@ -1,0 +1,25 @@
+[
+ {
+  "quote": "큐(FIFO)를 구현하는 방법 중 하나",
+  "kind": "implements",
+  "subject": "연결 리스트 큐",
+  "subjectKey": "linked_list_queue",
+  "role": "queue"
+ },
+ {
+  "quote": "enqueue, dequeue 모두 O(1)",
+  "kind": "op_cost",
+  "subject": "연결 리스트 큐",
+  "subjectKey": "linked_list_queue",
+  "op": "enqueue",
+  "expr": "1"
+ },
+ {
+  "quote": "enqueue, dequeue 모두 O(1)",
+  "kind": "op_cost",
+  "subject": "연결 리스트 큐",
+  "subjectKey": "linked_list_queue",
+  "op": "dequeue",
+  "expr": "1"
+ }
+]

@@ -1,0 +1,52 @@
+[
+ {
+  "quote": "간선 가중치가 음수가 아니어야 한다",
+  "kind": "requires",
+  "subject": "다익스트라",
+  "subjectKey": "dijkstra",
+  "condition": "간선 가중치가 음수가 아님"
+ },
+ {
+  "quote": "모든 정점을 큐에 한 번씩 넣는다 → 삽입은 V번",
+  "kind": "needs_op",
+  "subject": "다익스트라",
+  "subjectKey": "dijkstra",
+  "role": "priority_queue",
+  "op": "insert",
+  "expr": "V"
+ },
+ {
+  "quote": "큐에서 최솟값을 꺼내는 건 정점마다 한 번이라 최솟값 추출도 V번",
+  "kind": "needs_op",
+  "subject": "다익스트라",
+  "subjectKey": "dijkstra",
+  "role": "priority_queue",
+  "op": "extract_min",
+  "expr": "V"
+ },
+ {
+  "quote": "간선마다 많아야 한 번이니 키 감소는 최대 E번",
+  "kind": "needs_op",
+  "subject": "다익스트라",
+  "subjectKey": "dijkstra",
+  "role": "priority_queue",
+  "op": "decrease_key",
+  "expr": "E"
+ },
+ {
+  "quote": "큐 크기는 최대 V 이다",
+  "kind": "size_bound",
+  "subject": "다익스트라",
+  "subjectKey": "dijkstra",
+  "role": "priority_queue",
+  "expr": "V"
+ },
+ {
+  "quote": "큐 연산을 빼면, 인접 리스트를 한 번씩 훑고 dist 를 초기화하는 데 O(V+E) 가 든다",
+  "kind": "extra_cost",
+  "subject": "다익스트라",
+  "subjectKey": "dijkstra",
+  "role": "priority_queue",
+  "expr": "V+E"
+ }
+]

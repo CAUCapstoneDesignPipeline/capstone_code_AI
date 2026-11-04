@@ -3,7 +3,8 @@
 BE 가 할 일을 그대로 흉내 낸다: 개념 표기마다 벡터를 만들고, cosine 최근접 k 개를 병합 후보 쌍으로 묶어
 /merge-decisions 에 similarity 와 함께 보낸다. 'same' 만 합친다. 설계 7장 기준: 잘못 합침 5% 이하.
 
-  uv run --extra embeddings python experiments/alias_embeddings/merge_pipeline.py --include-draft [--k 5]
+  uv run --extra embeddings python experiments/alias_embeddings/merge_pipeline.py --include-draft [--k 5] [--profile merge-hybrid-1]
+merge-hybrid-1 은 검증 LLM(ANTHROPIC_API_KEY 등)이 필요하다. LLM 판정은 data/private/cache/verifications/merges 에 캐시한다.
 """
 
 import argparse
@@ -25,6 +26,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--include-draft", action="store_true")
     ap.add_argument("--k", type=int, default=5)
+    ap.add_argument("--profile", default="merge-det-1", choices=["merge-det-1", "merge-hybrid-1"])
     args = ap.parse_args()
 
     import csv
@@ -85,8 +87,17 @@ def main():
         return r.json()
 
     idf = Idf.load(ROOT / "data/private/concepts/idf.json")
+    merge_judge = None
+    if args.profile == "merge-hybrid-1":
+        from app.main import role_llm_config
+        from app.services.llm import make_llm
+        from app.services.reasoning.identity_llm import MergeJudge
+        cfg = role_llm_config("verify", "low")
+        if cfg is None:
+            sys.exit("merge-hybrid-1 에는 검증 LLM 설정이 필요하다 (ANTHROPIC_API_KEY 등)")
+        merge_judge = MergeJudge(make_llm(cfg), ROOT / "data/private/cache/verifications/merges")
     app = create_app(Settings(service_token=TOKEN, concept_idf=Path("x"), embedding_profiles=(PROFILE,)),
-                     extractor=ConceptExtractor(ExtractConfig(), idf))
+                     extractor=ConceptExtractor(ExtractConfig(), idf), merge_judge=merge_judge)
     with TestClient(app) as c:
         any_note = next(iter(bodies))
         vecs = []
@@ -135,7 +146,7 @@ def main():
                 i, j = cand[n]
                 pairs.append({"pairId": f"p{n}", "left": occ[0], "right": occ[1], "similarity": round(float(sims[i, j]), 6)})
             notes = sorted({items[x][2] for n in batch for x in cand[n]})
-            r = post(c, "/merge-decisions", {"context": ctx(notes[0]), "profileVersion": "merge-det-1",
+            r = post(c, "/merge-decisions", {"context": ctx(notes[0]), "profileVersion": args.profile,
                                               "documents": [snap(m) for m in notes], "evidence": list(ev.values()),
                                               "pairs": pairs})
             decisions.update({d["pairId"]: d["decision"] for d in r["decisions"]})
@@ -148,7 +159,7 @@ def main():
     tp = sum(groups[i] == groups[j] for i, j in same)
     print(f"표기 {len(items)}개 · 같은 개념 쌍 {n_pos} · 최근접 {args.k} 후보 쌍 {len(cand)} (그중 같은 개념 {in_cand}, "
           f"후보 재현율 {in_cand / n_pos:.0%})")
-    print(f"merge-det-1 same {len(same)} → 맞음 {tp} · 잘못 합침 {len(same) - tp} "
+    print(f"{args.profile} same {len(same)} → 맞음 {tp} · 잘못 합침 {len(same) - tp} "
           f"({(len(same) - tp) / len(same) if same else 0:.0%}) · 전체 재현율 {tp / n_pos:.0%} · uncertain {len(unc)} "
           f"(그중 같은 개념 {sum(groups[i] == groups[j] for i, j in unc)})")
     for i, j in same:

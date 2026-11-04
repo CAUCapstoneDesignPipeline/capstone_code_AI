@@ -1,0 +1,25 @@
+# Explicitly disable default syslog ingestion. Only sanitized observer fields are sent.
+logging:
+  receivers:
+    ai_health:
+      type: files
+      include_paths: [/var/log/capstone-ai/health.jsonl]
+  processors:
+    parse_health:
+      type: parse_json
+  service:
+    pipelines:
+      default_pipeline:
+        receivers: []
+      ai_health:
+        receivers: [ai_health]
+        processors: [parse_health]
+metrics:
+  receivers:
+    hostmetrics:
+      type: hostmetrics
+      collection_interval: 60s
+  service:
+    pipelines:
+      default_pipeline:
+        receivers: [hostmetrics]

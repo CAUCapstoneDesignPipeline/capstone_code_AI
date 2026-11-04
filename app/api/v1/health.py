@@ -16,7 +16,8 @@ def ready_profiles(state) -> list[str]:
     """지금 요청을 받을 수 있는 profile."""
     out = []
     if state.extractor is not None:
-        out += [p.id for p in EXTRACT_PROFILES.values() if not p.uses_llm or state.typer is not None]
+        out += [p.id for p in EXTRACT_PROFILES.values() if (not p.uses_llm or state.typer is not None)
+                and (not p.concept_filter or state.concept_filter is not None)]
     out += list(state.embedders)
     out += [p.id for p in REASONING_PROFILES.values() if p.ready(state)]
     return sorted(out)

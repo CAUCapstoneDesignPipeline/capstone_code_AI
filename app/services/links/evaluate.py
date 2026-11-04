@@ -8,6 +8,7 @@
 동점은 소수 넷째 자리로 반올림한 뒤 노트 id 순 (설계 4장 ④ 7).
 """
 
+import hashlib
 import math
 from collections import defaultdict
 from dataclasses import dataclass
@@ -89,3 +90,89 @@ def evaluate(corpus: Corpus, topics: dict[str, str], pairs: list[tuple[str, str]
             methods[f"S·N^{a:g}"][(q, t)] = _rank(
                 {n: v * nov[(topics[q], topics[n])] ** a for n, v in cross(q, s).items()}, t)
     return [Ranking(m, r) for m, r in methods.items()]
+
+
+# ---- 숨겼다 다시 찾기 (설계 7장): 정답 표시 없이 하는 결정적 평가 ----
+
+@dataclass(frozen=True)
+class Refind:
+    method: str
+    ranks: dict[tuple[str, str, str], int | None]    # (숨긴 노트, A, C) → C 의 순위, 못 찾으면 None
+
+    def recall_at(self, k: int) -> float:
+        return sum(1 for r in self.ranks.values() if r is not None and r <= k) / len(self.ranks) if self.ranks else 0.0
+
+    @property
+    def mrr(self) -> float:
+        return sum(1 / r for r in self.ranks.values() if r is not None) / len(self.ranks) if self.ranks else 0.0
+
+
+def _sentence_pairs(corpus: Corpus) -> dict[str, set[tuple[str, str]]]:
+    """노트 → 한 문장 안에 함께 나온 개념 쌍 (정렬된 id 쌍)."""
+    from app.services.relations.sentences import sentence_spans
+    out = {}
+    for n in sorted(corpus.notes):
+        note = corpus.notes[n]
+        pairs = set()
+        for s, e in sentence_spans(note.text):
+            inside = sorted(c for c, spans in note.spans.items() if any(s <= a and b <= e for a, b in spans))
+            pairs |= {(x, y) for i, x in enumerate(inside) for y in inside[i + 1:]}
+        out[n] = pairs
+    return out
+
+
+def hide_and_refind(corpus: Corpus, n: int = 200, seed: int = 0, hub_ratio: float = 0.15) -> list[Refind]:
+    """한 노트의 한 문장에 함께 쓰인 개념 쌍 (A, C) 를 고르고, 그 노트를 통째로 숨긴 뒤 다른 노트들의 문장 동시 출현
+    그래프에서 A 로 물었을 때 C 의 순위를 잰다. 고르는 쌍: A·C 가 각각 다른 노트에도 나오고, 다른 노트 어디에서도
+    한 문장에 함께 쓰이지 않은 쌍 (다른 노트에 이미 적혀 있으면 새 연결이 아니다). 쌍은 seed 로 고정한 hash 순서로 n 개.
+
+      A-B-C (Adamic-Adar)  Σ_B 1/log(1+df(B)), B 는 A·C 와 각각 한 문장에 함께 나온 개념 (허브 B 는 뺀다)
+      인기도 기준선          C 가 나오는 노트 수 (df)
+    A 와 이미 한 문장에 함께 나온 개념은 후보에서 뺀다 (이미 적혀 있는 연결)."""
+    co = _sentence_pairs(corpus)
+    hub = max(2, int(hub_ratio * len(corpus.notes)))
+    where = defaultdict(set)                      # 개념 → 나오는 노트
+    for nid, note in corpus.notes.items():
+        for c in note.spans:
+            where[c].add(nid)
+
+    def neighbours(exclude: str) -> dict[str, set[str]]:
+        g = defaultdict(set)
+        for nid, pairs in co.items():
+            if nid != exclude:
+                for x, y in pairs:
+                    g[x].add(y)
+                    g[y].add(x)
+        return g
+
+    picks = []
+    for nid in sorted(co):
+        for a, c in sorted(co[nid]):
+            if len(where[a] - {nid}) and len(where[c] - {nid}):
+                picks.append((nid, a, c))
+    picks.sort(key=lambda p: hashlib.sha256(f"{seed}:{p}".encode()).hexdigest())
+
+    graphs, chosen = {}, []
+    for nid, a, c in picks:
+        g = graphs.setdefault(nid, neighbours(nid))
+        if c in g[a]:
+            continue                               # 다른 노트에 이미 함께 쓰여 있다
+        chosen.append((nid, a, c))
+        if len(chosen) >= n:
+            break
+
+    aa, pop = {}, {}
+    for nid, a, c in chosen:
+        g = graphs[nid]
+        df = {x: len(where[x] - {nid}) for x in where}
+        cands = {x for x in where if x != a and x not in g[a] and df[x] > 0}
+        score = {}
+        for b in g[a]:
+            if df[b] > hub:
+                continue
+            for x in g[b]:
+                if x in cands:
+                    score[x] = score.get(x, 0.0) + 1 / math.log(1 + df[b])
+        aa[(nid, a, c)] = _rank(score, c)
+        pop[(nid, a, c)] = _rank({x: float(df[x]) for x in cands}, c)
+    return [Refind("A-B-C (Adamic-Adar)", aa), Refind("인기도 기준선", pop)]

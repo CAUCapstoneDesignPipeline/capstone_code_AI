@@ -1,0 +1,18 @@
+[Unit]
+Description=CAPSTONE private AI boot reconciliation
+Requires=docker.service nginx.service capstone-ai-metadata.service
+After=network-online.target docker.service nginx.service capstone-ai-metadata.service
+Wants=network-online.target
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/capstone-ai/release.py boot
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target docker.service

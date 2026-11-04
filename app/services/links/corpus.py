@@ -9,8 +9,10 @@
 import hashlib
 import json
 import logging
+import pickle
 import re
 import threading
+from pathlib import Path
 from collections import OrderedDict
 import unicodedata
 from collections import Counter, defaultdict
@@ -168,6 +170,40 @@ class EntryMemo:
             self._d.move_to_end(key)
             while len(self._d) > self.size:
                 self._d.popitem(last=False)
+
+
+class DiskEntryMemo(EntryMemo):
+    """EntryMemo + 디스크 (pickle). 키는 (노트, 원문 해시, 방법 버전·policy·관계 모델) 이라 어느 하나가 바뀌면 다른 파일이다.
+    이 프로세스가 직접 쓴 로컬 캐시만 읽는다 (data/private/ 아래, 외부 파일을 읽지 않는다)."""
+
+    def __init__(self, directory, size: int = 2000):
+        super().__init__(size)
+        self.dir = Path(directory)
+
+    def _path(self, key) -> Path:
+        return self.dir / f"{hashlib.sha256(repr(key).encode()).hexdigest()}.pkl"
+
+    def get(self, key):
+        hit = super().get(key)
+        if hit is not None:
+            return hit
+        p = self._path(key)
+        if p.exists():
+            try:
+                entry = pickle.loads(p.read_bytes())
+            except Exception:                                   # 깨진 파일은 없는 것으로 보고 다시 만든다
+                return None
+            super().put(key, entry)
+            return entry
+        return None
+
+    def put(self, key, entry):
+        super().put(key, entry)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        p = self._path(key)
+        tmp = p.with_suffix(f".{threading.get_ident()}.tmp")
+        tmp.write_bytes(pickle.dumps(entry, protocol=pickle.HIGHEST_PROTOCOL))
+        tmp.replace(p)
 
 
 def build_corpus(texts: dict[str, str], extractor: ConceptExtractor, select, policy_types, limits,

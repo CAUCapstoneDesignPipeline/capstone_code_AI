@@ -1,0 +1,11 @@
+[
+ {
+  "quote": "다익스트라를 인덱스 있는 이진 최소 힙으로 구현하면 O((V+E) log V) 이다",
+  "kind": "stated_result",
+  "subject": "다익스트라",
+  "subjectKey": "dijkstra",
+  "other": "인덱스 있는 이진 최소 힙",
+  "otherKey": "indexed_binary_min_heap",
+  "expr": "(V+E) log V"
+ }
+]
