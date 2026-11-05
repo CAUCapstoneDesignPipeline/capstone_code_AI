@@ -15,6 +15,7 @@ from pathlib import Path
 PROMPT_VERSION = "pairscreen-llm-1"
 LABELS = ["useful", "vague", "redundant", "unrelated", "unusable"]
 UNSURE = "unsure"
+WORKERS = 8            # 묶음(10쌍)을 동시에 묻는 수. 90쌍이면 묶음 9개: 4개씩이면 3번 기다리고 8개면 2번 (모델 호출 한 번이 2~3초)
 
 SYSTEM = """You screen pairs of statements taken from a student's Korean/English lecture notes (two different notes, two different keywords).
 For EACH pair decide whether combining statement A and statement B (plus ordinary well-established general knowledge) can produce a NEW piece of knowledge for the student. Choose exactly one label:
@@ -58,7 +59,7 @@ class PairScreen:
             if not todo:
                 break
             chunks = [todo[i:i + size] for i in range(0, len(todo), size)]
-            with ThreadPoolExecutor(min(4, len(chunks))) as ex:
+            with ThreadPoolExecutor(min(WORKERS, len(chunks))) as ex:
                 for part in ex.map(lambda c: self._call(c, on_event), chunks):
                     for p, res in part:
                         if res is not None:

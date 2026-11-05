@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from app.schemas.common import Span
 from app.schemas.knowledge import Concept, ExternalSource, PageSource
+from app.services.llm import LLMError
 
 PROMPT_VERSION = "newknowledge-llm-3"      # 2: 검색 한 번 · url·quote 만 / 1: 검색 3번까지 · title·supports 도 모델이 씀. 3: 결과를 구조화 출력이 아니라 submit_knowledge 도구로 받아 결론이 쓰이는 대로 보인다
 SUBMIT = "submit_knowledge"
@@ -68,10 +69,10 @@ def _url(u: str) -> str:
 
 
 class KnowledgeGenerator:
-    def __init__(self, llm, cache_dir: Path | None, tool: str | None = None):
+    def __init__(self, llm, cache_dir: Path | None, tool: str | None = None, checker=None):
         """llm: AnthropicLLM 처럼 complete_web(system, user, schema, name, max_searches, tool) 가 있는 것.
         tool: 검색 도구. 기본은 기본판(web_search_20250305): 같은 쌍에서 동적 필터링판과 결과가 같았고 호출당 입력 토큰이 6분의 1이다 (3천 대 2만)."""
-        self.llm, self.cache_dir, self.tool = llm, cache_dir, tool
+        self.llm, self.cache_dir, self.tool, self.checker = llm, cache_dir, tool, checker      # checker: check.KnowledgeChecker (없으면 확인 단계를 건너뛴다)
         self.prompt_version = PROMPT_VERSION
 
     @property
@@ -87,7 +88,7 @@ class KnowledgeGenerator:
         hit = self._cache_get(key)
         if hit is not None:
             emit({"type": "cached"})
-            return {**hit, "cached": True}
+            return {**self._verify(hit, a, b, concept_id, emit), "cached": True}
         emit({"type": "start", "model": self.llm.model, "tool": self.tool or ""})
         user = json.dumps({"A": {k: a[k] for k in ("keyword", "note", "text")}, "B": {k: b[k] for k in ("keyword", "note", "text")}},
                           ensure_ascii=False)
@@ -96,8 +97,27 @@ class KnowledgeGenerator:
                else self.llm.complete_web(SYSTEM, user, SCHEMA, "new_knowledge", MAX_SEARCHES, **extra))
         emit({"type": "validating", "sources": len(res.sources)})
         out = self._check(res, a, b, concept_id)
-        self._cache_put(key, out)
-        return {**out, "cached": False}
+        self._cache_put(key, out)                                  # 저장하는 것은 확인 전의 결과다 (확인은 따로 캐시하고, 생성을 다시 돌리지 않고 확인만 바꿀 수 있게)
+        return {**self._verify(out, a, b, concept_id, emit), "cached": False}
+
+    def _verify(self, out: dict, a: dict, b: dict, concept_id: str, emit) -> dict:
+        """코드 검사를 통과한 결과(candidate)를 check.KnowledgeChecker 로 한 번 더 확인한다. 구조 문제(주제 이탈 등)가 있으면 보류, 무관한 출처는 뺀다.
+        확인이 실패(LLM 오류)하면 결과를 막지 않고 check.error 만 남긴다 (확인은 선택 단계라서 새 지식 자체를 잃지 않는다)."""
+        if self.checker is None or out["status"] != "candidate":
+            return out
+        emit({"type": "checking"})
+        info = {"model": self.checker.model, "promptVersion": self.checker.prompt_version}
+        try:
+            r = self.checker.check(a, b, out["newKeyword"], out["conclusion"], out["external"])
+        except LLMError as e:
+            return {**out, "check": {**info, "error": e.kind}}
+        info.update(problems=r["problems"], warnings=r["warnings"], reason=r["reason"], dropped=r["dropped"])
+        if not r["ok"]:
+            return {**out, "status": "held", "reasons": r["problems"] + ([r["reason"]] if r["reason"] else []), "concept": None, "check": info}
+        if r["dropped"]:
+            kept = self._concept(concept_id, a, b, out["conclusion"], r["external"])
+            return {**out, "external": r["external"], "concept": kept, "check": info}
+        return {**out, "check": info}
 
     @staticmethod
     def _check(res, a: dict, b: dict, concept_id: str) -> dict:
@@ -135,18 +155,22 @@ class KnowledgeGenerator:
         concept = None
         if status == "candidate":
             try:
-                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                concept = Concept(
-                    conceptId=concept_id, origin="generated", explanation=conclusion[:2000],
-                    sources=[PageSource(noteId=x["noteId"], noteVersion=1, span=Span(startOffset=x["start"], endOffset=x["end"], quote=x["quote"]))
-                             for x in (a, b)],
-                    external=[ExternalSource(url=e["url"], title=(e["title"][:100] or None), retrievedAt=now, quote=(e["quote"] or None))
-                              for e in external[:10]]).model_dump(mode="json")
+                concept = KnowledgeGenerator._concept(concept_id, a, b, conclusion, external)
             except (ValidationError, ValueError) as err:
                 status, reasons = "held", [f"개념 형식을 만들지 못했다: {err.errors()[0]['msg'] if isinstance(err, ValidationError) else err}"]
         return {"status": status, "reasons": reasons, "newKeyword": d.get("newKeyword", "").strip(), "conclusion": conclusion,
                 "fromA": from_a, "fromB": from_b, "external": external, "reason": d.get("reason", "").strip(), "concept": concept,
                 "searches": res.searches, "model": res.model, "promptVersion": PROMPT_VERSION}
+
+    @staticmethod
+    def _concept(concept_id: str, a: dict, b: dict, conclusion: str, external: list[dict]) -> dict:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return Concept(
+            conceptId=concept_id, origin="generated", explanation=conclusion[:2000],
+            sources=[PageSource(noteId=x["noteId"], noteVersion=1, span=Span(startOffset=x["start"], endOffset=x["end"], quote=x["quote"]))
+                     for x in (a, b)],
+            external=[ExternalSource(url=e["url"], title=(e["title"][:100] or None), retrievedAt=now, quote=(e["quote"] or None))
+                      for e in external[:10]]).model_dump(mode="json")
 
     def _key(self, a: dict, b: dict) -> str:
         raw = json.dumps([self.llm.provider, self.llm.model, self.prompt_version, a["keyword"], a["text"], b["keyword"], b["text"]],

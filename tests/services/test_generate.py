@@ -119,3 +119,70 @@ def test_at_most_three_sources_are_kept_even_if_the_model_gives_more():
     many = [{"url": f"https://example.com/{i}", "quote": "q"} for i in range(5)]
     r = run({**GOOD, "external": many}, sources=[{"url": e["url"], "title": f"T{i}"} for i, e in enumerate(many)])
     assert [e["url"] for e in r["external"]] == [e["url"] for e in many[:3]]
+
+
+# ---- 생성 뒤 확인 ----
+
+class Checker:
+    model, prompt_version = "check-model", "knowledgecheck-llm-1"
+
+    def __init__(self, result=None, error=None):
+        self.result, self.error, self.calls = result, error, []
+
+    def check(self, a, b, kw, conclusion, external):
+        self.calls.append((kw, conclusion, [e["url"] for e in external]))
+        if self.error:
+            raise self.error
+        return {"ok": True, "problems": [], "warnings": [], "external": external, "dropped": [], "reason": "", **(self.result or {})}
+
+
+def verified(data, checker, cache=None, **kw):
+    return KnowledgeGenerator(Fake(data, **kw), cache, checker=checker).generate(A, B, CID)
+
+
+def test_failed_check_holds_the_result_with_the_reasons_and_no_concept():
+    r = verified(GOOD, Checker({"ok": False, "problems": ["결론이 두 노트 문장의 주제를 벗어났다"], "reason": "SSH 로 갈아탔다"}))
+    assert r["status"] == "held" and r["concept"] is None and r["reasons"] == ["결론이 두 노트 문장의 주제를 벗어났다", "SSH 로 갈아탔다"]
+    assert r["check"]["model"] == "check-model" and r["conclusion"] == GOOD["conclusion"]               # 결론은 남겨 두어 왜 걸렀는지 볼 수 있다
+
+
+def test_sources_the_check_dropped_are_removed_from_the_card_and_the_concept():
+    other = {"url": "https://example.com/other", "title": "other"}
+    data = {**GOOD, "external": [*GOOD["external"], {"url": other["url"], "title": "other", "quote": "q", "supports": "s"}]}
+    ck = Checker({"external": [{"url": URL, "title": "ARIES", "quote": "q"}], "dropped": [{"url": other["url"], "title": "other", "quote": "q"}]})
+    r = verified(data, ck, sources=[{"url": URL, "title": "ARIES"}, other])
+    assert r["status"] == "candidate" and [e["url"] for e in r["external"]] == [URL] and [e["url"] for e in r["concept"]["external"]] == [URL]
+    assert [e["url"] for e in r["check"]["dropped"]] == [other["url"]]
+
+
+def test_warnings_are_kept_and_the_card_stays_a_candidate():
+    r = verified(GOOD, Checker({"warnings": ["노트 문장이 부정확할 수 있다"]}))
+    assert r["status"] == "candidate" and r["concept"] and r["check"]["warnings"] == ["노트 문장이 부정확할 수 있다"]
+
+
+def test_a_check_that_errors_does_not_lose_the_card():
+    from app.services.llm import LLMError
+    r = verified(GOOD, Checker(error=LLMError("timeout", "x")))
+    assert r["status"] == "candidate" and r["concept"] and r["check"]["error"] == "timeout"
+
+
+def test_only_candidates_are_checked_and_a_cached_generation_is_checked_again_without_regenerating(tmp_path):
+    ck = Checker()
+    assert verified({**GOOD, "status": "no_new_knowledge"}, ck)["status"] == "held" and ck.calls == []
+    fake = Fake(GOOD)
+    g = KnowledgeGenerator(fake, tmp_path, checker=ck)
+    g.generate(A, B, CID)
+    assert g.checker is ck and len(ck.calls) == 1
+    g.checker = Checker({"ok": False, "problems": ["새 기준"]})              # 확인 기준이 바뀌면 캐시된 생성도 새 기준으로 다시 본다
+    r = g.generate(A, B, CID)
+    assert r["cached"] is True and r["status"] == "held" and fake.calls == 1
+
+
+def test_checking_event_is_emitted_after_validating():
+    class Streaming(Fake):
+        def complete_web(self, system, user, schema, name, max_searches=3, submit=None, on_event=None):
+            return super().complete_web(system, user, schema, name, max_searches, submit)
+
+    seen = []
+    KnowledgeGenerator(Streaming(GOOD), None, checker=Checker()).generate(A, B, CID, on_event=lambda e: seen.append(e["type"]))
+    assert seen[-2:] == ["validating", "checking"]

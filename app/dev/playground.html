@@ -332,7 +332,7 @@ async function runSuggest() {
   if (!text.trim()) { S.sg.data = null; return render(); }
   const r = ++S.run;
   S.sg.data = "loading"; S.sg.screen = {}; S.sg.gen = {}; render();
-  const body = { limit: 12, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
+  const body = { limit: 60, minConfidence: S.thr, ...(S.note === FREE ? { text } : { noteId: S.note }) };
   try {
     const res = await fetch("/dev/proposals/candidates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
@@ -413,7 +413,13 @@ async function runGenerate(id) {
 }
 async function generateTop(n) {
   if (!Object.keys(S.sg.screen).length) await runScreen();
-  const ids = sgOrdered().main.filter((c) => !S.sg.gen[c.id]).slice(0, n).map((c) => c.id);
+  // 쓸 만하다고 고른 쌍 가운데 서로 다른 것만: 같은 노트 문장(A)이나 같은 상대 키워드(B)로 비슷한 카드가 여러 장 나오지 않게 한다
+  const taken = new Set(), ids = [];
+  for (const c of sgOrdered().main) {
+    if (S.sg.gen[c.id] || taken.has("a:" + c.a.text) || taken.has("b:" + c.b.keyword)) continue;
+    taken.add("a:" + c.a.text); taken.add("b:" + c.b.keyword); ids.push(c.id);
+    if (ids.length >= n) break;
+  }
   await Promise.all(ids.map(runGenerate));
 }
 
@@ -548,6 +554,7 @@ function progLines(evs) {
       `<li>${isUrl(r.url) ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title || r.url)}</a>` : esc(r.title || r.url)}</li>`).join("")}${e.results.length > 4 ? `<li class="path">…외 ${e.results.length - 4}개</li>` : ""}</ul>` : "") });
     else if (e.type === "writing") { if (last()?.key === "writing") { last().html = `결론을 쓰는 중이에요${e.chars ? ` (${e.chars}자)` : ""}`; last().t = e.t; } else out.push({ key: "writing", t: e.t, html: `결론을 쓰는 중이에요${e.chars ? ` (${e.chars}자)` : ""}` }); }
     else if (e.type === "validating") out.push({ t: e.t, html: `출처 ${e.sources}개와 노트 인용을 확인하는 중이에요` });
+    else if (e.type === "checking") out.push({ t: e.t, html: "결론이 두 문장의 주제 안에 있는지, 출처가 결론과 맞는지 한 번 더 확인하는 중이에요" });
   }
   return out;
 }
@@ -568,6 +575,10 @@ function genBlock(c, g) {
   const ST = { candidate: ["candidate", "후보"], held: ["hypothesis", "가설"], known: ["excluded", "이미 노트에 있어요"] }[g.status] || ["hypothesis", g.status];
   const ext = g.external.map((e) => `<li>${isUrl(e.url) ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.title || e.url)}</a>` : esc(e.title || e.url)}
       <div class="quote">${esc(e.quote)}</div></li>`).join("");
+  const ck = g.check || {};
+  const warn = (ck.warnings || []).length ? `<p class="path">⚠ ${ck.warnings.map(esc).join(" · ")}${ck.reason ? ` — ${esc(ck.reason)}` : ""}</p>` : "";
+  const dropped = (ck.dropped || []).length ? `<details><summary>결론과 맞지 않아 뺀 출처 ${ck.dropped.length}개</summary><ul class="steps">${ck.dropped.map((e) =>
+    `<li>${esc(e.title || e.url)}</li>`).join("")}</ul></details>` : "";
   const why = g.reasons.length ? `<p class="path">${g.reasons.map(esc).join(" · ")}${g.reason ? ` — ${esc(g.reason)}` : ""}</p>` : "";
   const conclusion = g.conclusion ? `<div class="know"><span class="tag">새 키워드</span> <b>${esc(g.newKeyword)}</b><p>${esc(g.conclusion)}</p></div>` : "";
   const react = S.sg.react[pairKey(c)];
@@ -577,7 +588,8 @@ function genBlock(c, g) {
   const ok = react === "ok" && g.concept ? `<details open><summary>이해함 → 기능용 그래프에 들어갈 개념 (generated)</summary><pre class="json">${esc(JSON.stringify(g.concept, null, 2))}</pre></details>` : "";
   const confused = react === "confused" ? chatBox(c, g) : "";
   return `<div class="gen"><div class="cardHead"><span class="status ${ST[0]}">${ST[1]}</span><span class="path">${esc(g.model)} · 검색 ${g.searches}번${g.cached ? " · 저장된 결과" : ""}</span></div>
-    ${why}${ext ? `<h4>외부 지식</h4><ul class="steps">${ext}</ul>` : ""}${conclusion}${buttons}${ok}${confused}</div>`;
+    ${why}${warn}${ext ? `<h4>외부 지식</h4><ul class="steps">${ext}</ul>` : ""}${dropped}${conclusion}${buttons}${ok}${confused}
+    ${ck.model ? `<p class="path">확인 ${esc(ck.model)} · ${esc(ck.promptVersion)}${ck.error ? ` · 확인하지 못했다 (${esc(ck.error)})` : ""}</p>` : ""}</div>`;
 }
 
 // 선별 결과 칸: 쓰이는 대로 이 두 칸만 고친다 (paintScreen)

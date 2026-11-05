@@ -827,11 +827,16 @@ def _side(e) -> dict:
             "text": e.text, "start": e.start, "end": e.end, "quote": e.quote, "confidence": e.confidence}
 
 
+# 후보 풀 깊이. 이전: 앵커 문장당 3개 · 임베딩 이웃 10 · 최대 12(엔드포인트 상한 30) → 노트 10개에서 쓸 만한 쌍(Haiku 선별) 12개.
+# 지금: 앵커당 6 · 이웃 20 · 최대 90 → 같은 노트에서 58개 (4.8배). 깊어질수록 적중률은 내려간다: 1~30위 12.7% · 31~60위 8.3% · 61~90위 6.8%, 그래서 기본은 60.
+PER_ANCHOR, NEIGHBORS, MAX_CANDIDATES, DEFAULT_CANDIDATES, MAX_SCREEN = 6, 20, 90, 60, 90
+
+
 class ProposalQuery(BaseModel):
     noteId: str | None = None
     text: str | None = None
     minConfidence: float = 0.0
-    limit: int = 12
+    limit: int = DEFAULT_CANDIDATES
 
 
 @router.post("/proposals/candidates")
@@ -851,7 +856,7 @@ async def proposal_candidates(q: ProposalQuery, request: Request):
     t0 = time.monotonic()
     index, embedded, built_ms = await run_in_threadpool(_pairing_index, state, corpus, mc)
     anchors = index.anchors(note_id)
-    cands, counts = await run_in_threadpool(index.candidates, anchors, 3, 1, max(1, min(q.limit, 30)))
+    cands, counts = await run_in_threadpool(index.candidates, anchors, PER_ANCHOR, 1, max(1, min(q.limit, MAX_CANDIDATES)), NEIGHBORS)
     return {
         "note": note_id, "anchors": len(anchors), "elements": len(index.el), "embeddings": embedded, "cosineFloor": COSINE_FLOOR if embedded else None,
         "channels": counts, "buildMs": built_ms, "ms": int((time.monotonic() - t0) * 1000),
@@ -861,6 +866,7 @@ async def proposal_candidates(q: ProposalQuery, request: Request):
     }
 
 
+CHECK_MODEL = "claude-sonnet-5-5"      # 생성 결과 확인: Haiku 는 같은 입력에서 판정이 흔들렸고(주제 이탈을 한 번은 잡고 한 번은 놓침) Sonnet 은 3번 모두 같았다. Opus 는 주제 이탈을 놓쳤다
 SCREEN_MODEL = "claude-haiku-5-5"      # 선별은 짧은 판단이라 작은 모델로 충분하다 (275쌍 시험: 정밀도 44% · 재현율 40%, Sonnet 35% · 50%)
 
 
@@ -908,8 +914,8 @@ async def proposal_screen(q: ScreenQuery, request: Request):
 
     if not _loopback(request):
         raise HTTPException(403, "로컬에서만 부를 수 있다")
-    if not 1 <= len(q.pairs) <= 30:
-        raise HTTPException(400, "쌍은 1~30개")
+    if not 1 <= len(q.pairs) <= MAX_SCREEN:
+        raise HTTPException(400, f"쌍은 1~{MAX_SCREEN}개")
     state = request.app.state
     judge = getattr(state, "pair_screen", None)
     if judge is None:
@@ -933,8 +939,11 @@ def _knowledge_generator(state):
         cfg, llm = _proposal_llm(state, "generate", "suggest", "medium", timeout=240)
         if not hasattr(llm, "complete_web"):
             raise HTTPException(503, f"웹 검색은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
+        from app.services.links.check import KnowledgeChecker
+        _, check_llm = _proposal_llm(state, "check", "knowledge_check", "low", default_model=CHECK_MODEL)
         gen = state.knowledge_generator = KnowledgeGenerator(llm, Path("data/private/cache/new-knowledge"),
-                                                             os.environ.get("AI_SEARCH_TOOL") or WEB_SEARCH_BASIC)
+                                                             os.environ.get("AI_SEARCH_TOOL") or WEB_SEARCH_BASIC,
+                                                             checker=KnowledgeChecker(check_llm, Path("data/private/cache/knowledge-checks")))
     return gen
 
 
@@ -1062,8 +1071,8 @@ async def proposal_screen_stream(q: ScreenQuery, request: Request):
     result(results, model, promptVersion) · error. 저장된 쌍은 시작하자마자 pair_done 이다."""
     if not _loopback(request):
         raise HTTPException(403, "로컬에서만 부를 수 있다")
-    if not 1 <= len(q.pairs) <= 30:
-        raise HTTPException(400, "쌍은 1~30개")
+    if not 1 <= len(q.pairs) <= MAX_SCREEN:
+        raise HTTPException(400, f"쌍은 1~{MAX_SCREEN}개")
     judge = _screen_judge(request.app.state)
     pairs = [{"id": p.id, "a": {"keyword": p.a.keyword[:100], "text": p.a.text[:600]}, "b": {"keyword": p.b.keyword[:100], "text": p.b.text[:600]}}
              for p in q.pairs]

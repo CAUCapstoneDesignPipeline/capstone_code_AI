@@ -398,6 +398,44 @@ def test_proposal_candidates_pair_elements_of_different_notes(tmp_path, monkeypa
         assert t["note"] == "(직접 입력)"
 
 
+def test_candidate_pool_is_deep_by_default_and_screening_accepts_it(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    from app.services.links.pair_screen import PairScreen
+    from app.services.links.pairing import PairingIndex
+    from app.services.llm import LLMResult
+
+    (tmp_path / "A.md").write_text("# A\n\n**WAL**은 **트랜잭션**이 커밋되기 전에 변경 내용을 로그로 디스크에 먼저 기록하는 방식이다.\n", encoding="utf-8")
+    (tmp_path / "B.md").write_text("# B\n\n**원자성**은 **트랜잭션**이 전부 반영되거나 전혀 반영되지 않는 성질이라는 뜻이다.\n", encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    _no_embeddings(monkeypatch)
+    seen = []
+    real = PairingIndex.candidates
+
+    def spy(self, anchors, per_anchor=3, per_partner=1, limit=12, neighbors=10):
+        seen.append((per_anchor, per_partner, limit, neighbors))
+        return real(self, anchors, per_anchor, per_partner, limit, neighbors)
+
+    monkeypatch.setattr(PairingIndex, "candidates", spy)
+
+    class Fake:
+        provider, model = "anthropic", "fake"
+        def complete_json(self, system, user, schema, name):
+            ids = [l[4:] for l in user.splitlines() if l.startswith("id: ")]
+            return LLMResult({"results": [{"id": i, "label": "vague", "conclusion": ""} for i in ids]}, self.provider, self.model)
+
+    app = dev_app()
+    app.state.pair_screen = PairScreen(Fake(), None)
+    pair = lambda i: {"id": f"p{i}", "a": {"keyword": "k", "text": f"문장 {i}"}, "b": {"keyword": "m", "text": f"다른 문장 {i}"}}
+    with TestClient(app, client=LOCAL) as c:
+        c.post("/dev/proposals/candidates", json={"noteId": "A"})
+        c.post("/dev/proposals/candidates", json={"noteId": "A", "limit": 500})
+        assert seen[0] == (6, 1, 60, 20) and seen[1] == (6, 1, 90, 20)                # 기본 60, 상한 90 (앵커당 6 · 이웃 20)
+        assert len(c.post("/dev/proposals/screen", json={"pairs": [pair(i) for i in range(90)]}).json()["results"]) == 90
+        for path in ("/dev/proposals/screen", "/dev/proposals/screen/stream"):
+            assert c.post(path, json={"pairs": [pair(i) for i in range(91)]}).status_code == 400
+
+
 def test_proposal_screen_and_generate_endpoints(tmp_path, monkeypatch):
     from app.services.links.generate import KnowledgeGenerator
     from app.services.links.pair_screen import PairScreen
