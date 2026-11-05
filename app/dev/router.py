@@ -392,6 +392,7 @@ async def keywords(q: KeywordsQuery, request: Request):
     }
 
 
+from app.services.links.paths import weighted_paths  # noqa: E402
 from app.services.links.inference import MIN_SCORE as INFER_MIN_SCORE      # noqa: E402  (시험에서 바꿀 수 있게 이 모듈의 이름으로 둔다)
 
 LEVEL_KO = {"sentence": "같은 문장", "heading": "제목과 본문", "paragraph": "같은 문단"}
@@ -578,8 +579,9 @@ class ConnectQuery(BaseModel):
 
 @router.post("/keyword-connect")
 async def keyword_connect(q: ConnectQuery, request: Request):
-    """두 키워드가 어떻게 이어지는지: 직접 증거와, 다른 키워드를 거치는 경로 (최대 3칸). 그래프에 그리지 않은 키워드도 된다.
-    너무 많은 키워드와 이어진 허브 키워드는 경로의 중간으로 쓰지 않는다 (아무것과도 이어져서 말해 주는 게 없다). LLM 호출 없음."""
+    """두 키워드가 어떻게 이어지는지: 직접 증거와, 다른 키워드를 거치는 길들 (app/services/links/paths.py 의 가중 경로). 그래프에 그리지 않은 키워드도 된다.
+    길은 걸음 수가 아니라 비용으로 고른다: 증거가 강한 선은 싸고, 이웃이 많은 허브를 지나면 비싸다 (건너뛰지는 않는다). 서로 다른 길을 최대 6개 싼 순으로.
+    LLM 호출 없음."""
     state = request.app.state
     levels = _levels(q.levels)
     corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
@@ -601,22 +603,8 @@ async def keyword_connect(q: ConnectQuery, request: Request):
         key = lambda x, y: (x, y) if x < y else (y, x)
         edge = lambda x, y: {"a": x, "b": y, **views[key(x, y)]}
         a, b = q.a, q.b
-        na, nb = adj.get(a, {}), adj.get(b, {})
-        skipped = 0
-        paths: list[tuple[int, float, list[str]]] = []
-        for c in set(na) & set(nb) - {a, b}:
-            if len(adj[c]) > hub:
-                skipped += 1
-                continue
-            paths.append((2, min(na[c], nb[c]), [a, c, b]))
-        top = lambda nbr, other: sorted((x for x in nbr if x != other and len(adj[x]) <= hub), key=lambda x: -nbr[x])[:25]
-        for x in top(na, b):
-            for y in top(nb, a):
-                if x != y and y in adj[x]:
-                    paths.append((3, min(na[x], adj[x][y], nb[y]), [a, x, y, b]))
-        paths.sort(key=lambda p: (p[0], -p[1], p[2]))
-        two, three = [p for p in paths if p[0] == 2][:6], [p for p in paths if p[0] == 3][:4]
-        used = {k for p in (*two, *three) for k in p[2]} | {a, b}
+        paths = weighted_paths(adj, a, b, hub=hub)             # 걸음 수·허브 제외 대신 비용으로 고른 서로 다른 길들 (싼 순)
+        used = {k for p in paths for k in p.nodes} | {a, b}
 
         def info(k: str, full: bool = False) -> dict:
             kw = by_id[k]
@@ -625,10 +613,10 @@ async def keyword_connect(q: ConnectQuery, request: Request):
                                  for c in kw.concepts[:6 if full else 2]]}
         return {
             "pair": _best_pair(by_id[a], by_id[b], meta), "inferred": inferred,
-            "a": info(a, True), "b": info(b, True), "levels": list(levels), "hubThreshold": hub, "hubsSkipped": skipped,
+            "a": info(a, True), "b": info(b, True), "levels": list(levels), "hubThreshold": hub,
             "direct": ({"a": a, "b": b, **views[key(a, b)]} if key(a, b) in views else None),
-            "paths": [{"hops": len(p) - 1, "strength": round(sc, 4), "nodes": [info(k) for k in p],
-                       "edges": [edge(p[i], p[i + 1]) for i in range(len(p) - 1)]} for _, sc, p in (*two, *three)],
+            "paths": [{"hops": p.hops, "cost": p.cost, "strength": round(p.bottleneck, 4), "hubs": [by_id[v].name for v in p.hubs],
+                       "nodes": [info(k) for k in p.nodes], "edges": [edge(p.nodes[i], p.nodes[i + 1]) for i in range(p.hops)]} for p in paths],
             "nodes": {k: info(k) for k in used},
         }
     out = await run_in_threadpool(work)

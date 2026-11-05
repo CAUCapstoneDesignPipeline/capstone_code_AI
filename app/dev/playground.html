@@ -865,7 +865,7 @@ function pickBox(w) {
 }
 function pathView(p) {
   const last = p.nodes.length - 1;
-  return `<div class="card" style="padding:8px 12px"><p class="note">${p.hops}칸 · 가장 약한 연결 ${p.strength}</p>${p.nodes.map((n, i) => {
+  return `<div class="card" style="padding:8px 12px"><p class="note">${p.hops}칸 · 비용 ${p.cost} (낮을수록 가깝다) · 가장 약한 연결 ${p.strength}${p.hubs.length ? ` · <span class="tag" title="이웃이 아주 많은 키워드를 지난다. 아무것과도 이어져서 말해 주는 게 적다">허브 ${esc(p.hubs.join(", "))}</span>` : ""}</p>${p.nodes.map((n, i) => {
     const ev = i < last ? p.edges[i].evidence[0] : null;
     return `<div class="chain"><b>${esc(n.name)}</b>${i > 0 && i < last ? ` <small>페이지 ${n.pages} · 연결 ${n.degree}</small>` : ""}</div>`
       + (ev ? `<div class="quote hop"><span class="tag">${LEVEL_KO[ev.level]}</span> ${esc(clean(ev.text))}</div>` : "");
@@ -890,12 +890,12 @@ function connectPanel() {
     ? `<p class="note">${Object.entries(D.direct.counts).map(([l, n]) => `${LEVEL_KO[l]} ${n}`).join(" · ")} · 페이지 ${D.direct.pages}개 · 점수 ${D.direct.score}</p>${D.direct.evidence.map(evCard).join("")}`
     : `<p class="note">고른 증거 수준(${D.levels.map((l) => LEVEL_KO[l]).join(" · ")})에서는 두 키워드가 같이 나온 곳이 없다.</p>`;
   const paths = D.paths.length ? D.paths.map(pathView).join("")
-    : `<p class="note">다른 키워드를 거쳐 3칸 안에 이어지는 길이 없다. 증거 수준을 넓혀 본다.</p>`;
+    : `<p class="note">비용 10 이하로 이어지는 길이 없다 (6칸 이내). 증거 수준을 넓혀 보거나, 정말 관련이 없는 쌍일 수 있다.</p>`;
   const rel = C.rel;
   const inf = D.inferred ? `<div class="card" style="padding:8px 12px"><span class="tag">추정 연결</span> 추정 점수 <b>${D.inferred.score}</b>${D.inferred.cos != null ? ` · 의미 유사도 ${D.inferred.cos}` : " · 임베딩 없이 구조만"}
       · 공통 이웃 ${D.inferred.via.length ? D.inferred.via.map((v) => esc(v.name)).join(", ") : "없음"}<p class="note">증거가 아니라 구조와 의미로 한 추정이에요 (3 이상이면 선으로 이을 만한 점수). 아래 길의 문장으로 실제 관계를 확인해요.</p></div>` : "";
   return out + `<h4>직접 연결</h4>${direct}${inf}
-    <h4>다른 키워드를 거치는 길 ${D.paths.length}${D.hubsSkipped ? ` <small>· 연결 ${D.hubThreshold}개 넘는 허브 ${D.hubsSkipped}개는 건너뜀</small>` : ""}</h4>${paths}
+    <h4>다른 키워드를 거치는 길 ${D.paths.length} <small>· 비용이 싼 순 · 연결 ${D.hubThreshold}개 이상인 허브를 지나면 비싸다</small></h4>${paths}
     <h4>새 지식</h4>${connectKnowledge(C)}
     <h4>관계 확인</h4><p class="actions">${relButton("connect")}</p>${relBox(rel, D.a.name, D.b.name)}
     <details><summary>${esc(D.a.name)} 의 개념</summary>${kgConcepts(D.a)}</details>
