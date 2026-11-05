@@ -119,6 +119,15 @@ Keyword (노드)                       키워드 하나 = 노드 하나. 같은 
   141개 노트 (신뢰도 0.35 이상) 에서 DB-WAL 의 "WAL" 과 "Consistency" 는 직접 증거가 없고 ACID 를 거치는 길만 있는데, 모델은 `weak` 로 판정했다
   ("WAL 은 ACID 중 Atomicity·Durability 를 달성하고 Consistency 는 ACID 의 한 요소로만 나온다 — 간접 관계").
   같은 문장·문단 공동 출현은 관계의 증거일 뿐 관계 자체가 아니다 (나란히 나왔다고 관련 있는 것은 아니다). 그래서 이 확인이 따로 있다.
+- **설명만으로 관계 확인 (LLM)** (`POST /dev/keyword-relation/concepts`, `…/concepts/stream`, `kwrel-concept-llm-1`): 같이 나온 문장도 이어 주는 길도 없는 쌍은 위 확인을 할 수 없다 (증거가 없다).
+  이때 두 키워드의 **설명 (노트에서 뽑은 문장)** 만 모델에 보내 묻는다. 설명마다 id (A1.. B1..) 를 붙이고, 같은 판정·유형·방향·이유에 **`basis`** 를 더 받는다.
+  - `notes`: 설명이 두 키워드의 관계를 말하거나 보여 준다 → `related` 가 될 수 있다.
+  - `general`: 설명에는 없고 일반 상식으로만 읽힌다 → 이유가 "노트에는 없지만 일반적으로" 로 시작하고 판정은 `weak` 까지다 (`related` 로 오면 코드가 `weak` 로 낮춘다).
+  - `none`: 관계 없음 (`unrelated`). 관계라고 하려면 양쪽 설명을 하나씩 이상 인용해야 하고, 못 하면 `unsure`.
+  - 노트의 증거가 아니라서 화면에 "설명만으로" · 근거 표시가 붙고 "노트 증거가 아니다" 라고 적힌다. 증거 확인과 캐시가 따로다 (프롬프트 버전이 다르다).
+  - 실제 모델 (Opus 5.5) 로 증거도 길도 없는 쌍 6개를 시험했다: 추정 점수가 높은 "Logistic Regression" × "Error" 는 `weak`·`general` (Error 의 여러 뜻 가운데 ML 쪽 하나만 관련이라고 구분했다),
+    "User and Item Modeling" × "frame number", "statement" × "Real-Time Scheduling" 등 나머지 5개는 `unrelated`. 호출 한 번 2.3~5.6초.
+  - 증거 문장이 있을 때도 따로 눌러 볼 수 있다 (연결 패널의 두 번째 버튼). 이 호출도 노트 내용(설명)을 LLM 제공자에게 보내므로 눌렀을 때만 부르고 로컬 접속만 받는다.
 
 - **지식 제안** 은 새 지식 = **키워드 A 의 요소 + 키워드 B 의 요소 + 인터넷 지식** 을 만든다 (회의록 10/30 "사용자가 모르는 지식 생성"). 세 단계이고, 둘째·셋째만 모델 제공자를 부른다:
   1. **후보 쌍** (`POST /dev/proposals/candidates`, `app/services/links/pairing.py`, 결정적): 이 노트의 요소(키워드마다 설명 하나)와 다른 노트·다른 키워드의 요소를 잇는다.
@@ -148,6 +157,7 @@ Keyword (노드)                       키워드 하나 = 노드 하나. 같은 
   | 새 지식 만들기 | `POST /dev/proposals/generate/stream` | `field` 이벤트: `newKeyword`·`conclusion` (가설이면 `reason`) |
   | LLM 선별 | `POST /dev/proposals/screen/stream` | `pair` 이벤트: 쌍마다 `label` (나오는 대로)과 메모 `conclusion` (글자마다), 확정되면 `pair_done` |
   | 관계 확인 | `POST /dev/keyword-relation/stream` | `field` 이벤트: `verdict`·`type` 이 먼저, `reason` 은 글자마다 |
+  | 설명만으로 관계 확인 | `POST /dev/keyword-relation/concepts/stream` | 같음 (`basis` 도 함께) |
   | 챗봇 | `POST /internal/v1/chat` ([chat-api.md](chat-api.md)) | `delta` 이벤트: 답의 다음 조각 |
 
   구조화(JSON) 출력은 `app/services/llm/partial_json.py` 의 `JsonStream` 이 쓰이는 대로 읽는다 (조각을 어디서 자르든 같은 이벤트, 이스케이프·유니코드·서로게이트 쌍 처리, 깨진 입력에도 예외 없음).

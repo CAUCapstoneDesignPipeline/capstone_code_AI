@@ -811,12 +811,25 @@ function relBox(rel, aName, bName) {
   if (rel.error) return `<p class="error">${esc(rel.error)}</p>`;
   const d = rel.data;
   const dir = d.type === "none" ? "" : d.direction === "a_to_b" ? `${esc(aName)} → ${esc(bName)}` : d.direction === "b_to_a" ? `${esc(bName)} → ${esc(aName)}` : "방향 없음 (대칭)";
+  if (rel.mode === "concepts") return conceptRelBox(rel, d, dir);
   const cited = d.evidence.map((id) => rel.items[Number(id.slice(1)) - 1]).filter(Boolean);
   return `<div class="card rel ${esc(d.verdict)}"><div class="cardHead"><span class="status vd-${esc(d.verdict)}">${VERDICT_KO[d.verdict] || d.verdict}</span>
       ${d.type !== "none" ? `<b>${esc(TYPE_KO[d.type] || d.type)}</b>` : ""}<span class="path">${dir}</span></div>
     <p class="know">${esc(d.reason)}</p>
     ${cited.length ? `<details><summary>인용한 증거 ${cited.length}개</summary>${cited.map(evCard).join("")}</details>` : ""}
     <p class="path">${esc(d.model)} · ${esc(d.promptVersion)}${d.cached ? " · 저장된 결과" : ""}</p></div>`;
+}
+const BASIS_KO = { notes: "근거: 노트의 설명", general: "근거: 일반 상식 (노트에 없음)", none: "" };
+function conceptRelBox(rel, d, dir) {                           // 증거 문장 없이 두 키워드의 설명만으로 한 판정
+  const pick = (id) => (rel.items[id[0]] || [])[Number(id.slice(1)) - 1];
+  const cited = d.evidence.map((id) => ({ id, c: pick(id) })).filter((x) => x.c);
+  return `<div class="card rel ${esc(d.verdict)}"><div class="cardHead"><span class="status vd-${esc(d.verdict)}">${VERDICT_KO[d.verdict] || d.verdict}</span>
+      ${d.type !== "none" ? `<b>${esc(TYPE_KO[d.type] || d.type)}</b>` : ""}<span class="path">${dir}</span><span class="tag" title="두 키워드가 같이 나온 문장 없이, 각 키워드의 설명만 보고 한 판정이에요">설명만으로</span>
+      ${BASIS_KO[d.basis] ? `<span class="tag">${BASIS_KO[d.basis]}</span>` : ""}</div>
+    <p class="know">${esc(d.reason)}</p>
+    ${cited.length ? `<details><summary>인용한 설명 ${cited.length}개</summary>${cited.map((x) => `<div class="card" style="padding:8px 12px"><span class="tag">${esc(x.id)}</span>
+      <button class="linkBtn" data-open="${esc(x.c.note)}">${esc(shortTitle(x.c.note, 34))}</button><div class="quote">${esc(clean(x.c.text))}</div></div>`).join("")}</details>` : ""}
+    <p class="path">${esc(d.model)} · ${esc(d.promptVersion)}${d.cached ? " · 저장된 결과" : ""} · 노트 증거가 아니다</p></div>`;
 }
 const relButton = (key) => `<button class="act" data-rel="${esc(key)}">관계 확인 (LLM)</button>`;
 
@@ -878,6 +891,7 @@ function connectKnowledge(C) {
   const foot = C.gen ? genBlock(c, C.gen) : `<p class="actions"><button class="act" data-sg="gen:cn">새 지식 만들기 (웹 검색)</button> <span class="note">자동 만들기를 꺼 두었어요.</span></p>`;
   return `<div class="sg">${side(c.a, "A")}${side(c.b, "B")}${foot}</div>`;
 }
+const hasEvidence = (D) => !!D.direct || D.paths.length > 0;
 function connectPanel() {
   const C = S.cn, D = C.data;
   let out = `<h3>두 키워드의 연결</h3><p class="note">아무 두 키워드나 골라 직접 증거와, 다른 키워드를 거치는 경로를 본다. 증거 수준은 위 체크박스를 따른다.</p>
@@ -897,7 +911,8 @@ function connectPanel() {
   return out + `<h4>직접 연결</h4>${direct}${inf}
     <h4>다른 키워드를 거치는 길 ${D.paths.length} <small>· 비용이 싼 순 · 연결 ${D.hubThreshold}개 이상인 허브를 지나면 비싸다</small></h4>${paths}
     <h4>새 지식</h4>${connectKnowledge(C)}
-    <h4>관계 확인</h4><p class="actions">${relButton("connect")}</p>${relBox(rel, D.a.name, D.b.name)}
+    <h4>관계 확인</h4><p class="actions">${hasEvidence(D) ? relButton("connect") + " " : ""}<button class="act" data-rel="concepts" title="같이 나온 문장 없이 두 키워드의 설명만 모델에 보낸다">설명만으로 관계 확인 (LLM)</button></p>
+    ${hasEvidence(D) ? "" : `<p class="note">같이 나온 문장도, 이어 주는 길도 없어서 증거로는 확인할 수 없어요. 두 키워드의 설명만으로 물어볼 수 있어요 (노트 증거가 아니라는 표시가 붙어요).</p>`}${relBox(rel, D.a.name, D.b.name)}
     <details><summary>${esc(D.a.name)} 의 개념</summary>${kgConcepts(D.a)}</details>
     <details><summary>${esc(D.b.name)} 의 개념</summary>${kgConcepts(D.b)}</details>`;
 }
@@ -955,7 +970,27 @@ async function runConnectGenerate() {
   if (!c || C.gen === "loading") return;
   await startGen("cn", c, (v) => { C.gen = v; });
 }
+async function runConceptRelation() {                          // 증거 문장 없이 두 키워드의 설명만으로 (SSE)
+  const D = S.cn.data, C = S.cn, live = {};
+  const side = (x) => ({ name: x.name, concepts: x.concepts.map((c) => ({ note: c.note, text: clean(c.explanation) })) });
+  const items = { A: D.a.concepts.map((c) => ({ note: c.note, text: clean(c.explanation) })), B: D.b.concepts.map((c) => ({ note: c.note, text: clean(c.explanation) })) };
+  if (!items.A.length || !items.B.length) { C.rel = { error: "설명이 없는 키워드라 확인할 수 없다." }; return render(); }
+  C.rel = { loading: true, live, mode: "concepts" }; render();
+  try {
+    const res = await fetch("/dev/keyword-relation/concepts/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a: side(D.a), b: side(D.b) }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+    await readSse(res, (name, d) => {
+      if (name === "field") {
+        live[d.path] = "value" in d ? d.value : (live[d.path] || "") + d.delta;
+        const el = document.getElementById("rel-live"); if (el) el.innerHTML = relLive({ live });
+      } else if (name === "result") C.rel = { data: d.result, items, mode: "concepts" };
+      else if (name === "error") C.rel = { error: d.message, mode: "concepts" };
+    });
+  } catch (e) { C.rel = { error: String(e.message || e), mode: "concepts" }; }
+  render();
+}
 async function runRelation(kind) {
+  if (kind === "concepts") return runConceptRelation();
   let a, b, evidence, set;
   if (kind === "edge") {
     const K = S.kg, e = K.edges.find((x) => edgeKey(x) === S.kgEdge), t = Object.fromEntries(K.nodes.map((n) => [n.id, n]));

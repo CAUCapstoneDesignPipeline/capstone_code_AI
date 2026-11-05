@@ -15,6 +15,7 @@
   POST /dev/proposals/generate/stream {a, b}  같은 일을 진행 상황과 결론이 쓰이는 대로 SSE 로 (화면이 쓰는 쪽)
   POST /dev/proposals/screen/stream {pairs}  LLM 선별을 쌍마다 라벨·메모가 쓰이는 대로 SSE 로
   POST /dev/keyword-relation/stream {a, b, evidence}  관계 확인을 판정이 쓰이는 대로 SSE 로
+  POST /dev/keyword-relation/concepts[/stream] {a, b}  증거 문장 없이 두 키워드의 설명만으로 관계 확인 (JSON · SSE)
   POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
@@ -1068,6 +1069,63 @@ async def proposal_screen_stream(q: ScreenQuery, request: Request):
              for p in q.pairs]
     return _sse_job(request, lambda emit: emit({"type": "result", "results": judge.screen(pairs, on_event=emit), "model": judge.model,
                                                 "promptVersion": judge.prompt_version}))
+
+
+class ConceptItem(BaseModel):
+    note: str
+    text: str
+
+
+class ConceptSide(BaseModel):
+    name: str
+    concepts: list[ConceptItem]
+
+
+class ConceptRelationQuery(BaseModel):
+    a: ConceptSide
+    b: ConceptSide
+
+
+def _concept_sides(q: ConceptRelationQuery) -> tuple[dict, dict]:
+    for x in (q.a, q.b):
+        if not 1 <= len(x.concepts) <= 6:
+            raise HTTPException(400, "키워드마다 설명은 1~6개")
+    side = lambda x: {"name": x.name[:100], "concepts": [{"note": c.note[:200], "text": c.text[:600]} for c in x.concepts]}
+    return side(q.a), side(q.b)
+
+
+@router.post("/keyword-relation/concepts")
+async def keyword_relation_concepts(q: ConceptRelationQuery, request: Request):
+    """증거 문장이 없는 두 키워드의 관계를 두 키워드의 설명(노트에서 뽑은 문장)만으로 LLM 에 묻는다 (눌렀을 때만, 로컬 접속만).
+    related 는 설명이 관계를 말할 때만이고 일반 상식에 기댄 판정은 weak 까지다. 양쪽 설명을 인용하지 못하면 unsure."""
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    a, b = _concept_sides(q)
+    judge = _relation_judge(request.app.state)
+    try:
+        res = await run_in_threadpool(judge.judge_concepts, a, b)
+    except LLMError as e:
+        raise HTTPException(502, f"관계 확인 LLM 오류: {e.kind}")
+    from app.services.links.relation_llm import CONCEPT_PROMPT_VERSION
+    return {**res, "model": judge.model, "promptVersion": CONCEPT_PROMPT_VERSION}
+
+
+@router.post("/keyword-relation/concepts/stream")
+async def keyword_relation_concepts_stream(q: ConceptRelationQuery, request: Request):
+    """/keyword-relation/concepts 와 같은 일을 하되, 판정이 **쓰이는 대로** SSE 로 보낸다. 이벤트: cached · field(path, delta | value) · result(result) · error."""
+    from app.services.links.relation_llm import CONCEPT_PROMPT_VERSION
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    a, b = _concept_sides(q)
+    judge = _relation_judge(request.app.state)
+
+    def work(emit):
+        res = judge.judge_concepts(a, b, on_event=emit)
+        emit({"type": "result", "result": {**res, "model": judge.model, "promptVersion": CONCEPT_PROMPT_VERSION}})
+    return _sse_job(request, work)
 
 
 @router.post("/keyword-relation/stream")

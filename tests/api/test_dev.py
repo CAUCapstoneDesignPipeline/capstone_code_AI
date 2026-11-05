@@ -328,6 +328,47 @@ def test_keyword_relation_endpoint(tmp_path, monkeypatch):
         assert c.post("/dev/keyword-relation", json=body).status_code == 503
 
 
+def test_keyword_relation_from_descriptions_only(tmp_path):
+    from app.services.links.relation_llm import KeywordRelationJudge
+    from app.services.llm import LLMResult
+
+    class Fake:
+        provider, model = "anthropic", "fake-model"
+        def __init__(self): self.calls = 0
+        def complete_json(self, system, user, schema, name):
+            self.calls += 1
+            assert name == "keyword_relation_concepts"
+            return LLMResult({"verdict": "related", "type": "requires", "direction": "a_to_b", "basis": "notes",
+                              "reason": "TCP 의 신뢰성은 재전송에 기댄다.", "evidence": ["A1", "B1"]}, self.provider, self.model)
+        def stream_json(self, system, user, schema, name, on_event=None):
+            for e in ({"path": "verdict", "value": "related"}, {"path": "reason", "delta": "TCP 의 "}, {"path": "reason", "delta": "신뢰성은 재전송에 기댄다."}):
+                on_event({"type": "field", **e})
+            return self.complete_json(system, user, schema, name)
+
+    body = {"a": {"name": "TCP", "concepts": [{"note": "n1", "text": "TCP는 재전송으로 신뢰성을 보장한다."}]},
+            "b": {"name": "재전송", "concepts": [{"note": "n2", "text": "재전송은 손실된 패킷을 다시 보내는 방식이다."}]}}
+    app = dev_app()
+    fake = Fake()
+    app.state.kwrel = KeywordRelationJudge(fake, tmp_path / "cache")
+    with TestClient(app, client=LOCAL) as c:
+        r = c.post("/dev/keyword-relation/concepts", json=body).json()
+        assert (r["verdict"], r["basis"], r["evidence"], r["cached"]) == ("related", "notes", ["A1", "B1"], False)
+        assert r["promptVersion"] == "kwrel-concept-llm-1" and r["model"] == "fake-model"
+        evs = _sse(c.post("/dev/keyword-relation/concepts/stream", json=body).text)          # 저장된 결과
+        assert [e["type"] for e in evs] == ["cached", "result"] and evs[-1]["result"]["cached"] is True and fake.calls == 1
+        body2 = {**body, "a": {**body["a"], "name": "TCP2", "concepts": [{"note": "n1", "text": "다른 설명이다."}]}}
+        evs = _sse(c.post("/dev/keyword-relation/concepts/stream", json=body2).text)
+        assert [e["type"] for e in evs] == ["field", "field", "field", "result"]
+        assert "".join(e["delta"] for e in evs if "delta" in e) == "TCP 의 신뢰성은 재전송에 기댄다."
+        assert evs[-1]["result"]["promptVersion"] == "kwrel-concept-llm-1"
+        for bad in ({**body, "a": {"name": "TCP", "concepts": []}}, {**body, "b": {"name": "x", "concepts": [{"note": "n", "text": "t"}] * 7}}):
+            assert c.post("/dev/keyword-relation/concepts", json=bad).status_code == 400
+            assert c.post("/dev/keyword-relation/concepts/stream", json=bad).status_code == 400
+    with TestClient(app, client=("10.0.0.5", 50000)) as c:
+        assert c.post("/dev/keyword-relation/concepts", json=body).status_code == 403
+        assert c.post("/dev/keyword-relation/concepts/stream", json=body).status_code == 403
+
+
 def _no_embeddings(monkeypatch):
     from app.services.links.pairing import EmbeddingStore
     monkeypatch.setattr(EmbeddingStore, "vectors", lambda self, texts: None)        # 모델 파일이 없어도 돌아야 한다
