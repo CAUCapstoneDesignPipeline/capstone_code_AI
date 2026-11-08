@@ -231,3 +231,48 @@ def test_refusal_is_reported_not_retried_with_another_model():
         assert evs[-1][0] == "error" and evs[-1][1]["code"] == "INVALID_MODEL_OUTPUT" and evs[-1][1]["retryable"] is False
         r = call(c, body([user("안녕")], stream=False))
         assert r.status_code == 502 and r.json()["error"]["code"] == "INVALID_MODEL_OUTPUT"
+
+
+class _Slow(FakeStream):
+    """stall_at 번째 이벤트 앞에서 멈춘다 (모델이 응답하지 않는 상황)."""
+
+    def __init__(self, *a, stall_at=0, **kw):
+        super().__init__(*a, **kw)
+        self.stall_at = stall_at
+
+    async def __aiter__(self):
+        n = 0
+        async for ev in super().__aiter__():
+            if n == self.stall_at:
+                await asyncio.sleep(30)
+            n += 1
+            yield ev
+
+
+class _SlowClient(FakeClient):
+    def __init__(self, stall_at):
+        super().__init__()
+        self.stall_at = stall_at
+
+    def _stream(self, **kwargs):
+        self.calls.append(kwargs)
+        return _Slow(self.parts, log=self.log, stall_at=self.stall_at)
+
+
+def test_no_first_token_in_time_is_a_normal_504_and_frees_the_slot(monkeypatch):
+    monkeypatch.setattr("app.api.v1.chat.REQUEST_TIMEOUT_S", 0.3)
+    with TestClient(make(_SlowClient(stall_at=0))) as c:
+        for _ in range(3):                                   # 자리는 2개: 새면 세 번째가 AI_BUSY 가 된다
+            r = call(c, body([user("안녕")]))
+            assert r.status_code == 504 and r.json()["error"] == {"code": "MODEL_TIMEOUT", "message": "모델 처리 시간이 초과되었습니다.", "retryable": True, "requestId": r.json()["error"]["requestId"]}
+
+
+def test_whole_stream_shares_one_deadline(monkeypatch):
+    """첫 글자가 늦지 않아도 전체가 마감을 넘으면 error 이벤트로 끝난다 (글이 나온 뒤에 마감이 새로 시작되지 않는다)."""
+    monkeypatch.setattr("app.api.v1.chat.REQUEST_TIMEOUT_S", 0.3)
+    import time
+    t = time.monotonic()
+    with TestClient(make(_SlowClient(stall_at=2))) as c:
+        evs = sse(call(c, body([user("안녕")])).text)
+    assert [e for e, _ in evs][:2] == ["start", "thinking"] and evs[-1][0] == "error" and evs[-1][1]["code"] == "MODEL_TIMEOUT"
+    assert evs[-1][1]["retryable"] is True and time.monotonic() - t < 5

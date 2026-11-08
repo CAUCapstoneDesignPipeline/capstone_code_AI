@@ -72,9 +72,14 @@ async def chat(request: Request):
         return JSONResponse({**out, "conversationId": req.conversationId, "elapsedMs": int((time.monotonic() - t0) * 1000)})
 
     await state.inflight.acquire()                              # 스트림이 끝날 때까지 한 자리를 쓴다
+    deadline = asyncio.get_running_loop().time() + REQUEST_TIMEOUT_S      # 첫 글자를 기다리는 시간과 스트림 전체가 한 마감을 나눠 쓴다 (BE 호출 제한 130초 안쪽)
     events = svc.stream(req.knowledge, req.messages)
     try:                                                         # 첫 이벤트까지 받아 봐서, 시작도 못 한 오류는 보통의 HTTP 오류로 낸다
-        first = await events.__anext__()
+        async with asyncio.timeout_at(deadline):
+            first = await events.__anext__()
+    except TimeoutError:
+        state.inflight.release()
+        raise AiError("MODEL_TIMEOUT")
     except LLMError as e:
         state.inflight.release()
         raise _ai_error(e)
@@ -98,7 +103,7 @@ async def chat(request: Request):
             yield _sse("start", stamp({"requestId": rid, "conversationId": req.conversationId, "model": svc.model}))
             yield _sse(first["type"], stamp({k: v for k, v in first.items() if k != "type"}))
             try:
-                async with asyncio.timeout(REQUEST_TIMEOUT_S):
+                async with asyncio.timeout_at(deadline):
                     async for ev in events:
                         yield _sse(ev["type"], stamp({k: v for k, v in ev.items() if k != "type"}))
             except TimeoutError:

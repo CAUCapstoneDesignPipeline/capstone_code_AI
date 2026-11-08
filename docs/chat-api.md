@@ -101,6 +101,17 @@ data: {"stopReason": "end_turn", "model": "claude-sonnet-5-5", "usage": {"inputT
 
 자동 재시도와 다른 모델로의 fallback 은 없다 (계약). 스트림 하나가 동시 처리 자리(`AI_MAX_INFLIGHT`) 하나를 끝날 때까지 쓴다.
 
+## 화면(FE)이 정할 때 알아야 할 것 (회의 2026-11-08 질문에 대한 답)
+
+| 질문 | 답 |
+| --- | --- |
+| 스트리밍인가 | 예. 기본이 SSE 토큰 스트림이다 (`delta` 를 이어 붙여 그린다). 한 번에 받고 싶으면 `"stream": false`. 첫 글자까지 약 2~3초, 끝까지 약 5초 (위 측정) |
+| 중지를 둘 수 있나 | 예. 연결이 끊기면 응답 제너레이터가 닫히면서 모델 호출도 닫히고 처리 자리를 돌려준다 (`test_closing_the_stream_early_closes_the_model_call`). BE 에 따로 취소 기능을 만들 필요는 없고, FE 의 중지 → BE 가 AI 로의 연결을 닫는 것이면 된다. 중지한 답을 대화 기록에 남길지는 BE 가 정한다 |
+| 제한 시간 | AI 쪽 전체 115초 — 첫 글자를 기다리는 시간과 스트림이 이 마감 하나를 나눠 쓴다 (BE 호출 제한 130초 안쪽). 넘으면 첫 글자 전에는 504 `MODEL_TIMEOUT`, 글이 나온 뒤에는 `error` 이벤트 (`retryable: true`). 글자가 한동안 안 나오는 것과는 다르다 — 모델이 생각하는 동안에는 `thinking` 이벤트가 온다 |
+| 실패 화면을 나눌 기준 | `retryable` 로 나눈다. **true** (`AI_BUSY` · `SERVICE_UNAVAILABLE` · `MODEL_TIMEOUT` · `MODEL_PROVIDER_ERROR`) 는 "다시 시도" 버튼, **false** (`INVALID_MODEL_OUTPUT` 모델이 거절, `INPUT_TOO_LARGE` 대화가 너무 길다 → BE 가 오래된 턴을 줄여야 한다, `VALIDATION_FAILED`) 는 같은 요청을 다시 보내도 같으므로 버튼을 두지 않는다 |
+| 오류 문구 | `message` 는 계약의 고정 문구라 로그·진단용이다 (예: "모델 처리 시간이 초과되었습니다."). 사용자에게 보일 문구는 `code` 로 FE 가 정한다 |
+| 첫 글자 전 실패 vs 중간 실패 | 첫 글자 전: HTTP 오류 (JSON). 중간: `error` 이벤트 뒤 스트림 종료. 그러므로 `200` + `text/event-stream` 이면 말풍선을 만들고, 그 안에서 `error` 가 오면 그 말풍선을 "실패" 로 바꾸면 된다 (받은 글은 남아 있다) |
+
 ## BE 연동 메모
 
 1. BE 는 사용자가 "이해가 안 됨" 을 누르면 카드(근거 A·B, 외부 지식, 결론)로 `knowledge` 를 만들고 대화 기록을 저장한다. 다음 턴마다 기록 전체를 `messages` 로 보낸다.
