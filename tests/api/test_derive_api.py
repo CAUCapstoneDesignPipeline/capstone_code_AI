@@ -168,3 +168,40 @@ def test_derive_insights_end_to_end():
     assert res["insights"][0]["result"] == "O((V + E) log V)"
     assert res["notes"][0] == doc("dijkstra")["noteId"] and doc("indexed-heap")["noteId"] in res["notes"]
     assert again["insights"] == res["insights"] and calls == 5           # 사실은 노트마다 한 번만 뽑는다
+
+
+def test_hashes_for_card_continuity(client):
+    """/facts 는 사실마다 contentHash 와 노트 전체의 factsHash, /derivations 는 결론마다 fingerprint·basisHash 를 준다."""
+    from app.services.derive import facts as F
+    note = doc("indexed-heap")
+    r = post(client, "/facts", {"context": ctx(note), "profileVersion": "facts-llm-3", "note": note})
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["factsHash"] == F.facts_hash(manual_facts(load_note("indexed-heap")))
+    assert all(len(f["contentHash"]) == 64 for f in got["facts"]) and len({f["contentHash"] for f in got["facts"]}) > 1
+
+    body = derive_body(["dijkstra", "indexed-heap"])
+    first = post(client, "/derivations", body).json()["derivations"]
+    assert all(len(d["fingerprint"]) == 64 and len(d["basisHash"]) == 64 for d in first)
+
+    # 다시 추출해 사실 id 만 달라졌다: derivationId 는 바뀌고 지문과 기댄 사실 해시는 그대로 → BE 는 카드 id 를 이어 가고 내용은 그대로 둔다
+    renamed = copy.deepcopy(body)
+    for f in renamed["facts"]:
+        f["factId"] = "again-" + f["factId"]
+    again = post(client, "/derivations", renamed).json()["derivations"]
+    assert [d["derivationId"] for d in again] != [d["derivationId"] for d in first]
+    assert [(d["fingerprint"], d["basisHash"]) for d in again] == [(d["fingerprint"], d["basisHash"]) for d in first]
+
+
+def test_derivations_check_a_given_content_hash(client):
+    from app.services.derive.cases import manual_facts as mf
+    body = derive_body(["dijkstra", "indexed-heap"])
+    facts = [f for n in ("dijkstra", "indexed-heap") for f in mf(load_note(n))]
+    ok = copy.deepcopy(body)
+    for j, f in zip(ok["facts"], facts):
+        j["contentHash"] = f.content_hash()
+    assert post(client, "/derivations", ok).status_code == 200            # 맞는 해시는 받는다 (없어도 받는다: body 에는 없다)
+    bad = copy.deepcopy(ok)
+    bad["facts"][0]["expr"] = (bad["facts"][0]["expr"] or "1") + " + 1"       # 뜻을 고치고 옛 해시를 그대로 보냄
+    r = post(client, "/derivations", bad)
+    assert r.status_code == 422 and code(r) == "INVALID_REFERENCE"

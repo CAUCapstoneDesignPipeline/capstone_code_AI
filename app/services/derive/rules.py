@@ -19,7 +19,7 @@ import hashlib
 from dataclasses import dataclass, field
 
 from . import bigo
-from .facts import OPS, ROLES, SIZE_VAR, Fact
+from .facts import OPS, ROLES, SIZE_VAR, Fact, _digest
 from .korean import josa
 from .plain import OP_GLOSS, ROLE_GLOSS, cost_gloss
 
@@ -58,6 +58,8 @@ class Derivation:
     soundness: object = None            # sound_llm.SoundOut (derive-sound-1)
     role_label: str = ""
     ops: list[tuple[str, str, str | None]] = field(default_factory=list)   # (연산 key, 이름, R2 의 비용 식) — 쉬운 풀이용
+    fingerprint: str = ""               # 같은 추천인가: (알고리즘, 자료 구조, 역할). derive() 가 채운다
+    basis_hash: str = ""                # 결론이 기댄 사실의 뜻 해시 + 규칙. 같은 추천의 내용이 바뀌었는가. derive() 가 채운다
 
     @property
     def rule_version(self) -> str:
@@ -111,6 +113,18 @@ def _ops(facts) -> list[str]:
     """연산을 어휘 순서(삽입 → 꺼내기 → 키 바꾸기 …)로, 어휘 밖의 연산은 key 순으로 뒤에. 설명이 동작 순서대로 읽힌다."""
     order = list(OPS)
     return sorted({f.op for f in facts}, key=lambda o: (order.index(o) if o in order else len(order), o))
+
+
+def fingerprint(algorithm_key: str, structure_key: str, role: str) -> str:
+    """'같은 추천' 의 지문: 결론 문장·사실 id·근거 위치·규칙·경우를 넣지 않는다. 노트를 고치고 다시 분석해도 같은 알고리즘×자료 구조×역할이면 같은 값이라
+    BE 는 카드 id 를 그대로 두고 내용만 새로 쓸 수 있다. 화면 카드의 중복 기준(client.pick_insights)과 같다. 사용자는 BE 가 앞에 붙인다."""
+    return _digest("derive-card-1", algorithm_key, structure_key, role)
+
+
+def basis_hash(rule: str, case: str | None, facts: list[Fact]) -> str:
+    """결론이 기댄 사실(전제와 조건의 사실)의 뜻 해시. 같은 지문에서 이 값이 같으면 결론의 내용이 같고, 다르면 같은 추천이 새 내용으로 바뀐 것이다
+    (규칙이 R2 에서 R1 으로 내려앉은 경우도 다르다). 근거 위치와 사실 id 는 넣지 않는다."""
+    return _digest("derive-basis-1", rule, case, *sorted(f.content_hash() for f in facts))
 
 
 def _did(*parts) -> str:
@@ -484,4 +498,8 @@ def derive(facts: list[Fact], titles: dict[str, str] | None = None) -> list[Deri
             out.append(d1)
             if d1.status in ("conclusion", "known") and ix.needs.get((a, role)):
                 out += r2_all(ix, a, role, s, d1, titles)
+    for d in out:
+        d.fingerprint = fingerprint(d.algorithm[0], d.structure[0], d.role)
+        used = {*d.premises, *(fid for _, fid in d.conditions if fid)}
+        d.basis_hash = basis_hash(d.rule, d.case, [ix.by_id[x] for x in sorted(used) if x in ix.by_id])
     return out

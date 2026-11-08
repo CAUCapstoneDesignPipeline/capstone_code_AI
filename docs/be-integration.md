@@ -125,6 +125,8 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 **근거 검사.** `/derivations` 는 사실마다 `evidence` 의 noteVersion·bodySha256·UTF-16 위치·quote 가 요청 `documents` 원문과
 맞는지 본다. 옛 리비전에서 뽑은 사실은 422 (`INVALID_REFERENCE`/`INVALID_SPAN`). 그래서 늦게 온 옛 응답이 최신 원문으로 결론을 만들 수 없다.
 `/facts` 는 노트에 글자 그대로 있는 quote 만 사실로 남긴다 (나머지는 `dropped` 에 이유별 개수).
+응답에는 사실마다 `contentHash` (사실의 **뜻**만의 해시: 종류·주체·역할·연산·식·경우·부정·조건. 사실 id·노트에 쓴 이름·근거 위치는 넣지 않는다)와 노트 전체의
+`factsHash` (그 해시들을 정렬해 합친 것)가 있다. `/derivations` 요청의 사실에 `contentHash` 를 실어 보내면 AI 가 다시 계산해 맞는지 본다 (뜻을 고치고 옛 해시를 붙이면 422 `INVALID_REFERENCE`). 없어도 된다.
 
 **결론 (`derivations[]`).**
 
@@ -140,6 +142,8 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 | `duplicateOfFactIds` | `known` 일 때 이미 같은 결론을 쓴 사실 |
 | `explanation` | 사용자에게 보일 쉬운 설명 (해요체, 문단은 빈 줄로 나뉜다): 한 줄 요약("쉽게 말하면 …") → 쓰인 역할·연산·O(...) 풀이 → 차근차근(`steps` 그대로, 단계마다 어느 노트에서 온 사실인지) → 성립 조건. 보류·기각이면 무엇이 빠졌는지·왜 버렸는지. 풀이는 용어와 표기의 뜻일 뿐 결론의 근거가 아니다 (결정적, `plain.py`) |
 | `soundness` | `derive-sound-1`: LLM 판정 (sound/unsound/uncertain, 충실하지 않은 전제) |
+| `fingerprint` | **같은 추천인가.** 알고리즘 key × 자료 구조 key × 역할의 해시 (sha256 hex 64자). 결론 문장·사실 id·근거 위치·규칙·경우를 넣지 않는다. 아래 "카드 이어 가기" |
+| `basisHash` | **같은 추천의 내용이 바뀌었는가.** 결론이 기댄 사실(전제와 조건)의 `contentHash` 들과 규칙·경우의 해시 |
 
 `noveltyScope.noteIds` 는 "이미 있는 결론인가" 를 찾아본 노트(요청 문서)다. 그 밖의 노트는 보지 않았으므로 화면 문구는
 "찾아본 노트에서는 없었어요" 다. 사용자 전체 노트에서 찾으려면 BE 가 저장된 `stated_result` 사실 중 같은 `subjectKey` 를 가진
@@ -160,6 +164,39 @@ BE 는 `(noteId, startOffset, endOffset)` 로 자기가 저장한 evidence·rela
 
 **보여 줄 카드** (`app/client.py` `pick_insights`): (알고리즘, 자료 구조, 역할) 마다 하나. R2 결론이 있으면 R2 카드(R1 은 그 안의 단계),
 없으면 R1. 트리거 노트가 전제를 낸 결론만, 최대 5개.
+
+**카드 이어 가기** (회의 2026-11-08: 다시 분석해도 같은 추천은 같은 카드, 근거가 정말 바뀐 때만 stale). 사실 id 는 노트 원문 hash 를 포함하므로
+(`extract_llm.py`) 노트를 저장할 때마다 **모든 사실 id 와 `derivationId` 가 바뀐다.** 그래서 다시 분석한 결론을 옛 카드와 같은 것으로 알아볼 수 없고,
+카드가 중복되거나 사라진다. `derivationId` 는 한 응답 안의 참조용이다. 카드 이어 가기는 아래 값으로 한다.
+
+| 값 | 어디서 | 뜻 | 넣지 않은 것 |
+| --- | --- | --- | --- |
+| `contentHash` | `/facts` 사실마다 | 사실의 뜻 | 사실 id · 노트에 쓴 이름 · 한국어 이름 · 근거 위치 · 식의 공백 |
+| `factsHash` | `/facts` 응답 | 노트의 사실 전체의 뜻 (순서·id·위치와 무관, 같은 사실이 둘이면 둘로 센다) | |
+| `fingerprint` | `/derivations` 결론마다 | 같은 추천인가 = 알고리즘 × 자료 구조 × 역할 | 결론 문장 · 사실 id · 근거 위치 · 규칙 · 경우. 사용자는 BE 가 앞에 붙인다 |
+| `basisHash` | `/derivations` 결론마다 | 같은 추천의 내용이 바뀌었나 = 기댄 사실의 뜻 + 규칙 + 경우 | 근거 위치 · 사실 id |
+
+BE 가 할 일 (참조 구현 `app/client.py` `reconcile_cards`, 시험 `tests/services/test_client.py`):
+
+| 새 분석 결과 | 처리 |
+| --- | --- |
+| 같은 `fingerprint`, 같은 `basisHash` | **same** — 카드 id 와 내용 그대로. 노트의 다른 곳을 고쳤을 뿐이다. 근거 위치(quote 의 span)만 새 사실의 것으로 갱신한다 |
+| 같은 `fingerprint`, 다른 `basisHash` | **updated** — id 유지, revision 을 올리고 내용을 새 결론으로 바꾼다. 규칙이 R2 에서 R1 으로 내려앉은 경우도 여기다 |
+| 옛 `fingerprint` 가 새 결과에 없다 | **lost** — 기댄 사실이 사라졌다 (`evidence_lost`). 카드는 두고 답하지 못하게 한다 |
+| 처음 보는 `fingerprint` | **new** — 새 카드. 사용자가 "알고 있던 내용" 으로 답한 지문이면 내지 않는다 (BE 가 그 지문을 저장해 두었다가 `dismissed` 로 넘긴다) |
+
+노트를 고친 뒤의 흐름: `/facts` 를 다시 부른다 → `factsHash` 가 이전과 같으면 사실이 같으므로 `/derivations`(와 soundness 판정 LLM 비용)를 건너뛰고 카드를 모두 current 로
+둔다 (`note.version` 이 바뀌어도 stale 이 아니다). 다르면 `/derivations` 를 다시 부르고 위 표로 맞춘다.
+
+**측정** (docs/team/data 의 노트, 캐시 없이 LLM 추출, `knownSubjects` 를 주지 않아 BE 가 쓸 때보다 불리하다): 결론이 나오는 노트 7쌍을 각각 같은 입력으로 다시 추출,
+앞에 한 줄 덧붙여 추출, 뒤에 한 줄 덧붙여 추출 (21번).
+- 결론 카드의 `fingerprint` 가 **21/21 유지**됐고 사라진 카드도, 새로 생긴 지문도 없었다.
+- `basisHash` 까지 같은 (지문·규칙·경우) 항목은 45개 중 33개 (73%). 나머지는 **updated** 로 id 를 유지한 채 내용이 새로 쓰인다. 같은 입력을 다시 추출해도 이만큼 달라진다 (LLM 이 조건 문장을
+  "비교할 수 있음" / "비교할 수 있어야 함" 처럼 다르게 쓰고, 사실 한두 개를 넣고 뺀다).
+- `factsHash` 가 그대로인 노트: 같은 입력 다시 4/8, 앞에 한 줄 3/8, 뒤에 한 줄 3/8, 어미 하나 4/8. 그래서 **`factsHash` 는 "같으면 건너뛴다" 는 절약이지 보장이 아니다.** 달라도 위 표가 카드를 지킨다.
+
+한계: 지문은 두 추출에서 주체 key·역할이 같아야 이어진다 (위 7쌍은 모두 같았다. BE 가 `knownSubjects` 를 주면 더 잘 맞는다). 표본이 작다 (7쌍). `/note-links` · `/explanations` 경로의
+카드는 AI 가 BE 의 개념 UUID 를 모르므로 지문을 AI 가 만들지 않는다 — BE 가 (사용자, 개념 UUID, 경로의 매개 개념) 으로 만든다.
 
 ## 5. profile
 

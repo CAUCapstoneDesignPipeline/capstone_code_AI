@@ -57,3 +57,16 @@ def test_pick_paths_prefers_non_taxonomy_and_spreads_tails():
     assert out == [other, tax2]           # 분류 계층만 올라가는 경로는 뒤로, 이미 쓴 Add→EI·EI→트랜잭션 기능은 나중에
     out, _ = pick_paths([tax, tax2, other], 3)
     assert out == [other, tax, tax2]                   # 자리가 남으면 채운다
+
+
+def test_reconcile_cards_keeps_ids_for_the_same_fingerprint():
+    from app.client import reconcile_cards
+    shown = [{"id": "c1", "fingerprint": "A", "basisHash": "1"}, {"id": "c2", "fingerprint": "B", "basisHash": "2"},
+             {"id": "c3", "fingerprint": "C", "basisHash": "3"}]
+    cards = [{"fingerprint": "A", "basisHash": "1", "conclusion": "새 표현이어도"}, {"fingerprint": "B", "basisHash": "9"},
+             {"fingerprint": "D", "basisHash": "4"}, {"fingerprint": "E", "basisHash": "5"}]
+    got = reconcile_cards(shown, cards, dismissed={"E"})
+    assert [(g["id"], g["action"]) for g in got] == [("c1", "same"), ("c2", "updated"), ("c3", "lost"), (None, "new")]
+    assert got[0]["card"]["conclusion"] == "새 표현이어도" and got[2]["card"] is None and got[3]["card"]["fingerprint"] == "D"
+    assert reconcile_cards([], []) == []
+    assert reconcile_cards(shown, [])[0]["action"] == "lost"                 # 분석 결과가 비어도 카드가 조용히 사라지지 않고 lost 로 남는다

@@ -7,6 +7,7 @@ import pytest
 from app.services.derive import bigo
 from app.services.derive.cases import load_cases, load_note, locate, manual_facts, run_case, score_case
 from app.services.derive.extract_llm import FactExtractor
+from app.services.derive import facts as F
 from app.services.derive.facts import Fact, FactEvidence, FactSet
 from app.services.derive.korean import josa
 from app.services.derive.rules import derive
@@ -264,3 +265,76 @@ def test_r2_per_cost_case_and_single_refused_op_rejects():
                _fx("b1", "op_cost", "K", "N2", op="range_query", negated=True)]
     d = derive(refused)
     assert [(x.rule, x.status) for x in d] == [("R1", "rejected")]                       # 연산 하나만 겹쳐도 기각은 낸다
+
+
+# ---- 카드 연속성: 사실의 뜻 해시 · 지문 · 기댄 사실 해시 (회의 11/08: 같은 추천은 id 를 이어 가고, 기댄 사실이 바뀐 때만 stale) ----
+
+def reidentified(facts, shift=7):
+    """노트를 다른 곳을 고쳐 다시 추출한 것처럼: 사실 id 와 근거 위치, 노트에 쓴 이름·한국어 이름이 달라진다."""
+    return [dataclasses.replace(f, fact_id=f"again#{i}", subject=f.subject + " ",
+                                evidence=dataclasses.replace(f.evidence, start=f.evidence.start + shift, end=f.evidence.end + shift))
+            for i, f in enumerate(facts)]
+
+
+def both():
+    return [f for n in ("dijkstra", "indexed-heap") for f in manual_facts(load_note(n))]
+
+
+def test_fact_content_hash_is_about_meaning_only():
+    f = next(x for x in both() if x.kind == "op_cost" and x.expr)
+    same = dataclasses.replace(f, fact_id="other", subject="다르게 쓴 이름", role_label="다른 이름", origin="extracted",
+                               expr=" ".join(f.expr), evidence=dataclasses.replace(f.evidence, start=1, end=2, quote="다른 문장"))
+    assert same.content_hash() == f.content_hash()
+    assert len(f.content_hash()) == 64
+    for change in ({"expr": f.expr + " + 1"}, {"negated": not f.negated}, {"case": "average" if f.case != "average" else "worst"},
+                   {"op": "other_op"}, {"subject_key": f.subject_key + "_x"}):
+        assert dataclasses.replace(f, **change).content_hash() != f.content_hash(), change
+    assert dataclasses.replace(f, condition=None).content_hash() == dataclasses.replace(f, condition="").content_hash()      # 빈 조건 = 조건 없음
+    assert dataclasses.replace(f, condition="비음수 가중치").content_hash() != f.content_hash()
+
+
+def test_facts_hash_ignores_order_ids_and_positions_but_not_meaning():
+    fs = both()
+    base = F.facts_hash(fs)
+    assert F.facts_hash(list(reversed(reidentified(fs)))) == base
+    assert F.facts_hash(fs[:-1]) != base                                    # 사실이 사라짐
+    assert F.facts_hash(fs + [fs[0]]) != base                               # 같은 사실이 하나 더 (센다)
+    changed = [dataclasses.replace(fs[0], expr=(fs[0].expr or "1") + " + 1"), *fs[1:]]
+    assert F.facts_hash(changed) != base
+    assert F.facts_hash([]) != base
+
+
+def test_fingerprint_survives_reextraction_and_basis_tracks_the_premises():
+    fs = both()
+    first = derive(fs)
+    again = derive(reidentified(fs))
+    assert [d.derivation_id for d in first] != [d.derivation_id for d in again]      # 사실 id 가 바뀌면 derivationId 는 바뀐다 (그래서 지문이 필요하다)
+    assert [(d.fingerprint, d.basis_hash) for d in first] == [(d.fingerprint, d.basis_hash) for d in again]
+    assert all(len(d.fingerprint) == 64 and len(d.basis_hash) == 64 for d in first)
+
+    r1 = next(d for d in first if d.rule == "R1" and d.status == "conclusion")
+    r2 = next(d for d in first if d.rule == "R2" and d.status == "conclusion")
+    assert r1.fingerprint == r2.fingerprint and r1.basis_hash != r2.basis_hash       # 같은 추천, R2 가 더 많은 사실에 기댄다
+    assert len({d.fingerprint for d in first}) < len(first)
+
+    # 기댄 사실 하나의 뜻을 고치면 지문은 그대로, 기댄 사실 해시만 바뀐다
+    cost = next(f for f in fs if f.fact_id in r2.premises and f.kind == "op_cost" and f.expr)
+    edited = [dataclasses.replace(f, expr="n") if f is cost else f for f in fs]
+    after = next(d for d in derive(edited) if d.rule == "R2" and d.fingerprint == r2.fingerprint and d.case == r2.case)
+    assert after.fingerprint == r2.fingerprint and after.basis_hash != r2.basis_hash
+    # 이 결론이 기대지 않는 사실 (다른 노트의 다른 알고리즘) 이 더해져도 기댄 사실 해시는 그대로다
+    unrelated = manual_facts(load_note("bfs"))
+    same = next(d for d in derive([*fs, *unrelated]) if d.rule == "R2" and d.fingerprint == r2.fingerprint and d.case == r2.case)
+    assert same.basis_hash == r2.basis_hash
+    # 같은 알고리즘의 조건(requires) 이 하나 더 생기면 결론의 조건이 달라지므로 기댄 사실도 달라진다
+    cond = dataclasses.replace(next(f for f in fs if f.kind == "requires"), fact_id="extra#1", condition="새 조건이에요")
+    more = next(d for d in derive([*fs, cond]) if d.rule == "R2" and d.fingerprint == r2.fingerprint and d.case == r2.case)
+    assert more.basis_hash != r2.basis_hash
+
+
+def test_fingerprint_differs_for_other_algorithm_structure_or_role():
+    from app.services.derive.rules import fingerprint
+    base = fingerprint("dijkstra", "indexed_binary_min_heap", "priority_queue")
+    assert base == fingerprint("dijkstra", "indexed_binary_min_heap", "priority_queue")
+    assert len({base, fingerprint("bfs", "indexed_binary_min_heap", "priority_queue"), fingerprint("dijkstra", "queue", "priority_queue"),
+                fingerprint("dijkstra", "indexed_binary_min_heap", "queue")}) == 4
