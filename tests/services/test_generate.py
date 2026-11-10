@@ -124,7 +124,7 @@ def test_at_most_three_sources_are_kept_even_if_the_model_gives_more():
 # ---- 생성 뒤 확인 ----
 
 class Checker:
-    model, prompt_version = "check-model", "knowledgecheck-llm-1"
+    model, prompt_version = "check-model", "knowledgecheck-llm-2"
 
     def __init__(self, result=None, error=None):
         self.result, self.error, self.calls = result, error, []
@@ -133,7 +133,7 @@ class Checker:
         self.calls.append((kw, conclusion, [e["url"] for e in external]))
         if self.error:
             raise self.error
-        return {"ok": True, "problems": [], "warnings": [], "external": external, "dropped": [], "reason": "", **(self.result or {})}
+        return {"ok": True, "problems": [], "warnings": [], "external": external, "dropped": [], "reason": "", "reach": "extended", **(self.result or {})}
 
 
 def verified(data, checker, cache=None, **kw):
@@ -186,3 +186,47 @@ def test_checking_event_is_emitted_after_validating():
     seen = []
     KnowledgeGenerator(Streaming(GOOD), None, checker=Checker()).generate(A, B, CID, on_event=lambda e: seen.append(e["type"]))
     assert seen[-2:] == ["validating", "checking"]
+
+
+LEAK = "결국 B에 나온 세 가지 환경은 동기화가 얼마나 자주 일어나느냐에 따라 고를 수 있는 선택지예요."
+LEAK_PROBLEM = "결론이 입력 문장을 'A'·'B' 같은 라벨로 가리켜 혼자 읽히지 않는다"
+
+
+def test_the_prompt_tells_the_model_not_to_call_the_inputs_a_or_b():
+    from app.services.links.generate import SYSTEM
+    assert "혼자 읽혀야" in SYSTEM and "라벨" in SYSTEM
+
+
+def test_results_stored_under_the_previous_prompt_are_still_used(tmp_path):
+    """prompt 를 한 줄 고쳤다고 저장해 둔 카드를 모두 다시 만들지 않는다 (라벨 문제는 확인 단계가 잡는다)."""
+    import hashlib, json
+    from app.services.links.generate import COMPATIBLE
+    old = KnowledgeGenerator(Fake(GOOD), tmp_path)
+    old.prompt_version = COMPATIBLE[0]
+    old.generate(A, B, CID)                                                  # 이전 prompt 로 저장
+    fresh = Fake({**GOOD, "conclusion": "다시 만들면 이 결론이 나와서 달라져요. " + GOOD["conclusion"]})
+    g = KnowledgeGenerator(fresh, tmp_path)
+    r = g.generate(A, B, CID)
+    assert r["cached"] is True and fresh.calls == 0 and r["conclusion"] == GOOD["conclusion"]
+    assert len(list(tmp_path.glob("*.json"))) == 1                          # 새 prompt 의 항목을 따로 만들지 않았다
+    other = KnowledgeGenerator(Fake(GOOD), tmp_path / "empty")
+    assert other.generate(A, B, CID)["cached"] is False and len(list((tmp_path / "empty").glob("*.json"))) == 1
+
+
+def test_a_card_held_for_pointing_at_a_or_b_is_not_kept_in_the_cache_so_it_can_be_made_again(tmp_path):
+    fake = Fake({**GOOD, "conclusion": LEAK + " 그래서 같은 일도 다르게 풀 수 있다는 새 설명이 나와요 정말로."})
+    g = KnowledgeGenerator(fake, tmp_path, checker=Checker({"ok": False, "problems": [LEAK_PROBLEM], "reason": "B에 나온"}))
+    r = g.generate(A, B, CID)
+    assert r["status"] == "held" and r["reasons"][0] == LEAK_PROBLEM and fake.calls == 1
+    assert list(tmp_path.glob("*.json")) == []                               # 저장하지 않는다
+    r2 = g.generate(A, B, CID)
+    assert fake.calls == 2 and r2["cached"] is False                         # 다시 누르면 다시 만든다 (같은 결과로 굳지 않는다)
+    other = KnowledgeGenerator(Fake(GOOD), tmp_path, checker=Checker({"ok": False, "problems": ["결론이 두 노트 문장의 주제를 벗어났다"]}))
+    other.generate(A, B, CID)
+    assert len(list(tmp_path.glob("*.json"))) == 1                           # 다른 이유로 보류된 것은 지금처럼 저장한다
+
+
+def test_reach_is_shown_on_the_card_and_never_changes_its_status():
+    for reach in ("derived", "extended", "hop"):
+        r = verified(GOOD, Checker({"reach": reach}))
+        assert r["status"] == "candidate" and r["check"]["reach"] == reach and r["concept"] is not None

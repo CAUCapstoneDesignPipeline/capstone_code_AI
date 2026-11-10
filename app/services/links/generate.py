@@ -22,7 +22,10 @@ from app.schemas.common import Span
 from app.schemas.knowledge import Concept, ExternalSource, PageSource
 from app.services.llm import LLMError
 
-PROMPT_VERSION = "newknowledge-llm-3"      # 2: 검색 한 번 · url·quote 만 / 1: 검색 3번까지 · title·supports 도 모델이 씀. 3: 결과를 구조화 출력이 아니라 submit_knowledge 도구로 받아 결론이 쓰이는 대로 보인다
+from .check import PROBLEMS
+
+PROMPT_VERSION = "newknowledge-llm-4"      # 4: 결론이 입력 문장을 A·B 라벨로 가리키지 않게 (3 과 결과가 같아 3 의 저장 결과는 그대로 쓴다: COMPATIBLE). 2: 검색 한 번 · url·quote 만 / 1: 검색 3번까지 · title·supports 도 모델이 씀. 3: 결과를 구조화 출력이 아니라 submit_knowledge 도구로 받아 결론이 쓰이는 대로 보인다
+COMPATIBLE = ("newknowledge-llm-3",)       # 이 prompt 로 만든 저장 결과도 쓴다 (라벨 문제는 확인 단계가 잡는다). 그래야 저장해 둔 카드를 모두 다시 만들지 않는다
 SUBMIT = "submit_knowledge"
 MAX_EXTERNAL = 3
 MAX_SEARCHES = 1                          # 검색 한 번이 약 9초다. 한 번에 9개쯤 받으므로 두 번째는 대개 같은 내용이다
@@ -36,6 +39,7 @@ SYSTEM = """너는 공부 노트에서 뽑은 두 문장(A, B)과 웹에서 찾�
 
 규칙:
 - conclusion 은 쉬운 말로 쓴다. 해요체로, "~는 ~에요" 처럼 친절하게, 2~4문장. 전문 용어는 처음 나올 때 풀어 쓴다.
+- conclusion 은 혼자 읽혀야 한다. 입력 문장을 "A", "B", "A 문장", "위 문장" 처럼 라벨로 가리키지 말고 키워드 이름이나 내용으로 말한다 (읽는 사람은 이 라벨이 무엇인지 모를 수 있다).
 - newKeyword 는 이 결론이 다루는 핵심 키워드 하나 (짧은 명사구).
 - fromA, fromB 는 결론에 쓴 부분을 A, B 문장에서 한 글자도 바꾸지 않고 그대로 옮긴 것이다 (문장 일부만 옮겨도 된다).
 - external 은 실제로 검색해서 본 페이지만 넣는다 (많아야 3개). url 은 검색 결과에 나온 그대로 쓰고, quote 는 그 페이지가 말한 내용을 한 문장으로 옮긴 것이다.
@@ -107,11 +111,10 @@ class KnowledgeGenerator:
         on_event(dict): 진행 상황 — cached · start · (모델이 알리는 thinking · search_start · search · search_results · writing) · validating.
         콜백이 예외를 던지면 모델 호출을 멈춘다."""
         emit = on_event or (lambda e: None)
-        key = self._key(a, b)
-        hit = self._cache_get(key)
+        key, hit = self._cached(a, b)
         if hit is not None:
             emit({"type": "cached"})
-            return {**self._verify(hit, a, b, concept_id, emit), "cached": True}
+            return {**self._dropped_if_unreadable(self._verify(hit, a, b, concept_id, emit), key), "cached": True}
         emit({"type": "start", "model": self.llm.model, "tool": self.tool or ""})
         user = json.dumps({"A": {k: a[k] for k in ("keyword", "note", "text")}, "B": {k: b[k] for k in ("keyword", "note", "text")}},
                           ensure_ascii=False)
@@ -121,7 +124,7 @@ class KnowledgeGenerator:
         emit({"type": "validating", "sources": len(res.sources)})
         out = self._check(res, a, b, concept_id)
         self._cache_put(key, out)                                  # 저장하는 것은 확인 전의 결과다 (확인은 따로 캐시하고, 생성을 다시 돌리지 않고 확인만 바꿀 수 있게)
-        return {**self._verify(out, a, b, concept_id, emit), "cached": False}
+        return {**self._dropped_if_unreadable(self._verify(out, a, b, concept_id, emit), key), "cached": False}
 
     def _verify(self, out: dict, a: dict, b: dict, concept_id: str, emit) -> dict:
         """코드 검사를 통과한 결과(candidate)를 check.KnowledgeChecker 로 한 번 더 확인한다. 구조 문제(주제 이탈 등)가 있으면 보류, 무관한 출처는 뺀다.
@@ -134,7 +137,7 @@ class KnowledgeGenerator:
             r = self.checker.check(a, b, out["newKeyword"], out["conclusion"], out["external"])
         except LLMError as e:
             return {**out, "check": {**info, "error": e.kind}}
-        info.update(problems=r["problems"], warnings=r["warnings"], reason=r["reason"], dropped=r["dropped"])
+        info.update(problems=r["problems"], warnings=r["warnings"], reason=r["reason"], dropped=r["dropped"], reach=r["reach"])
         if not r["ok"]:
             return {**out, "status": "held", "reasons": r["problems"] + ([r["reason"]] if r["reason"] else []), "concept": None, "check": info}
         if r["dropped"]:
@@ -198,10 +201,24 @@ class KnowledgeGenerator:
                                      quote=(e.get("quote") or None))
                       for e in merge_external(external, a, b)]).model_dump(mode="json")
 
-    def _key(self, a: dict, b: dict) -> str:
-        raw = json.dumps([self.llm.provider, self.llm.model, self.prompt_version, a["keyword"], a["text"], b["keyword"], b["text"]],
+    def _key(self, a: dict, b: dict, version: str | None = None) -> str:
+        raw = json.dumps([self.llm.provider, self.llm.model, version or self.prompt_version, a["keyword"], a["text"], b["keyword"], b["text"]],
                          ensure_ascii=False)
         return hashlib.sha256(raw.encode()).hexdigest()
+
+    def _cached(self, a: dict, b: dict) -> tuple[str, dict | None]:
+        """(저장할 열쇠, 저장된 결과). 지금 prompt 로 만든 것이 없으면 COMPATIBLE 한 이전 prompt 의 것도 쓴다."""
+        for version in (self.prompt_version, *COMPATIBLE):
+            hit = self._cache_get(self._key(a, b, version))
+            if hit is not None:
+                return self._key(a, b, version), hit
+        return self._key(a, b), None
+
+    def _dropped_if_unreadable(self, res: dict, key: str) -> dict:
+        """확인 단계가 '결론이 A·B 라벨로 가리켜 혼자 읽히지 않는다' 고 보류한 카드는 저장해 둔 생성 결과를 버린다: 같은 결과가 다시 나오지 않고 다시 만들 수 있다."""
+        if PROBLEMS["selfContained"] in ((res.get("check") or {}).get("problems") or []) and self.cache_dir:
+            (self.cache_dir / f"{key}.json").unlink(missing_ok=True)
+        return res
 
     def _cache_get(self, key: str):
         if self.cache_dir and (self.cache_dir / f"{key}.json").exists():

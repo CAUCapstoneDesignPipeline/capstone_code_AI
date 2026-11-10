@@ -13,7 +13,7 @@ EXT = [{"url": "https://a.example/tls", "title": "TLS handshake", "quote": "모�
 
 
 def reply(**kw):
-    return {"onTopic": True, "bothUsed": True, "newInfo": True, "correct": True, "noteError": False,
+    return {"onTopic": True, "bothUsed": True, "newInfo": True, "selfContained": True, "reach": "extended", "correct": True, "noteError": False,
             "sources": [{"id": "S1", "support": "yes"}, {"id": "S2", "support": "no"}, {"id": "S3", "support": "partly"}], "reason": "", **kw}
 
 
@@ -47,7 +47,7 @@ def test_good_result_keeps_supporting_sources_and_lists_the_dropped_ones():
     assert [e["url"] for e in r["dropped"]] == ["https://b.example/patent"]
 
 
-@pytest.mark.parametrize("flag, text", [("onTopic", "주제"), ("bothUsed", "한쪽만"), ("newInfo", "새로운 내용")])
+@pytest.mark.parametrize("flag, text", [("onTopic", "주제"), ("bothUsed", "한쪽만"), ("newInfo", "새로운 내용"), ("selfContained", "라벨")])
 def test_structural_problems_hold_the_result(flag, text):
     r = check(reply(**{flag: False, "reason": "이유"}))
     assert not r["ok"] and any(text in p for p in r["problems"]) and r["reason"] == "이유"
@@ -87,3 +87,33 @@ def test_checks_are_cached_by_content_and_a_bad_answer_is_not_cached(tmp_path):
     with pytest.raises(LLMError):
         KnowledgeChecker(bad, tmp_path).check(A, B, "z", "또 다른 결론", EXT)
     assert len(list(tmp_path.glob("*.json"))) == 2
+
+
+def test_the_checker_is_told_what_a_label_is_and_what_is_only_a_name_inside_the_content():
+    f = Fake(reply())
+    KnowledgeChecker(f).check(A, B, "TLS 키", "결론이에요", EXT)
+    system = f.seen[0][0]
+    assert "selfContained" in system and "라벨" in system and "서버 A" in system and "B-트리" in system and "A* 알고리즘" in system and "노트의 그림" in system    # 내용 안의 이름과 학생이 아는 자기 노트를 가리키는 말은 라벨이 아니다
+
+
+def test_a_conclusion_that_points_at_the_inputs_by_label_is_held_with_the_reason():
+    r = check(reply(selfContained=False, reason="결론이 'B에 나온' 처럼 입력 문장을 라벨로 가리킨다"))
+    assert not r["ok"] and r["problems"] == ["결론이 입력 문장을 'A'·'B' 같은 라벨로 가리켜 혼자 읽히지 않는다"] and r["flags"]["selfContained"] is False
+
+
+def test_reach_is_reported_but_never_blocks():
+    for reach in ("derived", "extended", "hop"):
+        r = check(reply(reach=reach))
+        assert r["ok"] and r["reach"] == reach and r["problems"] == []
+    with pytest.raises(LLMError):
+        check(reply(reach="far"))                                           # 정해진 값이 아니면 형식 오류다 (저장하지 않는다)
+
+
+def test_a_side_built_on_accepted_knowledge_also_gets_the_original_note_sentences_so_reach_is_judged_against_the_notes():
+    gen = {**A, "origin": "generated", "sources": [{"quote": "원래 노트 문장 하나", "noteId": "n1"}, {"quote": "원래 노트 문장 둘", "noteId": "n2"}]}
+    f = Fake(reply())
+    KnowledgeChecker(f).check(gen, B, "TLS 키", "결론이에요", EXT)
+    user = json.loads(f.seen[0][1])
+    assert user["A"]["noteSentences"] == ["원래 노트 문장 하나", "원래 노트 문장 둘"] and "noteSentences" not in user["B"]
+    sys = f.seen[0][0]
+    assert "hop" in sys and "noteSentences" in sys

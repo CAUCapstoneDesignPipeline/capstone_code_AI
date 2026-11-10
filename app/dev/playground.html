@@ -648,7 +648,7 @@ function genBlock(c, g) {
   const confused = react === "confused" ? chatBox(c, g) : "";
   return `<div class="gen"><div class="cardHead"><span class="status ${ST[0]}">${ST[1]}</span><span class="path">${esc(g.model)} · 검색 ${g.searches}번${g.cached ? " · 저장된 결과" : ""}</span></div>
     ${why}${warn}${ext ? `<h4>외부 지식</h4><ul class="steps">${ext}</ul>` : ""}${dropped}${conclusion}${buttons}${ok}${confused}
-    ${ck.model ? `<p class="path">확인 ${esc(ck.model)} · ${esc(ck.promptVersion)}${ck.error ? ` · 확인하지 못했다 (${esc(ck.error)})` : ""}</p>` : ""}</div>`;
+    ${ck.model ? `<p class="path">확인 ${esc(ck.model)} · ${esc(ck.promptVersion)}${ck.error ? ` · 확인하지 못했다 (${esc(ck.error)})` : ""}${ck.reach ? ` · 노트와의 거리: <b title="${esc(REACH[ck.reach]?.[1] || "")}">${esc(REACH[ck.reach]?.[0] || ck.reach)}</b>` : ""}</p>` : ""}</div>`;
 }
 
 // 선별 결과 칸: 쓰이는 대로 이 두 칸만 고친다 (paintScreen)
@@ -683,6 +683,9 @@ function sgCard(c) {
     <p class="path" id="scrm-${c.id}">${scrMemo(c)}</p>${foot}</div>`;
 }
 
+// 결론이 노트 문장에서 얼마나 멀리 갔는가 (확인 단계가 본다). 막지 않고 보여 준다: 멀리 간 카드도 쓸 만할 수 있다
+const REACH = { derived: ["가까움", "결론이 노트 문장에서 따라 나와요"], extended: ["조금 넓힘", "노트 문장이 다루는 개념에 바깥 사실을 더했어요"],
+  hop: ["다른 주제로", "결론의 중심이 노트 문장이 다루는 개념과 다른 주제예요 (관련은 있어요)"] };
 const ANSWERED = { known: "알고 있던 내용", accepted: "이해함", excluded: "호출자가 뺀 짝" };
 const answeredNote = (a) => (a && Object.keys(a).length ? ` · 이미 답해서 뺀 짝 ${Object.entries(a).map(([k, n]) => `${ANSWERED[k] || esc(k)} ${n}`).join(" · ")}` : "");
 function suggestView(source) {
