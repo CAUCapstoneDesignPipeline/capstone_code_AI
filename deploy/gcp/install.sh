@@ -7,6 +7,7 @@ umask 077
 config=$(realpath "$1")
 : "${GCP_CLI_PACKAGE_VERSION:?set reviewed exact google-cloud-cli apt package version}"
 : "${OPS_AGENT_VERSION:?set reviewed exact Ops Agent version}"
+[[ "$OPS_AGENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'OPS_AGENT_VERSION must be MAJOR.MINOR.PATCH'; exit 1; }
 revision=$2
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
 source_root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -35,7 +36,7 @@ apt-get update
 apt-get install -y "google-cloud-cli=$GCP_CLI_PACKAGE_VERSION"
 curl -fsSL https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh -o "$staging/ops-agent.sh"
 printf '%s  %s\n' d8c492ff1a37036694ae3cd57ac31d241209a0b31c42ec6c6c713b4a97bcfd35 "$staging/ops-agent.sh" | sha256sum -c -
-bash "$staging/ops-agent.sh" --also-install --version "$OPS_AGENT_VERSION"
+bash "$staging/ops-agent.sh" --also-install --version="$OPS_AGENT_VERSION"
 install -d -m 0700 /etc/capstone-ai /var/lib/capstone-ai /var/lib/capstone-ai/releases /var/lib/capstone-ai/operations
 install -d -m 0755 /opt/capstone-ai /run/capstone-ai-control
 install -m 0600 "$config" /etc/capstone-ai/host.json

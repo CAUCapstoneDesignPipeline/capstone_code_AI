@@ -133,7 +133,7 @@ CPU smoke는 BGE-M3 모델 다운로드·적재를 수행한다. local arm64 빌
 
 `deploy/gcp/install.sh`는 Ubuntu 24.04 amd64 전용 설치 코드다. 실제 실행에는 별도 VM 설치 승인이 필요하다.
 `host.example.json`을 Terraform output으로 채우고 `validate_host()` 검사와 SHA256을 검토한다.
-`GCP_CLI_PACKAGE_VERSION`(apt exact version), `OPS_AGENT_VERSION`을 승인 계획에 고정한다.
+`GCP_CLI_PACKAGE_VERSION`(apt exact version), `OPS_AGENT_VERSION`(`MAJOR.MINOR.PATCH`, deb 문자열 아님)을 승인 계획에 고정한다.
 설치기는 Google 공식 key/installer bytes의 조회 시 SHA256을 검증하고 서명된 저장소를 사용한다.
 이 작업은 프로젝트 생성·secret 값 등록·CA 발급·provider/model 선정·제품 AI 공개를 수행하지 않는다.
 

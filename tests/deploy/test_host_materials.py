@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -92,3 +93,50 @@ def test_idf_configuration_is_checked_in_exact_image_before_activation(tmp_path,
     with pytest.raises(ValueError,match="extractor configuration"):
         driver.prepare(m)
     assert not (tmp_path/"releases/r2").exists()
+
+
+INSTALL = Path(__file__).parents[2] / "deploy/gcp/install.sh"
+# Google add-google-cloud-ops-agent-repo.sh (install.sh에 고정한 hash)의 옵션 파싱을 최소로 재현한다.
+# getopts -- '-:'로 읽고 version=* 한 인자 형태만 받는다.
+OPS_AGENT_PARSER = r"""
+while getopts -- '-:' OPTCHAR; do
+  case "${OPTCHAR}" in
+    -)
+      case "${OPTARG}" in
+        also-install) ;;
+        version=*) AGENT_VERSION="${OPTARG#*=}" ;;
+        *) echo "Unknown option '${OPTARG}'." >&2; exit 1 ;;
+      esac
+  esac
+done
+[[ "${AGENT_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+printf '%s\n' "$AGENT_VERSION"
+"""
+
+
+def install_line(pattern):
+    return next(line for line in INSTALL.read_text().splitlines() if re.search(pattern, line))
+
+
+def test_install_passes_ops_agent_version_as_single_argument(tmp_path):
+    (tmp_path / "ops-agent.sh").write_text(OPS_AGENT_PARSER)
+    call = install_line(r'ops-agent\.sh" --')
+    assert re.search(r'--version="\$OPS_AGENT_VERSION"', call) and not re.search(r"--version\s", call)
+    run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + call],
+                         env={"PATH": "/usr/bin:/bin", "staging": str(tmp_path), "OPS_AGENT_VERSION": "2.73.0"},
+                         capture_output=True, text=True)
+    assert run.returncode == 0 and run.stdout == "2.73.0\n", run.stderr
+    split = subprocess.run(["bash", str(tmp_path / "ops-agent.sh"), "--also-install", "--version", "2.73.0"],
+                           capture_output=True, text=True)
+    assert split.returncode == 1 and "Unknown option 'version'" in split.stderr
+
+
+@pytest.mark.parametrize("version,ok", [("2.73.0", True), ("2.73.0~ubuntu24.04", False), ("latest", False),
+                                        ("2.*.*", False), ("2.73", False), ("", False)])
+def test_install_rejects_bad_ops_agent_version_before_packages(version, ok):
+    check = install_line(r'"\$OPS_AGENT_VERSION" =~')
+    text = INSTALL.read_text()
+    assert text.index(check) < text.index("apt-get update")
+    run = subprocess.run(["bash", "-c", check], env={"PATH": "/usr/bin:/bin", "OPS_AGENT_VERSION": version},
+                         capture_output=True, text=True)
+    assert (run.returncode == 0) is ok
