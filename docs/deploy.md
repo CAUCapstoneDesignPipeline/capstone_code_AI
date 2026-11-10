@@ -133,7 +133,7 @@ CPU smoke는 BGE-M3 모델 다운로드·적재를 수행한다. local arm64 빌
 
 `deploy/gcp/install.sh`는 Ubuntu 24.04 amd64 전용 설치 코드다. 실제 실행에는 별도 VM 설치 승인이 필요하다.
 `host.example.json`을 Terraform output으로 채우고 `validate_host()` 검사와 SHA256을 검토한다.
-`GCP_CLI_PACKAGE_VERSION`(apt exact version), `OPS_AGENT_VERSION`을 승인 계획에 고정한다.
+`GCP_CLI_PACKAGE_VERSION`(apt exact version), `OPS_AGENT_VERSION`(`MAJOR.MINOR.PATCH`, deb 문자열 아님)을 승인 계획에 고정한다.
 설치기는 Google 공식 key/installer bytes의 조회 시 SHA256을 검증하고 서명된 저장소를 사용한다.
 이 작업은 프로젝트 생성·secret 값 등록·CA 발급·provider/model 선정·제품 AI 공개를 수행하지 않는다.
 
@@ -224,7 +224,7 @@ Ops Agent 수신/알림을 포함한다. readiness는 provider를 호출하지 �
 - 로컬-only commit은 Actions checkout할 수 없다. 원격 게시 후 ref 접근을 검증하고 WIF를 활성화한다.
 - 이 배포는 private AI 서버 인수다. BE 기능 계약 승인이나 운영 사용자 대상 AI 공개를 대신하지 않는다.
 
-AI caller는 원격 develop commit `361c79d9f8a8998cec9cac48e97ca46a684e44e6`의 reusable/tool에 고정했다.
+AI caller는 원격 develop commit `9039843f6736d94a0941580f31c60b37a4549880`의 reusable/tool에 고정했다.
 이 commit의 `host_driver.py`가 컨테이너 CPU 1.5·메모리 10 GiB·`AI_MAX_INFLIGHT=1`을 쓴다. 설치 tool SHA
 (`/opt/capstone-ai/REVISION`), manifest `bootstrapRevision`, `GCP_AI_DEPLOY_TOOL_SHA`, WIF `job_workflow_ref`
 (Terraform `ai_deploy_workflow_sha`)도 같은 값으로 대조한 후 사용한다. Manifest는 별도의 `GCP_RELEASE_MANIFEST_SHA`에서 읽는다.
