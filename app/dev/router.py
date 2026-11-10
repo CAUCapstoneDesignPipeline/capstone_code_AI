@@ -795,19 +795,35 @@ async def suggest(q: SuggestQuery, request: Request):
 # ---- 새 지식 제안: 키워드 A 의 요소 + 키워드 B 의 요소 + 외부 지식 ----
 
 EMBEDDING_STORE = Path("data/private/cache/element-embeddings.npz")
+ACCEPTED_STORE = Path(os.environ.get("AI_ACCEPTED_STORE") or "data/private/accepted-knowledge.json")       # '이해함' 으로 받아들인 새 지식 (노트 구간이 들어 있어 비공개 폴더)
+
+
+def _accepted_store(state):
+    from app.services.links.accepted import AcceptedStore
+
+    store = getattr(state, "accepted_store", None)
+    if store is None or store.path != ACCEPTED_STORE:
+        store = state.accepted_store = AcceptedStore(ACCEPTED_STORE)
+    return store
 
 
 def _pairing_index(state, corpus, min_confidence: float):
     """(색인, 임베딩을 썼는지, 만든 ms). 같은 색인·기준이면 만들어 둔 것을 다시 쓴다. 임베딩은 처음에만 오래 걸리고 디스크에 남는다."""
 
+    from app.client import uid
+    from app.services.links.accepted import merge_into
     from app.services.links.pairing import EmbeddingStore, PairingIndex, elements_from
 
     with _BUILD_LOCK:
+        accepted = _accepted_store(state)
+        stamp = (accepted.path, accepted.version)
         cached = getattr(state, "pairing_cache", None)
-        if cached and cached[0] is corpus and cached[1] == min_confidence:
+        if cached and cached[0] is corpus and cached[1] == min_confidence and cached[4] == stamp:
             return cached[2], cached[3], 0
         t0 = time.monotonic()
         kws, meta, _ = _keyword_set(state, corpus, min_confidence)
+        # 받아들인 새 지식도 노트에서 뽑은 지식과 똑같이 요소가 된다 (기댄 노트 구간이 사라진 것은 빠진다)
+        kws, meta = merge_into(kws, meta, accepted.all(), {k: n.text for k, n in corpus.notes.items()}, uid)
         elements = elements_from(kws, meta)
         store = getattr(state, "emb_store", None)
         if store is None:
@@ -818,13 +834,16 @@ def _pairing_index(state, corpus, min_confidence: float):
             vectors = None
         index = PairingIndex(elements, vectors)
         built = int((time.monotonic() - t0) * 1000)
-        state.pairing_cache = (corpus, min_confidence, index, vectors is not None)
+        state.pairing_cache = (corpus, min_confidence, index, vectors is not None, stamp)
         return index, vectors is not None, built
 
 
 def _side(e) -> dict:
-    return {"keyword": e.keyword, "keywordId": e.keyword_id, "note": e.note, "noteId": e.note_id, "conceptId": e.concept_id,
-            "text": e.text, "start": e.start, "end": e.end, "quote": e.quote, "confidence": e.confidence}
+    out = {"keyword": e.keyword, "keywordId": e.keyword_id, "note": e.note, "noteId": e.note_id, "conceptId": e.concept_id,
+           "text": e.text, "start": e.start, "end": e.end, "quote": e.quote, "confidence": e.confidence}
+    if e.origin == "generated":              # 받아들인 새 지식: 기댄 노트와 구간, 외부 자료를 같이 보낸다 (이것으로 다시 만들면 그 소스를 이어받는다)
+        out.update(origin="generated", notes=list(e.notes), sources=list(e.sources), external=list(e.external))
+    return out
 
 
 # 후보 풀 깊이. 이전: 앵커 문장당 3개 · 임베딩 이웃 10 · 최대 12(엔드포인트 상한 30) → 노트 10개에서 쓸 만한 쌍(Haiku 선별) 12개.
@@ -947,6 +966,21 @@ def _knowledge_generator(state):
     return gen
 
 
+class SrcRef(BaseModel):
+    noteId: str
+    note: str
+    start: int
+    end: int
+    quote: str
+
+
+class ExtRef(BaseModel):
+    url: str
+    title: str | None = None
+    quote: str | None = None
+    retrievedAt: str | None = None
+
+
 class GenSide(BaseModel):
     keyword: str
     note: str
@@ -956,6 +990,15 @@ class GenSide(BaseModel):
     start: int
     end: int
     quote: str
+    origin: str = "extracted"          # generated: '이해함' 으로 받아들인 새 지식 (아래 세 칸이 따라온다)
+    notes: list[str] = []
+    sources: list[SrcRef] = []
+    external: list[ExtRef] = []
+
+
+def _share_note(a: "GenSide", b: "GenSide") -> bool:
+    """두 요소가 기댄 노트가 겹치는가 (받아들인 새 지식은 기댄 노트들, 아니면 자기 노트 하나)."""
+    return bool((set(a.notes) or {a.note}) & (set(b.notes) or {b.note}))
 
 
 class GenerateQuery(BaseModel):
@@ -973,8 +1016,8 @@ async def proposal_generate(q: GenerateQuery, request: Request):
     if not _loopback(request):
         raise HTTPException(403, "로컬에서만 부를 수 있다")
     gen = _knowledge_generator(request.app.state)
-    if q.a.note == q.b.note:
-        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
+    if _share_note(q.a, q.b):
+        raise HTTPException(400, "서로 다른 노트에 기댄 요소여야 한다")
     a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
     try:
         res = await run_in_threadpool(gen.generate, a, b, uid("generated", q.a.conceptId, q.b.conceptId))
@@ -1047,11 +1090,71 @@ async def proposal_generate_stream(q: GenerateQuery, request: Request):
     if not _loopback(request):
         raise HTTPException(403, "로컬에서만 부를 수 있다")
     gen = _knowledge_generator(request.app.state)
-    if q.a.note == q.b.note:
-        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
+    if _share_note(q.a, q.b):
+        raise HTTPException(400, "서로 다른 노트에 기댄 요소여야 한다")
     a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
     cid = uid("generated", q.a.conceptId, q.b.conceptId)
     return _sse_job(request, lambda emit: emit({"type": "result", "result": gen.generate(a, b, cid, on_event=emit)}))
+
+
+class AcceptQuery(BaseModel):
+    a: GenSide
+    b: GenSide
+    newKeyword: str
+    conclusion: str
+    external: list[ExtRef] = []
+
+
+@router.post("/proposals/accept")
+async def proposal_accept(q: AcceptQuery, request: Request):
+    """새 지식 카드의 '이해함': 카드를 지식 그래프의 generated 개념으로 받아들인다 (app/services/links/accepted.py).
+    다음 제안부터 이 지식이 다른 노트의 요소와 이어지는 재료가 된다. 노트 원문은 건드리지 않는다. 같은 카드를 다시 보내도 하나다.
+    카드가 기댄 구간은 지금 저장된 노트에 그대로 있어야 한다. 로컬 접속만 받는다 (노트 구간을 저장한다)."""
+    from app.client import uid
+    from app.services.links.accepted import AcceptError, build_record, locate, status_of
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if _share_note(q.a, q.b):
+        raise HTTPException(400, "서로 다른 노트에 기댄 요소여야 한다")
+    state = request.app.state
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    texts = {k: n.text for k, n in corpus.notes.items()}
+    try:
+        rec = build_record(q.a.model_dump(), q.b.model_dump(), q.newKeyword, q.conclusion, [e.model_dump() for e in q.external],
+                           uid("generated", q.a.conceptId, q.b.conceptId))
+    except AcceptError as e:
+        raise HTTPException(400, str(e))
+    paths = _note_paths()
+    if any(s["note"] not in paths for s in rec["sources"]):        # 저장된 노트가 아닌 글(직접 입력)은 나중에 다시 확인할 수 없다
+        raise HTTPException(400, "저장된 노트에서 나온 카드만 받아들인다")
+    if locate(rec, texts) is None:
+        raise HTTPException(400, "카드가 기댄 문장이 지금 노트에 없다")
+    store = _accepted_store(state)
+    return {"accepted": status_of(store.add(rec), texts), "total": len(store.all())}
+
+
+@router.get("/knowledge/accepted")
+async def accepted_list(request: Request):
+    """받아들인 새 지식과 상태: live (재료로 쓰인다) · evidence_lost (기댄 문장이 노트에서 사라져 재료로 쓰지 않는다).
+    usable=false 는 결론이 요소로 쓰기에 너무 길거나 짧은 것 (제안 색인의 gate 와 같은 기준)이다."""
+    from app.services.links.accepted import status_of
+
+    state = request.app.state
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    texts = {k: n.text for k, n in corpus.notes.items()}
+    items = [status_of(r, texts) for r in _accepted_store(state).all()]
+    return {"items": items, "live": sum(1 for i in items if i["status"] == "live" and i["usable"])}
+
+
+@router.delete("/knowledge/accepted/{concept_id}")
+async def accepted_remove(concept_id: str, request: Request):
+    """'이해함' 을 되돌린다: 그래프에서 이 지식을 뺀다 (이것에 기대어 받아들인 다른 지식은 남는다)."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not _accepted_store(request.app.state).remove(concept_id):
+        raise HTTPException(404, "받아들인 지식이 아니다")
+    return {"removed": concept_id}
 
 
 def _screen_judge(state):

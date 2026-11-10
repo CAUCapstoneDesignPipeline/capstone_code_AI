@@ -652,3 +652,132 @@ def test_screen_and_relation_streams_report_tokens_then_the_result(tmp_path):
     with TestClient(app, client=("10.0.0.5", 50000)) as c:
         assert c.post("/dev/proposals/screen/stream", json={"pairs": [pair]}).status_code == 403
         assert c.post("/dev/keyword-relation/stream", json=rel).status_code == 403
+
+
+WAL_NOTE = ("# WAL\n\n**WAL**은 **트랜잭션**이 커밋되기 전에 변경 내용을 로그로 디스크에 먼저 기록하는 방식이다. "
+            "**체크포인트**는 장애가 났을 때 복구 시간을 줄이려고 쓰는 기록 지점이다.\n")
+ACID_NOTE = ("# ACID\n\n**원자성**은 **트랜잭션**이 전부 반영되거나 전혀 반영되지 않는 성질이라는 뜻이다. "
+             "**복구**는 장애 뒤에 **트랜잭션** 로그를 다시 읽어 데이터를 되돌리는 일이다.\n")
+LOG_NOTE = "# 보관\n\n**로그 보관**은 디스크에 남은 **트랜잭션** 로그를 오래 두는 정책을 정해 둔다는 뜻이다.\n"
+CONCLUSION = "트랜잭션 로그를 먼저 디스크에 기록해 두면 장애 뒤 복구 때 그 트랜잭션 로그를 다시 읽어 되돌릴 수 있어요."
+
+
+def _accept_setup(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    for name, text in (("DB-WAL", WAL_NOTE), ("ACID", ACID_NOTE), ("LOG", LOG_NOTE)):
+        (notes / f"{name}.md").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", notes)
+    monkeypatch.setattr(dev, "ACCEPTED_STORE", tmp_path / "accepted.json")
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    _no_embeddings(monkeypatch)
+    return notes
+
+
+def _cands(c, note):
+    return c.post("/dev/proposals/candidates", json={"noteId": note, "limit": 90}).json()
+
+
+def _pair(c, anchor, partner):
+    return next(x for x in _cands(c, anchor)["candidates"] if x["b"]["note"] == partner)
+
+
+def test_accepting_a_card_makes_it_material_for_the_next_suggestions(tmp_path, monkeypatch):
+    notes = _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        before = {n: _cands(c, n) for n in ("DB-WAL", "ACID", "LOG")}
+        assert before["LOG"]["candidates"] and not any(x["b"].get("origin") == "generated" for r in before.values() for x in r["candidates"])
+        first = _pair(c, "DB-WAL", "ACID")
+        card = {"a": first["a"], "b": first["b"], "newKeyword": "로그 선기록과 복구", "conclusion": CONCLUSION,
+                "external": [{"url": "https://example.com/wal", "title": "WAL", "quote": "write-ahead"}]}
+        r = c.post("/dev/proposals/accept", json=card)
+        assert r.status_code == 200, r.text
+        acc = r.json()["accepted"]
+        assert acc["status"] == "live" and acc["usable"] and acc["keyword"] == "로그 선기록과 복구" and acc["notes"] == ["ACID", "DB-WAL"]
+        assert c.post("/dev/proposals/accept", json=card).json()["total"] == 1                       # 다시 눌러도 하나
+        assert (tmp_path / "accepted.json").exists() and acc["conceptId"] in (tmp_path / "accepted.json").read_text(encoding="utf-8")
+
+        after = {n: _cands(c, n) for n in ("DB-WAL", "ACID", "LOG")}
+        partners = [x["b"] for x in after["LOG"]["candidates"] if x["b"].get("origin") == "generated"]
+        assert partners and partners[0]["keyword"] == "로그 선기록과 복구" and partners[0]["text"] == CONCLUSION        # 다른 노트(LOG)의 요소와 이어진다
+        assert sorted(partners[0]["notes"]) == ["ACID", "DB-WAL"] and len(partners[0]["sources"]) == 2 and partners[0]["external"][0]["url"] == "https://example.com/wal"
+        for n in ("DB-WAL", "ACID"):                                                                    # 기댄 노트의 요소와는 이어지지 않는다
+            assert not any(x["b"].get("origin") == "generated" for x in after[n]["candidates"])
+        assert after["DB-WAL"]["anchors"] == before["DB-WAL"]["anchors"] + 1 and after["ACID"]["anchors"] == before["ACID"]["anchors"] + 1
+        assert after["LOG"]["elements"] == before["LOG"]["elements"] + 1
+
+        # 받아들인 지식 위에 쌓는다: LOG 의 요소와 받아들인 지식으로 만든 카드의 소스는 세 노트 전부다
+        pair = next(x for x in after["LOG"]["candidates"] if x["b"].get("origin") == "generated")
+        stacked = c.post("/dev/proposals/accept", json={"a": pair["a"], "b": pair["b"], "newKeyword": "보관과 복구", "conclusion": "로그를 오래 두면 복구할 때 더 먼 시점까지 되돌릴 수 있어요."})
+        assert stacked.status_code == 200, stacked.text
+        assert stacked.json()["accepted"]["notes"] == ["ACID", "DB-WAL", "LOG"] and stacked.json()["total"] == 2
+        listing = c.get("/dev/knowledge/accepted").json()
+        assert [i["status"] for i in listing["items"]] == ["live", "live"] and listing["live"] == 2
+
+        # 기댄 문장이 노트에서 사라지면 재료로 쓰지 않고, 돌아오면 되살아난다
+        (notes / "DB-WAL.md").write_text("# WAL\n\n문장을 모두 바꿔 썼어요.\n", encoding="utf-8")
+        gone = c.get("/dev/knowledge/accepted").json()
+        assert [i["status"] for i in gone["items"]] == ["evidence_lost", "evidence_lost"] and gone["live"] == 0
+        assert not any(x["b"].get("origin") == "generated" for x in _cands(c, "LOG")["candidates"])
+        (notes / "DB-WAL.md").write_text(WAL_NOTE + "\n", encoding="utf-8")
+        assert c.get("/dev/knowledge/accepted").json()["live"] == 2
+        assert any(x["b"].get("origin") == "generated" for x in _cands(c, "LOG")["candidates"])
+
+        # 되돌리기: 뺀 지식은 재료에서 빠지고, 기록이 없으면 404
+        assert c.delete(f"/dev/knowledge/accepted/{acc['conceptId']}").json() == {"removed": acc["conceptId"]}
+        assert c.delete(f"/dev/knowledge/accepted/{acc['conceptId']}").status_code == 404
+        assert [i["keyword"] for i in c.get("/dev/knowledge/accepted").json()["items"]] == ["보관과 복구"]
+
+
+def test_accept_refuses_cards_it_cannot_stand_behind(tmp_path, monkeypatch):
+    _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        first = _pair(c, "DB-WAL", "ACID")
+        card = {"a": first["a"], "b": first["b"], "newKeyword": "새 지식", "conclusion": CONCLUSION}
+        post = lambda **over: c.post("/dev/proposals/accept", json={**card, **over})
+        assert post(b=first["a"]).status_code == 400                                             # 같은 노트에 기댄 두 요소
+        assert post(newKeyword=" ").status_code == 400 and post(conclusion="").status_code == 400
+        assert post(external=[{"url": "javascript:alert(1)"}]).status_code == 400
+        edited = {**first["b"], "quote": "노트에 없는 문장이에요", "text": "노트에 없는 문장이에요"}
+        assert post(b=edited).status_code == 400                                                 # 기댄 문장이 노트에 없다
+        free = {**first["b"], "note": "(직접 입력)"}
+        assert post(b=free).status_code == 400                                                   # 저장된 노트가 아니다
+        assert c.get("/dev/knowledge/accepted").json()["items"] == []
+    with TestClient(dev_app(), client=("10.0.0.5", 50000)) as remote:
+        assert remote.post("/dev/proposals/accept", json=card).status_code in (403, 404)         # 로컬 밖에서는 받지 않는다
+        assert remote.delete("/dev/knowledge/accepted/x").status_code in (403, 404)
+
+
+def test_generating_from_accepted_knowledge_inherits_its_sources(tmp_path, monkeypatch):
+    import json as _json
+
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm.anthropic_llm import WebResult
+
+    class Fake:
+        provider, model = "anthropic", "fake"
+        def complete_web(self, system, user, schema, name, max_searches=3, submit=None):
+            u = _json.loads(user)
+            return WebResult({"status": "ok", "newKeyword": "더 쌓은 지식", "fromA": u["A"]["text"][:12], "fromB": u["B"]["text"][:12],
+                              "conclusion": "받아들인 지식과 보관 정책을 이으면 오래 둔 로그로 더 먼 시점까지 복구할 수 있다는 새 설명이 돼요.",
+                              "external": [{"url": "https://example.com/new", "title": "T", "quote": "q", "supports": "s"}], "reason": "r"},
+                             "anchored", "fake", [{"url": "https://example.com/new", "title": "새 자료"}], 1)
+
+    _accept_setup(tmp_path, monkeypatch)
+    app = dev_app()
+    app.state.knowledge_generator = KnowledgeGenerator(Fake(), None)
+    with TestClient(app, client=LOCAL) as c:
+        first = _pair(c, "DB-WAL", "ACID")
+        c.post("/dev/proposals/accept", json={"a": first["a"], "b": first["b"], "newKeyword": "로그 선기록과 복구", "conclusion": CONCLUSION,
+                                              "external": [{"url": "https://example.com/wal", "title": "WAL"}]})
+        pair = next(x for x in _cands(c, "LOG")["candidates"] if x["b"].get("origin") == "generated")
+        g = c.post("/dev/proposals/generate", json={"a": pair["a"], "b": pair["b"]}).json()                   # 받아들인 지식이 한쪽이다
+        assert g["status"] == "candidate", g
+        notes = {s["span"]["quote"] for s in g["concept"]["sources"]}
+        assert len(g["concept"]["sources"]) == 3 and len({s["noteId"] for s in g["concept"]["sources"]}) == 3, notes     # LOG + 받아들인 지식이 기댄 두 노트
+        assert [e["url"] for e in g["concept"]["external"]] == ["https://example.com/new", "https://example.com/wal"]    # 새 자료 + 이어받은 자료
+        # 받아들인 지식이 기댄 노트의 요소와는 다시 만들지 않는다 (제자리 돌기)
+        gen = pair["b"]
+        assert c.post("/dev/proposals/generate", json={"a": first["a"], "b": gen}).status_code == 400
+        assert c.post("/dev/proposals/generate/stream", json={"a": first["a"], "b": gen}).status_code == 400

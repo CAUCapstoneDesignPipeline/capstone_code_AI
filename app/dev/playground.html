@@ -230,6 +230,7 @@ async function init() {
   S.cfg = await (await fetch("/dev/config")).json();
   S.notes = await (await fetch("/dev/notes")).json();
   fetch("/dev/index");                                    // 노트 사이 연결 색인을 미리 만든다
+  loadAccepted();                                         // 이해함으로 받아들인 지식 (버튼의 눌림)
   renderNotes();
   await openNote(S.notes.find((n) => n === "DB-WAL") || S.notes[0] || FREE);
   setMode("concepts");
@@ -325,7 +326,31 @@ const loadReact = () => { try { return JSON.parse(localStorage.getItem(REACT_KEY
 const saveReact = () => { try { localStorage.setItem(REACT_KEY, JSON.stringify(S.sg.react)); } catch (e) { /* 저장하지 못해도 화면은 된다 */ } };
 const AUTO_KEY = "playground-auto-generate-v1", AUTO_N = 3;
 const loadAuto = () => { try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch (e) { return true; } };
-S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, react: loadReact(), showKnown: false, showRest: false, auto: loadAuto(), prog: {}, abort: {} };
+S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, accepted: {}, acceptBusy: {}, acceptErr: {}, react: loadReact(), showKnown: false, showRest: false, auto: loadAuto(), prog: {}, abort: {} };
+
+async function loadAccepted() {
+  try {
+    const r = await fetch("/dev/knowledge/accepted");
+    if (r.ok) S.sg.accepted = Object.fromEntries((await r.json()).items.map((i) => [i.conceptId, i]));
+  } catch (e) { /* 못 불러와도 화면은 된다 */ }
+}
+// 이해함 = 이 카드를 지식 그래프의 generated 개념으로 받아들인다 (다음 제안부터 재료). 다시 누르면 되돌린다. 노트 원문은 건드리지 않는다.
+async function toggleAccept(c, g) {
+  const id = c.id, cid = g.concept?.conceptId;
+  if (!cid || S.sg.acceptBusy[id]) return;
+  S.sg.acceptBusy[id] = true; delete S.sg.acceptErr[id]; render();
+  try {
+    const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
+    const res = S.sg.accepted[cid]
+      ? await fetch("/dev/knowledge/accepted/" + encodeURIComponent(cid), { method: "DELETE" })
+      : await fetch("/dev/proposals/accept", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ a: pick(c.a), b: pick(c.b), newKeyword: g.newKeyword, conclusion: g.conclusion, external: g.external }) });
+    if (!res.ok) S.sg.acceptErr[id] = (await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`;
+    await loadAccepted();
+  } catch (e) { S.sg.acceptErr[id] = String(e.message || e); }
+  delete S.sg.acceptBusy[id];
+  render();
+}
 
 async function runSuggest() {
   const text = currentText();
@@ -364,7 +389,7 @@ async function runScreen() {
   } catch (e) { S.sg.screenError = String(e.message || e); }
   S.sg.screening = false; render();
 }
-const GEN_FIELDS = ["keyword", "note", "noteId", "conceptId", "text", "start", "end", "quote"];
+const GEN_FIELDS = ["keyword", "note", "noteId", "conceptId", "text", "start", "end", "quote", "origin", "notes", "sources", "external"];      // 뒤 네 칸은 받아들인 새 지식(generated)에만 있다
 // 새 지식 만들기는 SSE 로 진행 상황을 받는다 (POST 라서 EventSource 대신 fetch 스트림을 읽는다)
 async function readSse(res, onEvent) {                      // text/event-stream 을 읽어 (이벤트 이름, data) 를 하나씩 넘긴다
   const reader = res.body.getReader(), dec = new TextDecoder();
@@ -582,10 +607,13 @@ function genBlock(c, g) {
   const why = g.reasons.length ? `<p class="path">${g.reasons.map(esc).join(" · ")}${g.reason ? ` — ${esc(g.reason)}` : ""}</p>` : "";
   const conclusion = g.conclusion ? `<div class="know"><span class="tag">새 키워드</span> <b>${esc(g.newKeyword)}</b><p>${esc(g.conclusion)}</p></div>` : "";
   const react = S.sg.react[pairKey(c)];
-  const buttons = g.status === "candidate" ? `<p class="actions"><button class="act" data-sg="react:${c.id}:ok" aria-pressed="${react === "ok"}">이해함</button>
+  const acc = g.concept && S.sg.accepted[g.concept.conceptId], busy = S.sg.acceptBusy[c.id];
+  const buttons = g.status === "candidate" ? `<p class="actions"><button class="act" data-sg="accept:${c.id}" aria-pressed="${!!acc}" ${busy ? "disabled" : ""}>이해함</button>
       <button class="act" data-sg="react:${c.id}:known">알고 있던 내용</button>
       <button class="act" data-sg="react:${c.id}:confused" aria-pressed="${react === "confused"}">이해가 안 됨</button></p>` : "";
-  const ok = react === "ok" && g.concept ? `<details open><summary>이해함 → 기능용 그래프에 들어갈 개념 (generated)</summary><pre class="json">${esc(JSON.stringify(g.concept, null, 2))}</pre></details>` : "";
+  const ok = (acc ? `<p class="path">✓ 지식 그래프에 반영했어요${acc.status === "evidence_lost" ? " — 그런데 기댄 문장이 노트에서 사라져 재료로는 쓰지 않아요" : acc.usable ? " · 다음 제안부터 다른 노트의 요소와 이어지는 재료로 쓰여요" : " — 결론이 요소로 쓰기엔 길거나 짧아 재료로는 쓰지 않아요"}. 다시 누르면 되돌려요.</p>
+      <details><summary>그래프에 들어간 개념 (generated)</summary><pre class="json">${esc(JSON.stringify(g.concept, null, 2))}</pre></details>` : "")
+    + (S.sg.acceptErr[c.id] ? `<p class="error">${esc(S.sg.acceptErr[c.id])}</p>` : "");
   const confused = react === "confused" ? chatBox(c, g) : "";
   return `<div class="gen"><div class="cardHead"><span class="status ${ST[0]}">${ST[1]}</span><span class="path">${esc(g.model)} · 검색 ${g.searches}번${g.cached ? " · 저장된 결과" : ""}</span></div>
     ${why}${warn}${ext ? `<h4>외부 지식</h4><ul class="steps">${ext}</ul>` : ""}${dropped}${conclusion}${buttons}${ok}${confused}
@@ -613,7 +641,10 @@ function sgCard(c) {
   const g = S.sg.gen[c.id];
   const chips = [...c.channels.map((ch) => `<span class="tag" title="${esc(ch === "terms" ? "공유 낱말: " + c.shared.join(", ") : ch === "pivot" ? "둘 다 언급하는 키워드: " + c.via.join(", ") : "임베딩 코사인 " + c.cos)}">${SG_CH[ch]}${ch === "embed" && c.cos != null ? " " + c.cos : ""}</span>`),
     `<span id="scr-${c.id}">${scrChip(c)}</span>`].join(" ");
-  const side = (e, w) => `<div class="sgSide"><p class="path"><b>근거 ${w}</b> · ${esc(e.keyword)} · <button class="linkBtn" data-open="${esc(e.note)}" title="${esc(e.note)}">${esc(shortTitle(e.note, 28))}</button></p>
+  const where = (e) => e.origin === "generated"
+    ? `<span class="tag" title="이해함으로 받아들인 새 지식. 이 노트들의 문장에 기댄다">새 지식</span> ${(e.notes || []).map((n) => `<button class="linkBtn" data-open="${esc(n)}" title="${esc(n)}">${esc(shortTitle(n, 18))}</button>`).join(" · ")}`
+    : `<button class="linkBtn" data-open="${esc(e.note)}" title="${esc(e.note)}">${esc(shortTitle(e.note, 28))}</button>`;
+  const side = (e, w) => `<div class="sgSide"><p class="path"><b>근거 ${w}</b> · ${esc(e.keyword)} · ${where(e)}</p>
       <div class="quote">${esc(e.text)}</div></div>`;
   const foot = g ? genBlock(c, g) : `<p class="actions"><button class="act" data-sg="gen:${c.id}">새 지식 만들기 (웹 검색)</button></p>`;
   return `<div class="card sg"><div class="cardHead"><b>${esc(c.a.keyword)} × ${esc(c.b.keyword)}</b><span class="path">${chips}</span></div>
@@ -678,6 +709,7 @@ $("#body").addEventListener("click", (e) => {
   else if (k === "top") generateTop(3);
   else if (k === "gen") (id === "cn" ? runConnectGenerate() : runGenerate(id));
   else if (k === "unhide") { for (const x of S.sg.data.candidates) if (S.sg.react[pairKey(x)] === "known") delete S.sg.react[pairKey(x)]; saveReact(); render(); }
+  else if (k === "accept") { const c = cardFor(id), g = genFor(id); if (c && g && g !== "loading") toggleAccept(c, g); }
   else if (k === "react") {
     const c = cardFor(id), key = pairKey(c);
     if (S.sg.react[key] === kind && kind !== "known") delete S.sg.react[key]; else S.sg.react[key] = kind;

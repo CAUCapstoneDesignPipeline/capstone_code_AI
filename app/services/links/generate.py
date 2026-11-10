@@ -68,6 +68,29 @@ def _url(u: str) -> str:
     return u.strip().rstrip("/")
 
 
+def side_sources(*sides: dict) -> list[dict]:
+    """요소(A·B)가 기댄 페이지 구간들, 같은 구간은 한 번만. 노트에서 뽑은 요소는 자기 구간 하나이고, '이해함' 으로 받아들인 새 지식(origin=generated)은
+    그것이 기댄 구간들(`sources`)이다. 반환: [{noteId, note, start, end, quote}]."""
+    out, seen = [], set()
+    for x in sides:
+        for r in (x.get("sources") or [x]) if x.get("origin") == "generated" else [x]:
+            key = (r["noteId"], r["start"], r["end"])
+            if key not in seen:
+                seen.add(key)
+                out.append({"noteId": r["noteId"], "note": r.get("note", ""), "start": r["start"], "end": r["end"], "quote": r["quote"]})
+    return out
+
+
+def merge_external(external: list[dict], *sides: dict) -> list[dict]:
+    """새 외부 자료 뒤에 받아들인 새 지식이 기댄 외부 자료를 덧붙인다 (URL 이 같으면 한 번만, 개념의 상한 10개)."""
+    out, seen = [], set()
+    for e in [*external, *(e for x in sides if x.get("origin") == "generated" for e in x.get("external") or [])]:
+        if e["url"] not in seen:
+            seen.add(e["url"])
+            out.append(e)
+    return out[:10]
+
+
 class KnowledgeGenerator:
     def __init__(self, llm, cache_dir: Path | None, tool: str | None = None, checker=None):
         """llm: AnthropicLLM 처럼 complete_web(system, user, schema, name, max_searches, tool) 가 있는 것.
@@ -164,13 +187,16 @@ class KnowledgeGenerator:
 
     @staticmethod
     def _concept(concept_id: str, a: dict, b: dict, conclusion: str, external: list[dict]) -> dict:
+        """개념 형식으로. 한쪽이 '이해함' 으로 받아들인 새 지식(generated)이면 그것이 기댄 페이지와 외부 자료도 이 개념의 소스가 된다
+        (회의록: generated 의 소스에는 도출에 쓴 개념들의 페이지를 모두 넣는다)."""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return Concept(
             conceptId=concept_id, origin="generated", explanation=conclusion[:2000],
             sources=[PageSource(noteId=x["noteId"], noteVersion=1, span=Span(startOffset=x["start"], endOffset=x["end"], quote=x["quote"]))
-                     for x in (a, b)],
-            external=[ExternalSource(url=e["url"], title=(e["title"][:100] or None), retrievedAt=now, quote=(e["quote"] or None))
-                      for e in external[:10]]).model_dump(mode="json")
+                     for x in side_sources(a, b)],
+            external=[ExternalSource(url=e["url"], title=((e.get("title") or "")[:100] or None), retrievedAt=e.get("retrievedAt") or now,
+                                     quote=(e.get("quote") or None))
+                      for e in merge_external(external, a, b)]).model_dump(mode="json")
 
     def _key(self, a: dict, b: dict) -> str:
         raw = json.dumps([self.llm.provider, self.llm.model, self.prompt_version, a["keyword"], a["text"], b["keyword"], b["text"]],
