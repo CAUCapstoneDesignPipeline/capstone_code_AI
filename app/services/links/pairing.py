@@ -21,6 +21,7 @@ import hashlib
 import re
 import threading
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -64,6 +65,18 @@ class Element:
     external: tuple = field(default=(), compare=False, hash=False)   # generated: 외부 자료들 [{url, title, quote, retrievedAt}]
 
 
+def pair_fingerprint(concept_a: str, concept_b: str) -> str:
+    """같은 추천인가: 두 요소의 개념 id (순서 없이). 결론 문장과 요소의 문장·근거 위치는 넣지 않는다 — 노트를 고치고 다시 분석해도,
+    다른 노트에서 시작해 A·B 가 뒤바뀌어도 같은 짝이면 같은 값이다. 사용자는 BE 가 앞에 붙인다. (회의 2026-11-04: 지문 = 근거 개념 id)"""
+    return hashlib.sha256("\x1f".join(("pair-card-1", *sorted((concept_a, concept_b)))).encode("utf-8")).hexdigest()
+
+
+def pair_basis(concept_a: str, text_a: str, concept_b: str, text_b: str) -> str:
+    """같은 짝의 내용이 바뀌었는가: 두 요소의 설명 문장 (순서 없이). 같은 지문에서 이 값이 달라지면 카드는 id 를 지키고 새 내용으로 바뀐다."""
+    texts = [t for _, t in sorted(((concept_a, text_a), (concept_b, text_b)))]
+    return hashlib.sha256("\x1f".join(("pair-basis-1", *texts)).encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class Candidate:
     a: Element                      # 이 노트의 요소
@@ -76,6 +89,14 @@ class Candidate:
     @property
     def score(self) -> float:
         return len(self.channels) + (self.cos or 0.0)
+
+    @property
+    def fingerprint(self) -> str:
+        return pair_fingerprint(self.a.concept_id, self.b.concept_id)
+
+    @property
+    def basis(self) -> str:
+        return pair_basis(self.a.concept_id, self.a.text, self.b.concept_id, self.b.text)
 
 
 def elements_from(keywords, meta) -> list[Element]:
@@ -217,7 +238,10 @@ class PairingIndex:
             probe = min(self._ivf.nlist, probe * 2)             # 쓸 수 있는 이웃이 모자라면 더 넓게 훑는다
 
     def candidates(self, anchors: list[int], per_anchor: int = 3, per_partner: int = 1, limit: int = 12,
-                   neighbors: int = 10) -> tuple[list[Candidate], dict]:
+                   neighbors: int = 10, exclude: Mapping[str, str] | None = None) -> tuple[list[Candidate], dict]:
+        """exclude: 이미 답한 짝의 지문 → 이유 ("known" 알고 있던 내용 · "accepted" 이해함 …). 한도(limit)를 채우기 전에 빼므로 답한 자리를 새 후보가 채운다.
+        뺀 수는 counts["answered:이유"] 로 알린다."""
+        exclude = exclude or {}
         near = self._nearest_all(anchors, neighbors)
         found: dict[tuple[int, int], dict] = {}
 
@@ -255,6 +279,10 @@ class PairingIndex:
             cos = float(self.vec[i] @ self.vec[j]) if self.vec is not None else None
             if cos is not None and cos < COSINE_FLOOR:
                 continue
+            why = exclude.get(pair_fingerprint(self.el[i].concept_id, self.el[j].concept_id))
+            if why is not None:
+                counts[f"answered:{why}"] += 1
+                continue
             out.append(Candidate(self.el[i], self.el[j], tuple(f["channels"]), None if cos is None else round(cos, 3),
                                  f["shared"], f["via"]))
         counts["union"] = len(found)
@@ -263,8 +291,10 @@ class PairingIndex:
         picked, per_a, per_b, seen = [], Counter(), Counter(), set()
         for c in out:
             ta, tb = c.a.text, c.b.text                       # 같은 문장을 다른 키워드가 가리키는 중복은 한 번만
-            if per_a[ta] >= per_anchor or per_b[tb] >= per_partner or (ta, tb) in seen or (c.a.keyword_id, c.b.keyword_id) in seen:
+            if per_a[ta] >= per_anchor or per_b[tb] >= per_partner or (ta, tb) in seen or (c.a.keyword_id, c.b.keyword_id) in seen \
+                    or c.fingerprint in seen:
                 continue
+            seen.add(c.fingerprint)
             picked.append(c)
             per_a[ta] += 1
             per_b[tb] += 1

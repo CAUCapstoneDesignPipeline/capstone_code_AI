@@ -177,3 +177,38 @@ def test_accepted_knowledge_may_be_longer_than_a_note_sentence():
     idx = PairingIndex([el(0, "WAL", "A", long_text), gen(1, "새지식", ["A", "B"], long_text)])
     assert idx.ok == [False, True]                                      # 노트 문장은 300자까지, 받아들인 새 지식은 600자까지
     assert not PairingIndex([gen(0, "새지식", ["A", "B"], long_text * 2)]).ok[0]
+
+
+# ---- 지문: 같은 짝이면 순서·시작 노트와 무관하게 같은 값, 답한 짝은 한도 앞에서 뺀다 ----
+
+def test_pair_fingerprint_is_the_same_pair_whichever_side_comes_first():
+    from app.services.links.pairing import pair_basis, pair_fingerprint
+    fp = pair_fingerprint("c1", "c2")
+    assert fp == pair_fingerprint("c2", "c1") and len(fp) == 64 and fp != pair_fingerprint("c1", "c3")
+    assert pair_basis("c1", "가 문장", "c2", "나 문장") == pair_basis("c2", "나 문장", "c1", "가 문장")      # 순서와 무관
+    assert pair_basis("c1", "가 문장", "c2", "나 문장") != pair_basis("c1", "가 문장을 고침", "c2", "나 문장")    # 문장이 바뀌면 달라진다
+    assert pair_basis("c1", "가", "c2", "나") != pair_basis("c1", "나", "c2", "가")                              # 어느 개념의 문장인지도 본다
+
+
+def test_candidate_fingerprint_matches_from_either_note():
+    a = el(0, "WAL", "A", LOG)
+    b = el(1, "복구", "B", LOG2)
+    both = PairingIndex([a, b])
+    ca, _ = both.candidates([0], per_anchor=5, per_partner=5)
+    cb, _ = both.candidates([1], per_anchor=5, per_partner=5)
+    assert ca and cb and ca[0].fingerprint == cb[0].fingerprint and ca[0].basis == cb[0].basis
+
+
+def test_answered_pairs_are_dropped_before_the_limit_so_new_candidates_take_their_place():
+    els = [el(0, "WAL", "A", "로그를 디스크에 먼저 기록해서 장애 복구를 가능하게 한다고 한다"),
+           el(1, "복구", "B", "장애가 나면 디스크에 남은 로그를 읽어서 복구를 진행한다고 한다"),
+           el(2, "체크포인트", "C", "장애 복구 시간을 줄이려고 디스크에 로그를 읽는 지점을 정해 둔다고 한다")]
+    idx = PairingIndex(els)
+    base, _ = idx.candidates([0], per_anchor=9, per_partner=9, limit=1)
+    assert len(base) == 1
+    first = base[0]
+    after, counts = idx.candidates([0], per_anchor=9, per_partner=9, limit=1, exclude={first.fingerprint: "known"})
+    assert len(after) == 1 and after[0].b.keyword != first.b.keyword                            # 답한 자리를 다른 후보가 채운다
+    assert counts["answered:known"] == 1
+    none, counts = idx.candidates([0], per_anchor=9, per_partner=9, limit=9, exclude={c.fingerprint: "accepted" for c in idx.candidates([0], 9, 9, 9)[0]})
+    assert none == [] and counts["answered:accepted"] == 2

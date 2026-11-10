@@ -638,7 +638,13 @@ def _best_pair(ka, kb, meta) -> dict | None:
                 score = (len(set(TOKEN.findall(x.text.lower())) & set(TOKEN.findall(y.text.lower()))), min(x.confidence or 0, y.confidence or 0))
                 if best is None or score > best[0]:
                     best = (score, x, y)
-    return None if best is None else {"a": _side(best[1]), "b": _side(best[2])}
+    if best is None:
+        return None
+    from app.services.links.pairing import pair_basis, pair_fingerprint
+
+    x, y = best[1], best[2]
+    return {"a": _side(x), "b": _side(y), "fingerprint": pair_fingerprint(x.concept_id, y.concept_id),
+            "basisHash": pair_basis(x.concept_id, x.text, y.concept_id, y.text)}
 
 
 class RelSide(BaseModel):
@@ -798,6 +804,18 @@ EMBEDDING_STORE = Path("data/private/cache/element-embeddings.npz")
 ACCEPTED_STORE = Path(os.environ.get("AI_ACCEPTED_STORE") or "data/private/accepted-knowledge.json")       # '이해함' 으로 받아들인 새 지식 (노트 구간이 들어 있어 비공개 폴더)
 
 
+KNOWN_STORE = Path(os.environ.get("AI_KNOWN_STORE") or "data/private/known-knowledge.json")       # '알고 있던 내용' 으로 답한 짝 (노트 문장이 들어 있어 비공개 폴더)
+
+
+def _known_store(state):
+    from app.services.links.accepted import KnownStore
+
+    store = getattr(state, "known_store", None)
+    if store is None or store.path != KNOWN_STORE:
+        store = state.known_store = KnownStore(KNOWN_STORE)
+    return store
+
+
 def _accepted_store(state):
     from app.services.links.accepted import AcceptedStore
 
@@ -856,6 +874,7 @@ class ProposalQuery(BaseModel):
     text: str | None = None
     minConfidence: float = 0.0
     limit: int = DEFAULT_CANDIDATES
+    exclude: list[str] = []     # 이미 답한 짝의 지문 (상태 없는 호출용: 운영에서는 BE 가 거절·이해함 지문을 보낸다). 저장된 '알고 있던 내용'·'이해함' 도 같이 뺀다
 
 
 @router.post("/proposals/candidates")
@@ -875,14 +894,25 @@ async def proposal_candidates(q: ProposalQuery, request: Request):
     t0 = time.monotonic()
     index, embedded, built_ms = await run_in_threadpool(_pairing_index, state, corpus, mc)
     anchors = index.anchors(note_id)
-    cands, counts = await run_in_threadpool(index.candidates, anchors, PER_ANCHOR, 1, max(1, min(q.limit, MAX_CANDIDATES)), NEIGHBORS)
+    done = _answered(state)
+    done.update({fp: "excluded" for fp in q.exclude})
+    cands, counts = await run_in_threadpool(lambda: index.candidates(anchors, PER_ANCHOR, 1, max(1, min(q.limit, MAX_CANDIDATES)), NEIGHBORS, exclude=done))
+    answered = {k.split(":", 1)[1]: counts.pop(k) for k in [k for k in counts if k.startswith("answered:")]}      # 답해서 뺀 짝 (이유별)
     return {
         "note": note_id, "anchors": len(anchors), "elements": len(index.el), "embeddings": embedded, "cosineFloor": COSINE_FLOOR if embedded else None,
-        "channels": counts, "buildMs": built_ms, "ms": int((time.monotonic() - t0) * 1000),
-        "candidates": [{"id": hashlib.sha1(f"{c.a.concept_id}|{c.b.concept_id}".encode()).hexdigest()[:16], "a": _side(c.a), "b": _side(c.b),
+        "channels": counts, "answered": answered, "buildMs": built_ms, "ms": int((time.monotonic() - t0) * 1000),
+        # id 는 지문에서 만든다: 다시 분석하거나 다른 노트에서 시작해 A·B 가 뒤바뀌어도 같은 짝이면 같은 id 다
+        "candidates": [{"id": c.fingerprint[:16], "fingerprint": c.fingerprint, "basisHash": c.basis, "a": _side(c.a), "b": _side(c.b),
                         "channels": list(c.channels), "cos": c.cos, "shared": list(c.shared), "via": list(c.via), "score": round(c.score, 3)}
                        for c in cands],
     }
+
+
+def _answered(state) -> dict[str, str]:
+    """이미 답한 짝의 지문 → 이유 (이해함 · 알고 있던 내용)."""
+    from app.services.links.accepted import answered
+
+    return answered(_accepted_store(state).all(), _known_store(state).all())
 
 
 CHECK_MODEL = "claude-sonnet-5-5"      # 생성 결과 확인: Haiku 는 같은 입력에서 판정이 흔들렸고(주제 이탈을 한 번은 잡고 한 번은 놓침) Sonnet 은 3번 모두 같았다. Opus 는 주제 이탈을 놓쳤다
@@ -1023,7 +1053,14 @@ async def proposal_generate(q: GenerateQuery, request: Request):
         res = await run_in_threadpool(gen.generate, a, b, uid("generated", q.a.conceptId, q.b.conceptId))
     except LLMError as e:
         raise HTTPException(502, f"생성 LLM 오류: {e.kind}")
-    return res
+    return {**res, **_card_ids(q.a, q.b)}
+
+
+def _card_ids(a: "GenSide", b: "GenSide") -> dict:
+    """카드의 지문과 기댄 내용 해시 (candidates 의 fingerprint·basisHash 와 같은 값). 짝의 순서와 무관하다."""
+    from app.services.links.pairing import pair_basis, pair_fingerprint
+
+    return {"fingerprint": pair_fingerprint(a.conceptId, b.conceptId), "basisHash": pair_basis(a.conceptId, a.text, b.conceptId, b.text)}
 
 
 class _Cancelled(Exception):
@@ -1094,7 +1131,8 @@ async def proposal_generate_stream(q: GenerateQuery, request: Request):
         raise HTTPException(400, "서로 다른 노트에 기댄 요소여야 한다")
     a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
     cid = uid("generated", q.a.conceptId, q.b.conceptId)
-    return _sse_job(request, lambda emit: emit({"type": "result", "result": gen.generate(a, b, cid, on_event=emit)}))
+    ids = _card_ids(q.a, q.b)
+    return _sse_job(request, lambda emit: emit({"type": "result", "result": {**gen.generate(a, b, cid, on_event=emit), **ids}}))
 
 
 class AcceptQuery(BaseModel):
@@ -1111,7 +1149,7 @@ async def proposal_accept(q: AcceptQuery, request: Request):
     다음 제안부터 이 지식이 다른 노트의 요소와 이어지는 재료가 된다. 노트 원문은 건드리지 않는다. 같은 카드를 다시 보내도 하나다.
     카드가 기댄 구간은 지금 저장된 노트에 그대로 있어야 한다. 로컬 접속만 받는다 (노트 구간을 저장한다)."""
     from app.client import uid
-    from app.services.links.accepted import AcceptError, build_record, locate, status_of
+    from app.services.links.accepted import AcceptError, build_record, fingerprint_of, locate, status_of
 
     if not _loopback(request):
         raise HTTPException(403, "로컬에서만 부를 수 있다")
@@ -1131,7 +1169,53 @@ async def proposal_accept(q: AcceptQuery, request: Request):
     if locate(rec, texts) is None:
         raise HTTPException(400, "카드가 기댄 문장이 지금 노트에 없다")
     store = _accepted_store(state)
-    return {"accepted": status_of(store.add(rec), texts), "total": len(store.all())}
+    saved = store.add(rec)
+    cleared = _known_store(state).remove(fingerprint_of(saved))             # 이해함으로 바꾸면 '알고 있던 내용' 표시는 지운다
+    return {"accepted": status_of(saved, texts), "total": len(store.all()), "clearedKnown": cleared}
+
+
+class KnownQuery(BaseModel):
+    a: GenSide
+    b: GenSide
+    conclusion: str | None = None      # 카드가 이미 만들어졌다면 그 결론 (되돌릴 때 무엇이었는지 보이려고)
+
+
+@router.post("/proposals/known")
+async def proposal_known(q: KnownQuery, request: Request):
+    """새 지식 카드의 '알고 있던 내용': 이 짝은 다시 추천하지 않는다 (지문 = 두 요소의 개념 id, 순서·노트 수정과 무관). 이미 이해함으로 받아들인 카드라면 그것은 그래프에서 뺀다.
+    LLM 을 부르지 않는다. 로컬 접속만 받는다 (노트 문장을 저장한다)."""
+    from app.services.links.accepted import AcceptError, fingerprint_of, known_record
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    state = request.app.state
+    try:
+        rec = known_record(q.a.model_dump(), q.b.model_dump(), q.conclusion)
+    except AcceptError as e:
+        raise HTTPException(400, str(e))
+    saved = _known_store(state).add(rec)
+    accepted = _accepted_store(state)
+    gone = [r["conceptId"] for r in accepted.all() if fingerprint_of(r) == saved["fingerprint"]]
+    for cid in gone:                                                    # 알고 있던 내용으로 바꾸면 이해함으로 받아들인 지식은 뺀다
+        accepted.remove(cid)
+    return {"known": saved, "total": len(_known_store(state).all()), "removedAccepted": gone}
+
+
+@router.get("/knowledge/known")
+async def known_list(request: Request):
+    """'알고 있던 내용' 으로 답한 짝 (다시 추천하지 않는다). 되돌리려면 DELETE."""
+    items = sorted(_known_store(request.app.state).all(), key=lambda r: r["createdAt"], reverse=True)
+    return {"items": items}
+
+
+@router.delete("/knowledge/known/{fingerprint}")
+async def known_remove(fingerprint: str, request: Request):
+    """'알고 있던 내용' 을 되돌린다: 다음 분석부터 이 짝이 다시 후보에 오른다."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not _known_store(request.app.state).remove(fingerprint):
+        raise HTTPException(404, "알고 있던 내용으로 답한 짝이 아니다")
+    return {"removed": fingerprint}
 
 
 @router.get("/knowledge/accepted")

@@ -412,9 +412,9 @@ def test_candidate_pool_is_deep_by_default_and_screening_accepts_it(tmp_path, mo
     seen = []
     real = PairingIndex.candidates
 
-    def spy(self, anchors, per_anchor=3, per_partner=1, limit=12, neighbors=10):
+    def spy(self, anchors, per_anchor=3, per_partner=1, limit=12, neighbors=10, exclude=None):
         seen.append((per_anchor, per_partner, limit, neighbors))
-        return real(self, anchors, per_anchor, per_partner, limit, neighbors)
+        return real(self, anchors, per_anchor, per_partner, limit, neighbors, exclude)
 
     monkeypatch.setattr(PairingIndex, "candidates", spy)
 
@@ -492,6 +492,9 @@ def test_keyword_connect_returns_the_element_pair_to_make_new_knowledge_from(tmp
         p = r["pair"]
         assert p["a"]["keyword"] == "WAL" and p["b"]["keyword"] == "복구" and p["a"]["note"] == "DB-WAL" and p["b"]["note"] == "ACID"
         assert p["a"]["conceptId"] and p["b"]["noteId"] and p["a"]["text"] and p["b"]["end"] > p["b"]["start"]
+        from app.services.links.pairing import pair_basis, pair_fingerprint
+        assert p["fingerprint"] == pair_fingerprint(p["b"]["conceptId"], p["a"]["conceptId"]) and len(p["fingerprint"]) == 64            # 연결한 짝도 같은 지문을 준다
+        assert p["basisHash"] == pair_basis(p["a"]["conceptId"], p["a"]["text"], p["b"]["conceptId"], p["b"]["text"])
 
 
 def _sse(text: str) -> list[dict]:
@@ -670,6 +673,7 @@ def _accept_setup(tmp_path, monkeypatch):
         (notes / f"{name}.md").write_text(text, encoding="utf-8")
     monkeypatch.setattr(dev, "NOTES_DIR", notes)
     monkeypatch.setattr(dev, "ACCEPTED_STORE", tmp_path / "accepted.json")
+    monkeypatch.setattr(dev, "KNOWN_STORE", tmp_path / "known.json")
     monkeypatch.delenv("AI_NOTES_DIR", raising=False)
     _no_embeddings(monkeypatch)
     return notes
@@ -781,3 +785,105 @@ def test_generating_from_accepted_knowledge_inherits_its_sources(tmp_path, monke
         gen = pair["b"]
         assert c.post("/dev/proposals/generate", json={"a": first["a"], "b": gen}).status_code == 400
         assert c.post("/dev/proposals/generate/stream", json={"a": first["a"], "b": gen}).status_code == 400
+
+
+def test_candidate_ids_are_fingerprints_that_survive_edits_and_the_starting_note(tmp_path, monkeypatch):
+    notes = _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        from app.services.links.pairing import pair_basis, pair_fingerprint
+        cands = _cands(c, "DB-WAL")["candidates"] + _cands(c, "ACID")["candidates"]
+        for x in cands:                                                                                     # 어느 노트에서 시작해 A·B 가 뒤바뀌어도 같은 짝이면 같은 지문·id·기댄 내용 해시다
+            a, b = x["a"], x["b"]
+            assert x["id"] == x["fingerprint"][:16] and x["fingerprint"] == pair_fingerprint(b["conceptId"], a["conceptId"]) and len(x["fingerprint"]) == 64
+            assert x["basisHash"] == pair_basis(b["conceptId"], b["text"], a["conceptId"], a["text"])
+        every = [x["fingerprint"] for x in _cands(c, "DB-WAL")["candidates"]]
+        assert len(set(every)) == len(every)
+        fwd = _pair(c, "DB-WAL", "ACID")
+        # 노트의 다른 곳을 고쳐도 (짝이 기댄 문장은 그대로) 지문도 기댄 내용도 그대로다
+        (notes / "DB-WAL.md").write_text("# WAL (고침)\n\n나중에 정리할 메모예요.\n\n" + WAL_NOTE.split("\n\n", 1)[1], encoding="utf-8")
+        same = next(x for x in _cands(c, "DB-WAL")["candidates"] if x["fingerprint"] == fwd["fingerprint"])
+        assert same["basisHash"] == fwd["basisHash"]
+        # 짝이 기댄 문장을 고치면 지문은 그대로, 기댄 내용 해시만 바뀐다 (BE 는 id 를 지키고 내용을 새로 쓴다)
+        (notes / "DB-WAL.md").write_text(WAL_NOTE.replace("기록하는 방식이다", "기록해 두는 방식이라고 한다"), encoding="utf-8")
+        edited = next(x for x in _cands(c, "DB-WAL")["candidates"] if x["fingerprint"] == fwd["fingerprint"])
+        assert edited["basisHash"] != fwd["basisHash"] and edited["a"]["text"] != fwd["a"]["text"]
+
+
+def test_generation_result_carries_the_same_fingerprint_whichever_side_is_first(tmp_path, monkeypatch):
+    import json as _json
+
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm.anthropic_llm import WebResult
+
+    class Fake:
+        provider, model = "anthropic", "fake"
+        def complete_web(self, system, user, schema, name, max_searches=3, submit=None, on_event=None):
+            u = _json.loads(user)
+            return WebResult({"status": "ok", "newKeyword": "새 키워드", "fromA": u["A"]["text"][:12], "fromB": u["B"]["text"][:12],
+                              "conclusion": "두 노트의 문장을 이으면 기록한 로그로 장애 뒤에 되돌릴 수 있다는 새로운 설명이 나와요 정말로.",
+                              "external": [{"url": "https://example.com/p", "title": "T", "quote": "q", "supports": "s"}], "reason": "r"},
+                             "anchored", "fake", [{"url": "https://example.com/p", "title": "T"}], 1)
+
+    _accept_setup(tmp_path, monkeypatch)
+    app = dev_app()
+    app.state.knowledge_generator = KnowledgeGenerator(Fake(), None)
+    with TestClient(app, client=LOCAL) as c:
+        x = _pair(c, "DB-WAL", "ACID")
+        g1 = c.post("/dev/proposals/generate", json={"a": x["a"], "b": x["b"]}).json()
+        g2 = c.post("/dev/proposals/generate", json={"a": x["b"], "b": x["a"]}).json()
+        assert g1["fingerprint"] == g2["fingerprint"] == x["fingerprint"] and g1["basisHash"] == g2["basisHash"] == x["basisHash"]
+        ev = _sse(c.post("/dev/proposals/generate/stream", json={"a": x["b"], "b": x["a"]}).text)
+        assert ev[-1]["result"]["fingerprint"] == x["fingerprint"]
+
+
+def test_known_pairs_are_not_recommended_again_from_either_note(tmp_path, monkeypatch):
+    _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        before = {n: _cands(c, n) for n in ("DB-WAL", "ACID")}
+        x = _pair(c, "DB-WAL", "ACID")
+        r = c.post("/dev/proposals/known", json={"a": x["a"], "b": x["b"], "conclusion": "이미 아는 결론이에요"})
+        assert r.status_code == 200 and r.json()["known"]["fingerprint"] == x["fingerprint"] and r.json()["total"] == 1 and r.json()["removedAccepted"] == []
+        assert (tmp_path / "known.json").exists()
+        for note, other in (("DB-WAL", "ACID"), ("ACID", "DB-WAL")):                         # 어느 노트에서 시작해도 빠진다
+            after = _cands(c, note)
+            assert x["fingerprint"] not in {y["fingerprint"] for y in after["candidates"]}
+            assert after["answered"] == {"known": 1} and len(after["candidates"]) >= len(before[note]["candidates"]) - 1      # 답한 자리를 막혀 있던 다른 후보가 채울 수 있다
+        listing = c.get("/dev/knowledge/known").json()["items"]
+        assert [i["fingerprint"] for i in listing] == [x["fingerprint"]] and listing[0]["keywords"] and listing[0]["conclusion"] == "이미 아는 결론이에요"
+        # 되돌리면 다음 분석부터 다시 나온다
+        assert c.delete(f"/dev/knowledge/known/{x['fingerprint']}").json() == {"removed": x["fingerprint"]}
+        assert c.delete(f"/dev/knowledge/known/{x['fingerprint']}").status_code == 404
+        back = _cands(c, "DB-WAL")
+        assert x["fingerprint"] in {y["fingerprint"] for y in back["candidates"]} and back["answered"] == {}
+
+
+def test_a_pair_the_user_already_accepted_is_not_recommended_again_and_the_two_answers_replace_each_other(tmp_path, monkeypatch):
+    _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        x = _pair(c, "DB-WAL", "ACID")
+        card = {"a": x["a"], "b": x["b"], "newKeyword": "로그 선기록과 복구", "conclusion": CONCLUSION}
+        assert c.post("/dev/proposals/accept", json=card).json()["accepted"]["fingerprint"] == x["fingerprint"]
+        after = _cands(c, "DB-WAL")
+        assert x["fingerprint"] not in {y["fingerprint"] for y in after["candidates"]} and after["answered"] == {"accepted": 1}   # 같은 짝을 또 보이지 않는다
+        # 이해함 → 알고 있던 내용: 받아들인 지식을 그래프에서 빼고 짝은 알고 있던 내용으로 남는다
+        r = c.post("/dev/proposals/known", json={"a": x["a"], "b": x["b"]}).json()
+        assert len(r["removedAccepted"]) == 1 and c.get("/dev/knowledge/accepted").json()["items"] == []
+        assert _cands(c, "DB-WAL")["answered"] == {"known": 1}
+        assert not any(y["b"].get("origin") == "generated" for y in _cands(c, "LOG")["candidates"])
+        # 알고 있던 내용 → 이해함: 알고 있던 내용 표시는 지워진다
+        back = c.post("/dev/proposals/accept", json=card).json()
+        assert back["clearedKnown"] is True and c.get("/dev/knowledge/known").json()["items"] == []
+        assert _cands(c, "DB-WAL")["answered"] == {"accepted": 1}
+
+
+def test_caller_can_pass_fingerprints_to_exclude_and_known_needs_two_different_notes(tmp_path, monkeypatch):
+    _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        x = _pair(c, "DB-WAL", "ACID")
+        r = c.post("/dev/proposals/candidates", json={"noteId": "DB-WAL", "limit": 90, "exclude": [x["fingerprint"]]}).json()    # 상태 없는 호출: BE 가 지문을 보낸다
+        assert x["fingerprint"] not in {y["fingerprint"] for y in r["candidates"]} and r["answered"] == {"excluded": 1}
+        assert c.get("/dev/knowledge/known").json()["items"] == []                                                            # 저장하지는 않는다
+        assert c.post("/dev/proposals/known", json={"a": x["a"], "b": {**x["b"], "note": "DB-WAL"}}).status_code == 400
+    with TestClient(dev_app(), client=("10.0.0.5", 50000)) as remote:
+        assert remote.post("/dev/proposals/known", json={"a": x["a"], "b": x["b"]}).status_code in (403, 404)
+        assert remote.delete("/dev/knowledge/known/x").status_code in (403, 404)

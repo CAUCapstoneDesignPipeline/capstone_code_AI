@@ -231,6 +231,7 @@ async function init() {
   S.notes = await (await fetch("/dev/notes")).json();
   fetch("/dev/index");                                    // 노트 사이 연결 색인을 미리 만든다
   loadAccepted();                                         // 이해함으로 받아들인 지식 (버튼의 눌림)
+  loadKnown();                                            // 알고 있던 내용으로 답한 짝
   renderNotes();
   await openNote(S.notes.find((n) => n === "DB-WAL") || S.notes[0] || FREE);
   setMode("concepts");
@@ -326,13 +327,43 @@ const loadReact = () => { try { return JSON.parse(localStorage.getItem(REACT_KEY
 const saveReact = () => { try { localStorage.setItem(REACT_KEY, JSON.stringify(S.sg.react)); } catch (e) { /* 저장하지 못해도 화면은 된다 */ } };
 const AUTO_KEY = "playground-auto-generate-v1", AUTO_N = 3;
 const loadAuto = () => { try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch (e) { return true; } };
-S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, accepted: {}, acceptBusy: {}, acceptErr: {}, react: loadReact(), showKnown: false, showRest: false, auto: loadAuto(), prog: {}, abort: {} };
+S.sg = { data: null, screen: {}, screenModel: null, screening: false, gen: {}, accepted: {}, known: [], acceptBusy: {}, acceptErr: {}, react: loadReact(), showKnown: false, showRest: false, auto: loadAuto(), prog: {}, abort: {} };
 
 async function loadAccepted() {
   try {
     const r = await fetch("/dev/knowledge/accepted");
     if (r.ok) S.sg.accepted = Object.fromEntries((await r.json()).items.map((i) => [i.conceptId, i]));
   } catch (e) { /* 못 불러와도 화면은 된다 */ }
+}
+async function loadKnown() {
+  try {
+    const r = await fetch("/dev/knowledge/known");
+    if (r.ok) S.sg.known = (await r.json()).items;
+  } catch (e) { /* 못 불러와도 화면은 된다 */ }
+}
+// 알고 있던 내용 = 이 짝은 다시 추천하지 않는다 (서버가 지문으로 기억한다: 노트를 고치거나 다른 노트에서 시작해도 같은 짝이다). 이해함으로 받아들인 카드였다면 그래프에서 뺀다.
+async function markKnown(c, g) {
+  const id = c.id;
+  if (S.sg.acceptBusy[id]) return;
+  S.sg.acceptBusy[id] = true; delete S.sg.acceptErr[id]; render();
+  try {
+    const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
+    const res = await fetch("/dev/proposals/known", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: pick(c.a), b: pick(c.b), conclusion: g?.conclusion || null }) });
+    if (!res.ok) S.sg.acceptErr[id] = (await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`;
+    else if (S.sg.data?.candidates) {                                  // 목록에서는 바로 뺀다 (다음 분석부터는 서버가 후보에서 뺀다)
+      S.sg.data.candidates = S.sg.data.candidates.filter((x) => x.id !== id);
+      delete S.sg.gen[id];
+    }
+    await Promise.all([loadKnown(), loadAccepted()]);
+  } catch (e) { S.sg.acceptErr[id] = String(e.message || e); }
+  delete S.sg.acceptBusy[id];
+  render();
+}
+async function unmarkKnown(fp) {
+  await fetch("/dev/knowledge/known/" + encodeURIComponent(fp), { method: "DELETE" });
+  await loadKnown();
+  runSuggest();                                                         // 다시 후보에 오른다
 }
 // 이해함 = 이 카드를 지식 그래프의 generated 개념으로 받아들인다 (다음 제안부터 재료). 다시 누르면 되돌린다. 노트 원문은 건드리지 않는다.
 async function toggleAccept(c, g) {
@@ -346,7 +377,7 @@ async function toggleAccept(c, g) {
       : await fetch("/dev/proposals/accept", { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ a: pick(c.a), b: pick(c.b), newKeyword: g.newKeyword, conclusion: g.conclusion, external: g.external }) });
     if (!res.ok) S.sg.acceptErr[id] = (await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`;
-    await loadAccepted();
+    await Promise.all([loadAccepted(), loadKnown()]);
   } catch (e) { S.sg.acceptErr[id] = String(e.message || e); }
   delete S.sg.acceptBusy[id];
   render();
@@ -557,8 +588,8 @@ const genFor = (id) => (id === "cn" ? S.cn.gen : S.sg.gen[id]);
 // 선별 결과가 있으면 useful → vague 순으로 앞에 두고, 나머지는 따로 접어 둔다. 알고 있던 내용으로 버린 쌍은 숨긴다
 function sgOrdered() {
   const cs = S.sg.data.candidates, scr = S.sg.screen, screened = Object.keys(scr).length > 0;
-  const hidden = cs.filter((c) => S.sg.react[pairKey(c)] === "known");
-  const shown = cs.filter((c) => S.sg.react[pairKey(c)] !== "known");
+  const hidden = S.sg.known.filter((k) => S.note === FREE || k.notes.includes(S.note));
+  const shown = cs;
   const rank = (c) => ({ useful: 0, vague: 1 }[scr[c.id]?.label] ?? 2);
   const sorted = [...shown].sort((x, y) => (screened ? rank(x) - rank(y) : 0));
   return { main: screened ? sorted.filter((c) => rank(c) < 2) : sorted, rest: screened ? sorted.filter((c) => rank(c) >= 2) : [], hidden, screened };
@@ -609,7 +640,7 @@ function genBlock(c, g) {
   const react = S.sg.react[pairKey(c)];
   const acc = g.concept && S.sg.accepted[g.concept.conceptId], busy = S.sg.acceptBusy[c.id];
   const buttons = g.status === "candidate" ? `<p class="actions"><button class="act" data-sg="accept:${c.id}" aria-pressed="${!!acc}" ${busy ? "disabled" : ""}>이해함</button>
-      <button class="act" data-sg="react:${c.id}:known">알고 있던 내용</button>
+      <button class="act" data-sg="known:${c.id}" ${busy ? "disabled" : ""}>알고 있던 내용</button>
       <button class="act" data-sg="react:${c.id}:confused" aria-pressed="${react === "confused"}">이해가 안 됨</button></p>` : "";
   const ok = (acc ? `<p class="path">✓ 지식 그래프에 반영했어요${acc.status === "evidence_lost" ? " — 그런데 기댄 문장이 노트에서 사라져 재료로는 쓰지 않아요" : acc.usable ? " · 다음 제안부터 다른 노트의 요소와 이어지는 재료로 쓰여요" : " — 결론이 요소로 쓰기엔 길거나 짧아 재료로는 쓰지 않아요"}. 다시 누르면 되돌려요.</p>
       <details><summary>그래프에 들어간 개념 (generated)</summary><pre class="json">${esc(JSON.stringify(g.concept, null, 2))}</pre></details>` : "")
@@ -652,6 +683,8 @@ function sgCard(c) {
     <p class="path" id="scrm-${c.id}">${scrMemo(c)}</p>${foot}</div>`;
 }
 
+const ANSWERED = { known: "알고 있던 내용", accepted: "이해함", excluded: "호출자가 뺀 짝" };
+const answeredNote = (a) => (a && Object.keys(a).length ? ` · 이미 답해서 뺀 짝 ${Object.entries(a).map(([k, n]) => `${ANSWERED[k] || esc(k)} ${n}`).join(" · ")}` : "");
 function suggestView(source) {
   const D = S.sg.data;
   const head = `<h1>${esc(name(S.note))}</h1>` + (S.note === FREE ? `<div style="margin-bottom:12px">${source}</div>` : "");
@@ -659,7 +692,7 @@ function suggestView(source) {
   if (D === "loading") return `${head}<p class="count"><span class="spin"></span>요소 쌍 후보를 찾는 중이에요… (처음 한 번은 임베딩 때문에 1분쯤 걸려요)</p>`;
   if (D.error) return `${head}<p class="error">${esc(D.error)}</p>`;
   const o = sgOrdered(), ch = D.channels;
-  const stats = `이 노트의 요소 ${D.anchors}개 · 전체 요소 ${D.elements}개 → 후보 ${D.candidates.length}개 (공유 낱말 ${ch.terms || 0} · 공통 키워드 ${ch.pivot || 0} · 의미 비슷 ${ch.embed || 0}${D.embeddings ? ` · 코사인 ${D.cosineFloor} 미만은 뺌` : " · 임베딩 없음"}) · ${D.ms}ms`;
+  const stats = `이 노트의 요소 ${D.anchors}개 · 전체 요소 ${D.elements}개 → 후보 ${D.candidates.length}개 (공유 낱말 ${ch.terms || 0} · 공통 키워드 ${ch.pivot || 0} · 의미 비슷 ${ch.embed || 0}${D.embeddings ? ` · 코사인 ${D.cosineFloor} 미만은 뺌` : " · 임베딩 없음"}) · ${D.ms}ms${answeredNote(D.answered)}`;
   const tools = `<p class="actions"><button class="act" data-sg="screen" ${S.sg.screening || !D.candidates.length ? "disabled" : ""}>${S.sg.screening ? "선별하는 중…" : "LLM 선별"}</button>
     <button class="act" data-sg="top" ${D.candidates.length ? "" : "disabled"}>상위 ${AUTO_N}개 새 지식 만들기</button>
     <label class="note"><input type="checkbox" data-auto ${S.sg.auto ? "checked" : ""}>이어지면 자동으로 선별하고 상위 ${AUTO_N}개의 새 지식을 만들기</label>
@@ -668,7 +701,9 @@ function suggestView(source) {
   return `${head}<p class="count">${stats}</p>${tools}${scrNote}
     ${o.main.map(sgCard).join("") || `<p class="empty">후보가 없어요. 신뢰도를 낮추거나 다른 노트를 골라 보세요.</p>`}
     ${o.rest.length ? `<details ${S.sg.showRest ? "open" : ""} data-sg-toggle="rest"><summary>선별에서 걸러진 후보 ${o.rest.length}개</summary>${o.rest.map(sgCard).join("")}</details>` : ""}
-    ${o.hidden.length ? `<p class="note">알고 있던 내용으로 숨긴 쌍 ${o.hidden.length}개 · <button class="linkBtn" data-sg="unhide">다시 보기</button></p>` : ""}`;
+    ${o.hidden.length ? `<details><summary>알고 있던 내용으로 답한 짝 ${o.hidden.length}개 (다시 추천하지 않아요)</summary><ul class="steps">${o.hidden.map((k) =>
+      `<li><b>${esc(k.keywords[0])} × ${esc(k.keywords[1])}</b> <span class="path">${k.notes.map((n) => esc(shortTitle(n, 20))).join(" · ")}</span>${k.conclusion ? `<div class="quote">${esc(k.conclusion)}</div>` : ""}
+       <button class="linkBtn" data-sg="unknown:${esc(k.fingerprint)}">다시 보기</button></li>`).join("")}</ul></details>` : ""}`;
 }
 
 $("#body").addEventListener("keydown", (e) => {              // 챗봇 입력칸에서 Enter 로 보낸다 (한글 조합 중에는 보내지 않는다)
@@ -708,7 +743,8 @@ $("#body").addEventListener("click", (e) => {
   else if (k === "screen") runScreen();
   else if (k === "top") generateTop(3);
   else if (k === "gen") (id === "cn" ? runConnectGenerate() : runGenerate(id));
-  else if (k === "unhide") { for (const x of S.sg.data.candidates) if (S.sg.react[pairKey(x)] === "known") delete S.sg.react[pairKey(x)]; saveReact(); render(); }
+  else if (k === "known") { const c = cardFor(id), g = genFor(id); if (c && g && g !== "loading") markKnown(c, g); }
+  else if (k === "unknown") unmarkKnown(id);
   else if (k === "accept") { const c = cardFor(id), g = genFor(id); if (c && g && g !== "loading") toggleAccept(c, g); }
   else if (k === "react") {
     const c = cardFor(id), key = pairKey(c);

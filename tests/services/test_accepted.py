@@ -165,3 +165,42 @@ def test_merge_skips_knowledge_whose_evidence_is_lost_and_brings_it_back_when_it
     assert kws == [] and m == {}
     kws, _ = merge_into([], {}, [r], TEXTS, uid)
     assert len(kws) == 1
+
+
+# ---- 알고 있던 내용 · 지문 ----
+
+def test_record_carries_the_pair_fingerprint():
+    from app.services.links.accepted import fingerprint_of
+    from app.services.links.pairing import pair_fingerprint
+    r = record()
+    assert r["fingerprint"] == pair_fingerprint("ca", "cb") == pair_fingerprint("cb", "ca")
+    old = {k: v for k, v in r.items() if k != "fingerprint"}                    # 지문이 없는 옛 기록은 from 에서 구한다
+    assert fingerprint_of(old) == r["fingerprint"]
+    assert status_of(r, TEXTS)["fingerprint"] == r["fingerprint"]
+
+
+def test_known_record_and_store(tmp_path):
+    from app.services.links.accepted import KnownStore, known_record
+    from app.services.links.pairing import pair_basis, pair_fingerprint
+    k = known_record(A, B, " 결론이에요 ")
+    assert k["fingerprint"] == pair_fingerprint("ca", "cb") == known_record(B, A)["fingerprint"]            # A·B 순서와 무관
+    assert k["keywords"] == ["WAL", "페이지 캐시"] and k["notes"] == ["DB-WAL", "OS-캐시"] and k["texts"] == [QA, QB] and k["conclusion"] == "결론이에요"
+    assert k["basisHash"] == pair_basis("ca", QA, "cb", QB) and known_record(A, B)["conclusion"] is None
+    with pytest.raises(AcceptError, match="서로 다른 노트"):
+        known_record(A, {**B, "note": "DB-WAL"})
+    s = KnownStore(tmp_path / "k.json")
+    s.add(k)
+    again = s.add({**known_record(B, A, "다시"), "createdAt": "2099-01-01T00:00:00Z"})
+    assert len(s.all()) == 1 and again["createdAt"] == k["createdAt"] and s.all()[0]["conclusion"] == "다시"      # 같은 짝은 하나, 처음 답한 때는 그대로
+    assert KnownStore(tmp_path / "k.json").all() == s.all()
+    assert s.remove(k["fingerprint"]) and not s.remove(k["fingerprint"])
+
+
+def test_answered_pairs_cover_both_kinds_of_answer():
+    from app.services.links.accepted import answered, known_record
+    from app.services.links.pairing import pair_fingerprint
+    r = record()
+    old = {k: v for k, v in r.items() if k != "fingerprint"}
+    other = {**A, "conceptId": "cz"}
+    got = answered([old], [known_record(other, B)])
+    assert got == {pair_fingerprint("ca", "cb"): "accepted", pair_fingerprint("cz", "cb"): "known"}

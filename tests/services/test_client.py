@@ -70,3 +70,14 @@ def test_reconcile_cards_keeps_ids_for_the_same_fingerprint():
     assert got[0]["card"]["conclusion"] == "새 표현이어도" and got[2]["card"] is None and got[3]["card"]["fingerprint"] == "D"
     assert reconcile_cards([], []) == []
     assert reconcile_cards(shown, [])[0]["action"] == "lost"                 # 분석 결과가 비어도 카드가 조용히 사라지지 않고 lost 로 남는다
+
+
+def test_reconcile_cards_also_follows_keyword_pair_cards():
+    """키워드 쌍 카드(후보의 fingerprint·basisHash)도 같은 규칙으로 이어진다: 같은 짝은 id 유지, 문장이 바뀌면 updated, 짝이 사라지면 lost."""
+    from app.client import reconcile_cards
+    from app.services.links.pairing import pair_basis, pair_fingerprint
+    card = lambda a, b, ta, tb: {"fingerprint": pair_fingerprint(a, b), "basisHash": pair_basis(a, ta, b, tb)}
+    shown = [{"id": "c1", **card("a", "b", "가", "나")}, {"id": "c2", **card("a", "c", "가", "다")}, {"id": "c3", **card("x", "y", "엑", "와이")}]
+    now = [card("b", "a", "나", "가"), card("c", "a", "다", "가를 고침"), card("m", "n", "엠", "엔")]            # 시작 노트가 달라 A·B 가 뒤바뀌어도 같은 짝이다
+    got = reconcile_cards(shown, now, dismissed={pair_fingerprint("m", "n")})
+    assert [(g["id"], g["action"]) for g in got] == [("c1", "same"), ("c2", "updated"), ("c3", "lost")]            # 알고 있던 내용으로 답한 새 짝은 내지 않는다

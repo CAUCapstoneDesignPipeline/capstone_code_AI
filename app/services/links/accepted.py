@@ -27,7 +27,7 @@ from app.schemas.knowledge import Concept, ExternalSource, Keyword, PageSource
 
 from .corpus import loose_key
 from .generate import merge_external, side_sources
-from .pairing import GENERATED_MAX_CHARS, MIN_CHARS
+from .pairing import GENERATED_MAX_CHARS, MIN_CHARS, pair_basis, pair_fingerprint
 
 STORE_VERSION = 1
 LIVE, LOST = "live", "evidence_lost"
@@ -62,12 +62,40 @@ def build_record(a: dict, b: dict, new_keyword: str, conclusion: str, external: 
     ext = [{"url": e["url"], "title": (e.get("title") or "")[:100] or None, "quote": e.get("quote") or None,
             "retrievedAt": e.get("retrievedAt") or now} for e in merge_external(external, a, b)]
     rec = {"conceptId": concept_id, "keyword": keyword, "conclusion": conclusion, "external": ext, "sources": sources,
-           "from": [{"keyword": x["keyword"], "conceptId": x["conceptId"], "note": x["note"]} for x in (a, b)], "createdAt": now}
+           "from": [{"keyword": x["keyword"], "conceptId": x["conceptId"], "note": x["note"]} for x in (a, b)],
+           "fingerprint": pair_fingerprint(a["conceptId"], b["conceptId"]), "createdAt": now}
     try:                                                      # 개념으로 만들 수 있는 모양인지 (URL·구간 길이 등) 받아들일 때 알아낸다
         _concept(rec, [_page_source(s, s) for s in sources])
     except (ValidationError, ValueError) as e:
         raise AcceptError(f"개념 형식을 만들지 못했다: {e.errors()[0]['msg'] if isinstance(e, ValidationError) else e}")
     return rec
+
+
+def fingerprint_of(rec: dict) -> str:
+    """받아들인 기록이 어느 짝에서 나왔는가 (두 요소의 개념 id). 지문이 없는 옛 기록은 `from` 에서 구한다."""
+    return rec.get("fingerprint") or pair_fingerprint(*(f["conceptId"] for f in rec["from"]))
+
+
+def sides_notes(*sides: dict) -> list[str]:
+    """요소들이 기댄 노트 이름 (받아들인 새 지식은 기댄 노트들)."""
+    return sorted({n for x in sides for n in (x.get("notes") or [x["note"]])})
+
+
+def known_record(a: dict, b: dict, conclusion: str | None = None) -> dict:
+    """'알고 있던 내용' 기록: 이 짝은 다시 추천하지 않는다. 화면에서 되돌릴 수 있게 두 요소의 키워드·문장을 남긴다 (노트 문장이 들어 있어 비공개 폴더)."""
+    if set(sides_notes(a)) & set(sides_notes(b)):
+        raise AcceptError("서로 다른 노트에 기댄 요소여야 한다")
+    return {"fingerprint": pair_fingerprint(a["conceptId"], b["conceptId"]), "basisHash": pair_basis(a["conceptId"], a["text"], b["conceptId"], b["text"]),
+            "keywords": [a["keyword"], b["keyword"]], "notes": sides_notes(a, b), "texts": [a["text"][:600], b["text"][:600]],
+            "conclusion": (conclusion or "").strip()[:2000] or None, "createdAt": _now()}
+
+
+def answered(accepted: list[dict], known: list[dict]) -> dict[str, str]:
+    """이미 답한 짝의 지문 → 이유. 이해함(accepted)이든 알고 있던 내용(known)이든 같은 짝을 다시 추천하지 않는다 (카드는 답하면 목록에서 빠진다).
+    이해함이 그래프에 들어갔다면 그 지식은 이미 재료이고, 같은 짝을 또 보이면 같은 카드가 두 번 나온다."""
+    out = {fingerprint_of(r): "accepted" for r in accepted}
+    out.update({r["fingerprint"]: "known" for r in known})
+    return out
 
 
 def _page_source(src: dict, at: dict) -> PageSource:
@@ -108,7 +136,7 @@ def usable_as_element(rec: dict) -> bool:
 
 def status_of(rec: dict, texts: dict[str, str]) -> dict:
     live = locate(rec, texts) is not None
-    return {"conceptId": rec["conceptId"], "keyword": rec["keyword"], "conclusion": rec["conclusion"], "status": LIVE if live else LOST,
+    return {"conceptId": rec["conceptId"], "fingerprint": fingerprint_of(rec), "keyword": rec["keyword"], "conclusion": rec["conclusion"], "status": LIVE if live else LOST,
             "usable": usable_as_element(rec), "from": rec["from"], "createdAt": rec["createdAt"],
             "notes": sorted({s["note"] for s in rec["sources"]}), "sources": len(rec["sources"]), "external": len(rec["external"])}
 
@@ -148,7 +176,10 @@ def merge_into(keywords: list[Keyword], meta: dict[str, dict], records: list[dic
 
 
 class AcceptedStore:
-    """받아들인 지식 기록 (JSON 파일 하나, 원자적으로 쓴다). version 은 바뀔 때마다 오르고 색인 캐시의 열쇠가 된다."""
+    """받아들인 지식 기록 (JSON 파일 하나, 원자적으로 쓴다). version 은 바뀔 때마다 오르고 색인 캐시의 열쇠가 된다.
+    KEY 는 기록을 가리키는 칸 (같은 값이면 같은 기록)이다."""
+
+    KEY = "conceptId"
 
     def __init__(self, path: Path):
         self.path, self._lock = Path(path), threading.Lock()
@@ -160,7 +191,7 @@ class AcceptedStore:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             return []
-        return [r for r in data.get("items", []) if isinstance(r, dict) and r.get("conceptId")] if isinstance(data, dict) else []
+        return [r for r in data.get("items", []) if isinstance(r, dict) and r.get(self.KEY)] if isinstance(data, dict) else []
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,27 +204,33 @@ class AcceptedStore:
         with self._lock:
             return [dict(r) for r in self._items]
 
-    def get(self, concept_id: str) -> dict | None:
+    def get(self, key: str) -> dict | None:
         with self._lock:
-            return next((dict(r) for r in self._items if r["conceptId"] == concept_id), None)
+            return next((dict(r) for r in self._items if r[self.KEY] == key), None)
 
     def add(self, rec: dict) -> dict:
-        """같은 conceptId 가 있으면 내용을 바꾸고 처음 받아들인 때(createdAt)는 지킨다 (같은 카드를 다시 눌러도 하나다)."""
+        """같은 열쇠가 있으면 내용을 바꾸고 처음 기록한 때(createdAt)는 지킨다 (같은 카드를 다시 눌러도 하나다)."""
         with self._lock:
-            old = next((r for r in self._items if r["conceptId"] == rec["conceptId"]), None)
+            old = next((r for r in self._items if r[self.KEY] == rec[self.KEY]), None)
             if old is not None:
                 rec = {**rec, "createdAt": old["createdAt"]}
-                self._items = [rec if r["conceptId"] == rec["conceptId"] else r for r in self._items]
+                self._items = [rec if r[self.KEY] == rec[self.KEY] else r for r in self._items]
             else:
                 self._items.append(rec)
             self._save()
             return dict(rec)
 
-    def remove(self, concept_id: str) -> bool:
+    def remove(self, key: str) -> bool:
         with self._lock:
-            kept = [r for r in self._items if r["conceptId"] != concept_id]
+            kept = [r for r in self._items if r[self.KEY] != key]
             if len(kept) == len(self._items):
                 return False
             self._items = kept
             self._save()
             return True
+
+
+class KnownStore(AcceptedStore):
+    """'알고 있던 내용' 으로 답한 짝 (지문이 열쇠). 같은 방식으로 저장한다. 운영에서는 BE 가 거절한 지문을 저장해 요청의 exclude 로 보낸다."""
+
+    KEY = "fingerprint"
