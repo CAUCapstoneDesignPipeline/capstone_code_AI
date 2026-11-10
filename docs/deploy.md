@@ -224,6 +224,7 @@ Ops Agent 수신/알림을 포함한다. readiness는 provider를 호출하지 �
 - 로컬-only commit은 Actions checkout할 수 없다. 원격 게시 후 ref 접근을 검증하고 WIF를 활성화한다.
 - 이 배포는 private AI 서버 인수다. BE 기능 계약 승인이나 운영 사용자 대상 AI 공개를 대신하지 않는다.
 
-AI caller는 실제 로컬 commit `d50a4c135aa79896d18053d323ecf1208cff068f`의 reusable/tool에 고정했다.
-이 commit은 원격 게시 전에는 GitHub에서 사용할 수 없다. 설치 tool SHA 및 `GCP_AI_DEPLOY_TOOL_SHA`,
-WIF `job_workflow_ref`도 같은 값으로 대조한 후 사용한다. Manifest는 별도의 `GCP_RELEASE_MANIFEST_SHA`에서 읽는다.
+AI caller는 원격 develop commit `361c79d9f8a8998cec9cac48e97ca46a684e44e6`의 reusable/tool에 고정했다.
+이 commit의 `host_driver.py`가 컨테이너 CPU 1.5·메모리 10 GiB·`AI_MAX_INFLIGHT=1`을 쓴다. 설치 tool SHA
+(`/opt/capstone-ai/REVISION`), manifest `bootstrapRevision`, `GCP_AI_DEPLOY_TOOL_SHA`, WIF `job_workflow_ref`
+(Terraform `ai_deploy_workflow_sha`)도 같은 값으로 대조한 후 사용한다. Manifest는 별도의 `GCP_RELEASE_MANIFEST_SHA`에서 읽는다.
