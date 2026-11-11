@@ -5,6 +5,9 @@ import re
 
 MODEL_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
 ROLES = {"relation", "facts", "explain", "verify", "sound"}
+OPTIONAL_ROLES = {"chat"}      # 챗봇 모델. 없는 manifest 도 유효하고, 그러면 챗봇은 꺼진다 (host_driver 가 AI_CHAT_LLM=0 을 명시한다)
+FLAGS = {"relation", "explain", "verify"}
+OPTIONAL_FLAGS = {"chat"}      # true 이면 챗봇을 켠다. 켜려면 위 chat 모델·effort 가 manifest 에 고정되어 있어야 한다
 
 
 def canonical(value):
@@ -20,8 +23,9 @@ def match(value, pattern, field):
         raise ValueError(f"invalid {field}")
 
 
-def keys(value, expected, field):
-    if not isinstance(value, dict) or set(value) != set(expected):
+def keys(value, expected, field, optional=()):
+    """value 의 칸이 expected 를 모두 갖고, 그 밖에는 optional 의 것만 더 있어야 한다."""
+    if not isinstance(value, dict) or not set(expected) <= set(value) <= set(expected) | set(optional):
         raise ValueError(f"invalid {field} fields")
 
 
@@ -55,17 +59,21 @@ def validate(m, host=None, revision=None):
     keys(m["provider"], {"name", "models", "efforts", "timeoutSeconds"}, "provider")
     if m["provider"]["name"] not in {"anthropic", "openai", "google"}:
         raise ValueError("provider must be selected")
-    keys(m["provider"]["models"], ROLES, "models")
-    keys(m["provider"]["efforts"], ROLES, "efforts")
-    for role in ROLES:
+    keys(m["provider"]["models"], ROLES, "models", OPTIONAL_ROLES)
+    keys(m["provider"]["efforts"], ROLES, "efforts", OPTIONAL_ROLES)
+    if set(m["provider"]["models"]) != set(m["provider"]["efforts"]):
+        raise ValueError("models and efforts must name the same roles")
+    for role in m["provider"]["models"]:
         match(m["provider"]["models"][role], r"[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}", "provider model")
         if m["provider"]["efforts"][role] not in {"low", "medium", "high"}:
             raise ValueError("invalid effort")
     if type(m["provider"]["timeoutSeconds"]) is not int or not 1 <= m["provider"]["timeoutSeconds"] <= 90:
         raise ValueError("provider timeout exceeds runtime budget")
-    keys(m["flags"], {"relation", "explain", "verify"}, "flags")
+    keys(m["flags"], FLAGS, "flags", OPTIONAL_FLAGS)
     if any(type(v) is not bool for v in m["flags"].values()):
         raise ValueError("flags must be booleans")
+    if m["flags"].get("chat") and "chat" not in m["provider"]["models"]:
+        raise ValueError("chat flag requires a pinned chat model and effort")
     keys(m["secrets"], {"serviceToken", "providerKey", "tlsBundle"}, "secrets")
     for value in m["secrets"].values():
         match(value, r"projects/[a-z0-9-]+/secrets/[a-zA-Z0-9_-]+/versions/[1-9][0-9]*", "secret version")

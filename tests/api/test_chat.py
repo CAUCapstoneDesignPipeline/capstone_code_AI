@@ -276,3 +276,15 @@ def test_whole_stream_shares_one_deadline(monkeypatch):
         evs = sse(call(c, body([user("안녕")])).text)
     assert [e for e, _ in evs][:2] == ["start", "thinking"] and evs[-1][0] == "error" and evs[-1][1]["code"] == "MODEL_TIMEOUT"
     assert evs[-1][1]["retryable"] is True and time.monotonic() - t < 5
+
+
+def test_chat_is_off_by_default_and_on_only_when_asked(monkeypatch):
+    """배포에서 provider key 만 있다고 챗봇이 저절로 켜지지 않는다 (관계 판정 LLM 처럼 명시적으로 켠다)."""
+    from app.core.config import Settings as S
+    monkeypatch.delenv("AI_CHAT_LLM", raising=False)
+    monkeypatch.setenv("AI_SERVICE_TOKEN", "t")
+    assert S.from_env().chat_llm is False
+    monkeypatch.setenv("AI_CHAT_LLM", "1")
+    assert S.from_env().chat_llm is True
+    monkeypatch.setenv("AI_CHAT_LLM", "0")
+    assert S.from_env().chat_llm is False

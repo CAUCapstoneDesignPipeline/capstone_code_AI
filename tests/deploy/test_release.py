@@ -292,3 +292,37 @@ def test_boot_recovery_never_opens_gate_before_all_checks(setup,monkeypatch,fail
 def test_reusable_validates_tool_pin_before_checkout():
     text=(Path(__file__).parents[2]/".github/workflows/gcp-deploy-reusable.yml").read_text()
     assert text.index('test "$TOOL_SHA" = "$GCP_AI_DEPLOY_TOOL_SHA"') < text.index('- uses: actions/checkout@')
+
+
+# ---- 챗봇: 선택 role·flag (옛 manifest 는 그대로 유효하고 챗봇은 꺼진다) ----
+
+def with_chat(m, flag=True, model="synthetic-chat-1", effort="low"):
+    m["provider"]["models"]["chat"], m["provider"]["efforts"]["chat"] = model, effort
+    if flag is not None:
+        m["flags"]["chat"] = flag
+    return m
+
+
+def test_a_manifest_without_chat_is_still_valid_and_one_with_a_pinned_chat_model_is_too():
+    assert validate(manifest())
+    assert validate(with_chat(manifest()))                       # 켠다: chat 모델·effort 와 flag
+    assert validate(with_chat(manifest(), flag=False))          # 모델은 고정해 두고 끈다
+    assert validate(with_chat(manifest(), flag=None))           # flag 를 안 적으면 끈다 (host_driver 가 AI_CHAT_LLM=0 을 명시)
+
+
+@pytest.mark.parametrize("change", [
+    lambda m: m["flags"].update(chat=True),                                                     # 켜려면 고정한 chat 모델이 있어야 한다
+    lambda m: m["provider"]["models"].update(chat="synthetic-chat-1"),                          # 모델만 있고 effort 가 없다
+    lambda m: m["provider"]["efforts"].update(chat="low"),                                      # effort 만 있고 모델이 없다
+    lambda m: with_chat(m).update(flags={**m["flags"], "chat": "true"}),                        # bool 이 아니다
+    lambda m: with_chat(m, effort="max"),                                                       # 정해진 effort 가 아니다
+    lambda m: with_chat(m, model="bad model!"),
+    lambda m: m["provider"]["models"].update(translate="synthetic-model-1"),                    # 모르는 role
+    lambda m: m["flags"].update(translate=True),                                                # 모르는 flag
+    lambda m: m["flags"].pop("verify"),                                                         # 필수 flag 는 그대로 필요하다
+    lambda m: m["provider"]["models"].pop("sound")])                                            # 필수 role 도 그대로 필요하다
+def test_chat_options_do_not_loosen_the_rest_of_the_manifest(change):
+    m = manifest()
+    change(m)
+    with pytest.raises(ValueError):
+        validate(m)
