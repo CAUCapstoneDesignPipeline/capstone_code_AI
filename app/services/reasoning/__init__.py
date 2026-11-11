@@ -27,7 +27,7 @@ def code_revision(*files: str) -> str:
 class ReasoningProfile:
     """불변 추론 profile. 검증 profile 은 생성 profile 과 model 또는 prompt 가 달라야 한다 (계약 §5)."""
     id: str
-    operation: str              # merge | bridges | edges | explain | explanation | links | facts | derive
+    operation: str              # merge | bridges | edges | explain | explanation | links | facts | derive | external
     model: str
     prompt: str
     files: tuple[str, ...]
@@ -83,6 +83,9 @@ REASONING_PROFILES = {p.id: p for p in (
     # + 규칙을 통과한 결론의 원문 충실성·soundness 를 LLM 이 판정 (판정만, 전제를 채우지 않는다)
     ReasoningProfile("derive-sound-1", "derive", "llm", "derive-sound-1", (*_DERIVE, "derive/sound_llm.py"),
                      ("soundness_judge",)),
+    # 추천 결론의 외부 지식: 웹 검색 한 번 + 출처 판정 (제목·URL). 모델이 지어낸 URL·안전하지 않은 URL 은 코드가 버린다
+    ReasoningProfile("external-knowledge-llm-1", "external", "llm", "external-knowledge-llm-1",
+                     ("links/external.py",), ("external_finder",)),
     ReasoningProfile("links-hybrid-1", "links", "kiwi-tfidf-adamic-adar+llm-typing", "links-hybrid-1",
                      (*_LINKS, "relations/typer.py"), ("extractor", "typer")),
 )}

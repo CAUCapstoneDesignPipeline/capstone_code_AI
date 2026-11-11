@@ -37,6 +37,8 @@ AI 쪽 구현이 정한 것(profile·판정 기준)을 적는다. 실행되는 �
 
 **챗봇** (이해가 안 됨 → 카드를 쉽게 풀어 주는 여러 턴 대화, 토큰 스트리밍) 은 [chat-api.md](chat-api.md) 에 있다.
 
+**외부 지식** (카드의 결론을 뒷받침하는 웹 자료의 한 문장 요약·출처 URL) 은 `POST /internal/v1/external-knowledge` (`findExternalKnowledge`, profile `external-knowledge-llm-1`) 이고 [external-knowledge.md](external-knowledge.md) 에 있다. 요청은 `context` · `profileVersion` · `claim{conclusion, evidence[A·B]}` · `maxSources`(기본 1, 최대 3), 헤더는 다른 추론 operation 과 같다(X-Attempt-Id·Idempotency-Key 필수). 응답은 `status: found | none`, `externalKnowledge[]`(`summary`, `sourceUrl`, `title`, `retrievedAt`, `support: yes | partly`, 강한 순), `usage`. **기본 꺼짐**이라 꺼져 있으면 503 이다. 한 번에 4~20초이고 처리 자리를 쓰므로 화면에 보일 카드에만 분석 뒤 따로 부르고 결과는 BE 가 저장한다. `none` 은 오류가 아니다.
+
 ## 2. 판정 결합 (계약 §5 표를 코드로 옮긴 것, `app/client.py` `decide`)
 
 | 조건 | 결과 |
@@ -254,6 +256,7 @@ BE 가 할 일 (참조 구현 `app/client.py` `reconcile_cards`, 시험 `tests/s
 | verifyExplanation | **`explanation-hybrid-2`** (권장) | `explanation-det-3` + LLM(검증 LLM, effort low)이 주장마다 인용 근거가 뒷받침하는지(supported → pass, partial → uncertain, unsupported·contradicted → fail), 결론이 구체적인지·새로운지 본다. 구체적이지 않거나 한 노트 내용의 바꿔쓰기면 결론 fail. 생성기와 prompt 가 달라 독립. 주장마다 정확히 하나 아니면 502. 캐시 |
 | verifyExplanation | `explanation-det-3` | `explanation-det-2` + 문맥 근거만 인용하는 보조 전제를 받는다 (주장과 인용 원문이 같은 경로 개념을 말하면 통과) |
 | verifyExplanation | `explanation-det-2` | 주장마다 인용이 어느 단계 근거인지, 두 개념이 원문에 나오는지, 결론이 두 전제를 잇는지, 합성 규칙이 있는지. 단계 근거가 아닌 인용은 경로 밖 근거로 본다 |
+| findExternalKnowledge (제안) | `external-knowledge-llm-1` | LLM 이 웹 검색을 한 번 하고 출처 `{url, summary}` 를 내면 코드가 검색 결과에 없는 URL·안전하지 않은 URL·중복·300자 넘는 요약을 버리고, 별도 판정(검증 LLM, 제목·URL 만)이 yes·partly·no 를 정해 no 를 뺀다. 응답을 저장하지 않는다. **기본 꺼짐** (`AI_EXTERNAL_LLM`) ([설명](external-knowledge.md)) |
 | findNoteLinks (제안) | **`links-hybrid-1`** (권장) | 3장 + 관계를 LLM 으로 보탠다 (`extract-hybrid-2` 의 관계와 같다) |
 | findNoteLinks (제안) | `links-det-1` | 3장. 규칙·구조 관계만 써서 경로가 거의 없다 |
 | extractFacts (제안) | `facts-llm-3` | 4장. LLM(사실 LLM, 기본 effort medium)이 노트에 쓰인 계산용 사실과 원문 구절을 고른다. quote 가 원문에 그대로 없거나 key 모양이 아니면 버림. 이미 쓰인 key 를 받아 맞춘다. 거절이면 사실 없음. 노트 원문·knownSubjects 로 캐시 |

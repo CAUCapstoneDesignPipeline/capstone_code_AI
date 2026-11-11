@@ -54,8 +54,9 @@ def conforms(schema, value, where="$"):
             assert re.search(schema["pattern"], value), f"{where}: pattern"
         if schema.get("format") == "uuid":
             assert re.fullmatch(r"[0-9a-fA-F-]{36}", value), f"{where}: uuid"
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and "minimum" in schema:
-        assert value >= schema["minimum"], f"{where}: minimum"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        assert value >= schema.get("minimum", float("-inf")), f"{where}: minimum"
+        assert value <= schema.get("maximum", float("inf")), f"{where}: maximum"
     if isinstance(value, list):
         assert schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", 10**9), f"{where}: items {len(value)}"
         for i, v in enumerate(value):
