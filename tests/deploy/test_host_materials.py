@@ -140,3 +140,18 @@ def test_install_rejects_bad_ops_agent_version_before_packages(version, ok):
     run = subprocess.run(["bash", "-c", check], env={"PATH": "/usr/bin:/bin", "OPS_AGENT_VERSION": version},
                          capture_output=True, text=True)
     assert (run.returncode == 0) is ok
+
+
+def test_chat_is_off_unless_the_manifest_turns_it_on(tmp_path, monkeypatch, tls):
+    """챗봇이 manifest 에 없으면 앱의 기본값에 기대지 않고 AI_CHAT_LLM=0 을 명시한다. 켜면 고정한 모델·effort 가 환경 변수로 간다."""
+    from test_release import with_chat
+    env = {}
+    for name, edit in (("off", lambda m: m), ("pinned-off", lambda m: with_chat(m, flag=False)), ("on", lambda m: with_chat(m))):
+        driver, m = material_driver(tmp_path / name, monkeypatch, tls)
+        (tmp_path / name).mkdir(exist_ok=True)
+        driver.prepare(edit(m))
+        env[name] = json.loads((tmp_path / name / "releases/r2/compose.json").read_bytes())["services"]["ai"]["environment"]
+    assert env["off"]["AI_CHAT_LLM"] == "0" and "AI_CHAT_LLM_MODEL" not in env["off"]
+    assert env["pinned-off"]["AI_CHAT_LLM"] == "0"
+    assert env["on"]["AI_CHAT_LLM"] == "1" and env["on"]["AI_CHAT_LLM_MODEL"] == "synthetic-chat-1" and env["on"]["AI_CHAT_LLM_EFFORT"] == "low"
+    assert env["on"]["AI_CHAT_LLM_PROVIDER"] == "anthropic" and env["on"]["AI_EXPLAIN_LLM"] == "0"       # 다른 flag 는 그대로

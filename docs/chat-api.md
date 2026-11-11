@@ -94,7 +94,7 @@ data: {"stopReason": "end_turn", "model": "claude-sonnet-5-5", "usage": {"inputT
 | 본문 해시 불일치 | `INPUT_IDENTITY_MISMATCH` (409) |
 | 한 메시지 4,000자·전체 60,000자 초과 | `INPUT_TOO_LARGE` (413) |
 | 동시 처리 자리가 가득 참 | `AI_BUSY` (429, `Retry-After`) |
-| 챗봇 LLM 이 없음 (`AI_CHAT_LLM=0`, API 키 없음) | `SERVICE_UNAVAILABLE` (503) |
+| 챗봇이 꺼져 있음 (`AI_CHAT_LLM` 이 `1` 이 아님) 또는 LLM 이 없음 (API 키 없음) | `SERVICE_UNAVAILABLE` (503) |
 | 모델 제한 시간 (115초) | `MODEL_TIMEOUT` (504) / 스트림 중이면 `error` 이벤트 |
 | 제공자 오류 | `MODEL_PROVIDER_ERROR` (502) |
 | 모델이 거절 (재시도해도 같다) | `INVALID_MODEL_OUTPUT` (502, `retryable: false`) |
@@ -123,7 +123,7 @@ data: {"stopReason": "end_turn", "model": "claude-sonnet-5-5", "usage": {"inputT
 
 | 환경 변수 | 뜻 |
 | --- | --- |
-| `AI_CHAT_LLM` | `0` 이면 챗봇을 끈다 (기본 `1`) |
+| `AI_CHAT_LLM` | `1` 이면 챗봇을 켠다 (**기본 꺼짐**: 배포에서는 release manifest 의 `flags.chat` 으로 명시적으로 켠다, [deploy.md](deploy.md). 로컬 playground 는 켠다) |
 | `AI_CHAT_LLM_PROVIDER` · `_MODEL` · `_EFFORT` | 없으면 `AI_LLM_*` → `ANTHROPIC_API_KEY` 의 anthropic. **모델은 기본 `claude-sonnet-5-5`, effort `low`** (쉽게 풀어 쓰는 말하기라 큰 모델이 필요 없고 첫 글자가 빨리 나온다). 스트리밍은 anthropic 만 지원한다 |
 
 ## 실제 측정 (이 머신, Sonnet 5.5, 3턴 대화, 한 번씩)

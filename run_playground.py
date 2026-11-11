@@ -101,6 +101,7 @@ def main():
     # 관계를 LLM 으로 보탠다 (규칙만으로는 노트 사이 경로가 거의 없다). 처음 색인은 노트마다 LLM 을 불러 오래 걸리고,
     # 결과는 data/private/cache/relations 에 남아 다음부터는 바로 쓴다. 끄려면 AI_RELATION_LLM=0
     os.environ.setdefault("AI_RELATION_LLM", "1")
+    os.environ.setdefault("AI_CHAT_LLM", "1")                      # 챗봇 탭 (앱의 기본값은 꺼짐)
     os.environ.setdefault("AI_MAX_INFLIGHT", "8")       # 지식 제안이 설명·검증을 동시에 여러 개 보낸다
     os.environ["AI_DEV_UI"] = "1"
     os.environ["AI_NOTES_DIR"] = str(notes_dir)
