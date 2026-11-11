@@ -46,7 +46,7 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("/chat")
+@router.post("/chat", operation_id="chatAboutKnowledge")        # 계약(docs api/ai-openapi.yaml)의 operationId
 async def chat(request: Request):
     t0 = time.monotonic()
     common_checks(request)
