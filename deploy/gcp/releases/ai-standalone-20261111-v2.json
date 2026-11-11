@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "kind": "ai",
+  "releaseId": "ai-standalone-20261111-v2",
+  "sourceSha": "404dabf6cbe12621f4c86b84dc4dbda5b9750d5c",
+  "image": "asia-northeast3-docker.pkg.dev/capsnote/capstone-ai/ai@sha256:afcb789591dd12b19400d58fd686ebab05603cee5cee90122c362f45b11cea8f",
+  "bootstrapRevision": "9039843f6736d94a0941580f31c60b37a4549880",
+  "configRevision": "b66cc508427e78073cda35fe67b9dd2d06a716d19b7c7f897a4100eafd468465",
+  "model": {
+    "profile": "embeddings-bge-m3-1",
+    "name": "BAAI/bge-m3",
+    "revision": "5617a9f61b028005a4858fdac845db406aefb181"
+  },
+  "profiles": [
+    "extract-det-3",
+    "embeddings-bge-m3-1",
+    "extract-hybrid-1",
+    "extract-hybrid-2",
+    "extract-hybrid-3",
+    "links-hybrid-1",
+    "facts-llm-3",
+    "explain-llm-8",
+    "edges-llm-1",
+    "edges-llm-2",
+    "explanation-hybrid-2",
+    "merge-hybrid-1",
+    "derive-sound-1"
+  ],
+  "idf": {
+    "bucket": "capsnote-169516793433-ai-artifacts",
+    "object": "idf/team-notes-20261110-v1.json",
+    "generation": "1794345807761260",
+    "sha256": "ac23138b90e16a27fcd358eaac5e57a71a6f97f89bf3ffb057d2c1094332b9d0",
+    "sourceSha": "404dabf6cbe12621f4c86b84dc4dbda5b9750d5c"
+  },
+  "provider": {
+    "name": "anthropic",
+    "models": {
+      "relation": "claude-opus-5-5",
+      "facts": "claude-opus-5-5",
+      "explain": "claude-opus-5-5",
+      "verify": "claude-opus-5-5",
+      "sound": "claude-opus-5-5"
+    },
+    "efforts": {
+      "relation": "low",
+      "facts": "medium",
+      "explain": "medium",
+      "verify": "low",
+      "sound": "medium"
+    },
+    "timeoutSeconds": 90
+  },
+  "flags": {
+    "relation": true,
+    "explain": true,
+    "verify": true
+  },
+  "secrets": {
+    "serviceToken": "projects/capsnote/secrets/capsnote-prod-ai-service-token/versions/1",
+    "providerKey": "projects/capsnote/secrets/capsnote-prod-ai-provider-key/versions/2",
+    "tlsBundle": "projects/capsnote/secrets/capsnote-prod-ai-tls-bundle/versions/1"
+  },
+  "tls": {
+    "serverName": "capsnote-prod-ai.asia-northeast3-a.c.capsnote.internal",
+    "caSha256": "6ce273baf0c57799a377654ae743c32ba6569f5fdc51b6eac61482aa56437729"
+  },
+  "cache": {
+    "responses": "disabled",
+    "modelScope": "pinned-revision"
+  }
+}
