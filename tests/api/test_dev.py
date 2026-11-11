@@ -328,6 +328,47 @@ def test_keyword_relation_endpoint(tmp_path, monkeypatch):
         assert c.post("/dev/keyword-relation", json=body).status_code == 503
 
 
+def test_keyword_relation_from_descriptions_only(tmp_path):
+    from app.services.links.relation_llm import KeywordRelationJudge
+    from app.services.llm import LLMResult
+
+    class Fake:
+        provider, model = "anthropic", "fake-model"
+        def __init__(self): self.calls = 0
+        def complete_json(self, system, user, schema, name):
+            self.calls += 1
+            assert name == "keyword_relation_concepts"
+            return LLMResult({"verdict": "related", "type": "requires", "direction": "a_to_b", "basis": "notes",
+                              "reason": "TCP 의 신뢰성은 재전송에 기댄다.", "evidence": ["A1", "B1"]}, self.provider, self.model)
+        def stream_json(self, system, user, schema, name, on_event=None):
+            for e in ({"path": "verdict", "value": "related"}, {"path": "reason", "delta": "TCP 의 "}, {"path": "reason", "delta": "신뢰성은 재전송에 기댄다."}):
+                on_event({"type": "field", **e})
+            return self.complete_json(system, user, schema, name)
+
+    body = {"a": {"name": "TCP", "concepts": [{"note": "n1", "text": "TCP는 재전송으로 신뢰성을 보장한다."}]},
+            "b": {"name": "재전송", "concepts": [{"note": "n2", "text": "재전송은 손실된 패킷을 다시 보내는 방식이다."}]}}
+    app = dev_app()
+    fake = Fake()
+    app.state.kwrel = KeywordRelationJudge(fake, tmp_path / "cache")
+    with TestClient(app, client=LOCAL) as c:
+        r = c.post("/dev/keyword-relation/concepts", json=body).json()
+        assert (r["verdict"], r["basis"], r["evidence"], r["cached"]) == ("related", "notes", ["A1", "B1"], False)
+        assert r["promptVersion"] == "kwrel-concept-llm-1" and r["model"] == "fake-model"
+        evs = _sse(c.post("/dev/keyword-relation/concepts/stream", json=body).text)          # 저장된 결과
+        assert [e["type"] for e in evs] == ["cached", "result"] and evs[-1]["result"]["cached"] is True and fake.calls == 1
+        body2 = {**body, "a": {**body["a"], "name": "TCP2", "concepts": [{"note": "n1", "text": "다른 설명이다."}]}}
+        evs = _sse(c.post("/dev/keyword-relation/concepts/stream", json=body2).text)
+        assert [e["type"] for e in evs] == ["field", "field", "field", "result"]
+        assert "".join(e["delta"] for e in evs if "delta" in e) == "TCP 의 신뢰성은 재전송에 기댄다."
+        assert evs[-1]["result"]["promptVersion"] == "kwrel-concept-llm-1"
+        for bad in ({**body, "a": {"name": "TCP", "concepts": []}}, {**body, "b": {"name": "x", "concepts": [{"note": "n", "text": "t"}] * 7}}):
+            assert c.post("/dev/keyword-relation/concepts", json=bad).status_code == 400
+            assert c.post("/dev/keyword-relation/concepts/stream", json=bad).status_code == 400
+    with TestClient(app, client=("10.0.0.5", 50000)) as c:
+        assert c.post("/dev/keyword-relation/concepts", json=body).status_code == 403
+        assert c.post("/dev/keyword-relation/concepts/stream", json=body).status_code == 403
+
+
 def _no_embeddings(monkeypatch):
     from app.services.links.pairing import EmbeddingStore
     monkeypatch.setattr(EmbeddingStore, "vectors", lambda self, texts: None)        # 모델 파일이 없어도 돌아야 한다
@@ -357,6 +398,44 @@ def test_proposal_candidates_pair_elements_of_different_notes(tmp_path, monkeypa
         assert t["note"] == "(직접 입력)"
 
 
+def test_candidate_pool_is_deep_by_default_and_screening_accepts_it(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    from app.services.links.pair_screen import PairScreen
+    from app.services.links.pairing import PairingIndex
+    from app.services.llm import LLMResult
+
+    (tmp_path / "A.md").write_text("# A\n\n**WAL**은 **트랜잭션**이 커밋되기 전에 변경 내용을 로그로 디스크에 먼저 기록하는 방식이다.\n", encoding="utf-8")
+    (tmp_path / "B.md").write_text("# B\n\n**원자성**은 **트랜잭션**이 전부 반영되거나 전혀 반영되지 않는 성질이라는 뜻이다.\n", encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    _no_embeddings(monkeypatch)
+    seen = []
+    real = PairingIndex.candidates
+
+    def spy(self, anchors, per_anchor=3, per_partner=1, limit=12, neighbors=10, exclude=None):
+        seen.append((per_anchor, per_partner, limit, neighbors))
+        return real(self, anchors, per_anchor, per_partner, limit, neighbors, exclude)
+
+    monkeypatch.setattr(PairingIndex, "candidates", spy)
+
+    class Fake:
+        provider, model = "anthropic", "fake"
+        def complete_json(self, system, user, schema, name):
+            ids = [l[4:] for l in user.splitlines() if l.startswith("id: ")]
+            return LLMResult({"results": [{"id": i, "label": "vague", "conclusion": ""} for i in ids]}, self.provider, self.model)
+
+    app = dev_app()
+    app.state.pair_screen = PairScreen(Fake(), None)
+    pair = lambda i: {"id": f"p{i}", "a": {"keyword": "k", "text": f"문장 {i}"}, "b": {"keyword": "m", "text": f"다른 문장 {i}"}}
+    with TestClient(app, client=LOCAL) as c:
+        c.post("/dev/proposals/candidates", json={"noteId": "A"})
+        c.post("/dev/proposals/candidates", json={"noteId": "A", "limit": 500})
+        assert seen[0] == (6, 1, 60, 20) and seen[1] == (6, 1, 90, 20)                # 기본 60, 상한 90 (앵커당 6 · 이웃 20)
+        assert len(c.post("/dev/proposals/screen", json={"pairs": [pair(i) for i in range(90)]}).json()["results"]) == 90
+        for path in ("/dev/proposals/screen", "/dev/proposals/screen/stream"):
+            assert c.post(path, json={"pairs": [pair(i) for i in range(91)]}).status_code == 400
+
+
 def test_proposal_screen_and_generate_endpoints(tmp_path, monkeypatch):
     from app.services.links.generate import KnowledgeGenerator
     from app.services.links.pair_screen import PairScreen
@@ -369,7 +448,7 @@ def test_proposal_screen_and_generate_endpoints(tmp_path, monkeypatch):
         def complete_json(self, system, user, schema, name):
             ids = [l[4:] for l in user.splitlines() if l.startswith("id: ")]
             return LLMResult({"results": [{"id": i, "label": "useful", "conclusion": "결론"} for i in ids]}, self.provider, self.model)
-        def complete_web(self, system, user, schema, name, max_searches=3):
+        def complete_web(self, system, user, schema, name, max_searches=3, submit=None):
             return WebResult({"status": "ok", "newKeyword": "새 키워드", "fromA": "로그를 먼저", "fromB": "전부 반영",
                               "conclusion": "로그를 먼저 쓰기 때문에 전부 반영되거나 전혀 반영되지 않는 성질을 지킬 수 있어요.",
                               "external": [{"url": "https://example.com/p", "title": "T", "quote": "q", "supports": "s"}], "reason": "r"},
@@ -413,6 +492,9 @@ def test_keyword_connect_returns_the_element_pair_to_make_new_knowledge_from(tmp
         p = r["pair"]
         assert p["a"]["keyword"] == "WAL" and p["b"]["keyword"] == "복구" and p["a"]["note"] == "DB-WAL" and p["b"]["note"] == "ACID"
         assert p["a"]["conceptId"] and p["b"]["noteId"] and p["a"]["text"] and p["b"]["end"] > p["b"]["start"]
+        from app.services.links.pairing import pair_basis, pair_fingerprint
+        assert p["fingerprint"] == pair_fingerprint(p["b"]["conceptId"], p["a"]["conceptId"]) and len(p["fingerprint"]) == 64            # 연결한 짝도 같은 지문을 준다
+        assert p["basisHash"] == pair_basis(p["a"]["conceptId"], p["a"]["text"], p["b"]["conceptId"], p["b"]["text"])
 
 
 def _sse(text: str) -> list[dict]:
@@ -432,9 +514,11 @@ def test_proposal_generate_stream_reports_progress_then_the_result(tmp_path):
 
     class Fake:
         provider, model = "anthropic", "fake"
-        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None):
+        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None, submit=None):
             for ev in ({"type": "thinking"}, {"type": "search_start"}, {"type": "search", "query": "write ahead log os page cache"},
-                       {"type": "search_results", "results": [{"url": "https://example.com/p", "title": "T"}]}, {"type": "writing", "chars": 0}):
+                       {"type": "search_results", "results": [{"url": "https://example.com/p", "title": "T"}]}, {"type": "writing", "chars": 0},
+                       {"type": "field", "path": "newKeyword", "value": "새 키워드"}, {"type": "field", "path": "conclusion", "delta": "로그를 먼저 쓰기 때문에 "},
+                       {"type": "field", "path": "conclusion", "delta": "전부 반영되거나 전혀 반영되지 않는 성질을 지킬 수 있어요."}):
                 on_event(ev)
             return WebResult({"status": "ok", "newKeyword": "새 키워드", "fromA": "로그를 먼저", "fromB": "전부 반영",
                               "conclusion": "로그를 먼저 쓰기 때문에 전부 반영되거나 전혀 반영되지 않는 성질을 지킬 수 있어요.",
@@ -450,7 +534,8 @@ def test_proposal_generate_stream_reports_progress_then_the_result(tmp_path):
         r = c.post("/dev/proposals/generate/stream", json={"a": a, "b": b})
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream") and r.headers["cache-control"] == "no-cache"
         evs = _sse(r.text)
-        assert [e["type"] for e in evs] == ["start", "thinking", "search_start", "search", "search_results", "writing", "validating", "result"]
+        assert [e["type"] for e in evs] == ["start", "thinking", "search_start", "search", "search_results", "writing", "field", "field", "field", "validating", "result"]
+        assert "".join(e["delta"] for e in evs if e["type"] == "field" and e["path"] == "conclusion") .startswith("로그를 먼저 쓰기 때문에 전부")   # 결론이 쓰이는 대로 온다
         assert evs[3]["query"] == "write ahead log os page cache" and evs[4]["results"][0]["url"] == "https://example.com/p"
         assert all("t" in e for e in evs) and evs[0]["model"] == "fake"
         assert evs[-1]["result"]["status"] == "candidate" and evs[-1]["result"]["concept"]["origin"] == "generated"
@@ -477,3 +562,328 @@ def test_proposal_generate_stream_turns_model_errors_into_an_error_event():
     with TestClient(app, client=LOCAL) as c:
         evs = _sse(c.post("/dev/proposals/generate/stream", json={"a": s("A", N1, "c1"), "b": s("B", N2, "c2")}).text)
         assert [e["type"] for e in evs] == ["start", "error"] and "rate_limit" in evs[-1]["message"] and evs[-1]["status"] == 502
+
+
+def _chain_notes(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    (tmp_path / "DB-WAL.md").write_text("# WAL\n\n**WAL**은 **트랜잭션** 로그를 디스크에 먼저 기록해서 장애에 대비하는 방식이다.\n", encoding="utf-8")
+    (tmp_path / "ACID.md").write_text("# ACID\n\n**트랜잭션**은 **원자성**을 지켜야 하는 작업 단위라는 뜻이다.\n", encoding="utf-8")
+    (tmp_path / "ISO.md").write_text("# 격리\n\n**원자성**은 **격리성**과 함께 ACID 를 이루는 성질이라고 부른다.\n", encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", tmp_path)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    monkeypatch.setattr(dev, "INFER_MIN_SCORE", -99.0)               # 작은 시험 그래프라 문턱을 없앤다
+    _no_embeddings(monkeypatch)
+
+
+def test_inferred_links_join_keywords_that_never_share_a_sentence_or_paragraph(tmp_path, monkeypatch):
+    _chain_notes(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        base = c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "scope": "note", "limit": 30, "levels": ["sentence"]}).json()
+        t = {n["id"]: n["title"] for n in base["nodes"]}
+        assert not any("inferred" in e["counts"] for e in base["edges"]) and base["inferredEdges"] == 0 and base["semantic"] is None
+        g = c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "scope": "note", "limit": 30, "levels": ["sentence", "inferred"]}).json()
+        t = {n["id"]: n["title"] for n in g["nodes"]}
+        inf = [e for e in g["edges"] if "inferred" in e["counts"]]
+        assert g["inferredEdges"] == len(inf) >= 1 and g["semantic"] is False
+        e = next(e for e in inf if sorted((t[e["a"]], t[e["b"]])) == ["WAL", "원자성"])      # 같은 문장·문단에 나온 적 없다
+        assert e["via"] == ["트랜잭션"] and e["evidence"][0]["level"] == "inferred" and "공통 이웃 1개: 트랜잭션" in e["evidence"][0]["text"]
+        assert 0.1 <= e["score"] <= 0.5 and e["pages"] == 0
+        far = next(n for n in g["nodes"] if n["title"] == "격리성")                           # 3걸음 거리라 증거 이웃으로는 안 올라오고 추정으로만 올라온다
+        assert far["inferred"] is True and far["inNote"] is False and not next(n for n in g["nodes"] if n["title"] == "원자성")["inferred"]
+        assert any(sorted((t[x["a"]], t[x["b"]])) == ["WAL", "격리성"] and "inferred" in x["counts"] for x in g["edges"])
+        assert not any(sorted((t[x["a"]], t[x["b"]])) == ["WAL", "트랜잭션"] and "inferred" in x["counts"] for x in g["edges"])   # 이미 이어진 쌍은 아니다
+        assert c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "levels": ["inferred"]}).status_code == 400   # 증거 수준이 하나는 있어야 한다
+
+
+def test_connect_shows_the_inferred_score_only_for_pairs_without_evidence(tmp_path, monkeypatch):
+    _chain_notes(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        g = c.post("/dev/keyword-graph", json={"noteId": "DB-WAL", "scope": "note", "limit": 30, "levels": ["sentence", "inferred"]}).json()
+        ids = {n["title"]: n["id"] for n in g["nodes"]}
+        r = c.post("/dev/keyword-connect", json={"a": ids["WAL"], "b": ids["원자성"], "levels": ["sentence", "inferred"]}).json()
+        assert r["direct"] is None and [v["name"] for v in r["inferred"]["via"]] == ["트랜잭션"] and r["inferred"]["semantic"] is False
+        assert any([n["name"] for n in p["nodes"]] == ["WAL", "트랜잭션", "원자성"] for p in r["paths"])
+        linked = c.post("/dev/keyword-connect", json={"a": ids["WAL"], "b": ids["트랜잭션"], "levels": ["sentence", "inferred"]}).json()
+        assert linked["direct"] and linked["inferred"] is None                               # 증거로 이어진 쌍은 추정하지 않는다
+        off = c.post("/dev/keyword-connect", json={"a": ids["WAL"], "b": ids["원자성"], "levels": ["sentence"]}).json()
+        assert off["inferred"] is None
+
+
+def test_screen_and_relation_streams_report_tokens_then_the_result(tmp_path):
+    from app.services.links.pair_screen import PairScreen
+    from app.services.links.relation_llm import KeywordRelationJudge
+    from app.services.llm import LLMResult
+
+    class Fake:
+        provider, model = "anthropic", "fake-model"
+        def complete_json(self, system, user, schema, name):
+            if name == "pair_screen":
+                ids = [l[4:] for l in user.splitlines() if l.startswith("id: ")]
+                return LLMResult({"results": [{"id": i, "label": "useful", "conclusion": "결론"} for i in ids]}, self.provider, self.model)
+            return LLMResult({"verdict": "related", "type": "is_a", "direction": "a_to_b", "reason": "TCP 는 전송 프로토콜의 한 종류다.", "evidence": ["E1"]}, self.provider, self.model)
+        def stream_json(self, system, user, schema, name, on_event=None):
+            if name == "pair_screen":
+                for n, i in enumerate(l[4:] for l in user.splitlines() if l.startswith("id: ")):
+                    for e in ({"path": f"results.{n}.id", "value": i}, {"path": f"results.{n}.label", "value": "useful"},
+                              {"path": f"results.{n}.conclusion", "delta": "결"}, {"path": f"results.{n}.conclusion", "delta": "론"}):
+                        on_event({"type": "field", **e})
+            else:
+                for e in ({"path": "verdict", "value": "related"}, {"path": "reason", "delta": "TCP 는 "}, {"path": "reason", "delta": "전송 프로토콜의 한 종류다."}):
+                    on_event({"type": "field", **e})
+            return self.complete_json(system, user, schema, name)
+
+    app = dev_app()
+    app.state.pair_screen = PairScreen(Fake(), None)
+    app.state.kwrel = KeywordRelationJudge(Fake(), None)
+    pair = {"id": "p1", "a": {"keyword": "TCP", "text": "TCP는 전송 프로토콜의 일종이다."}, "b": {"keyword": "UDP", "text": "UDP는 전송 프로토콜의 일종이다."}}
+    rel = {"a": {"name": "TCP", "concepts": []}, "b": {"name": "전송 프로토콜", "concepts": []},
+           "evidence": [{"level": "sentence", "note": "n", "text": "TCP는 전송 프로토콜의 일종이다."}]}
+    with TestClient(app, client=LOCAL) as c:
+        r = c.post("/dev/proposals/screen/stream", json={"pairs": [pair]})
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+        evs = _sse(r.text)
+        kinds = [e["type"] for e in evs]
+        assert kinds[-1] == "result" and "pair_done" in kinds and kinds.index("pair") < kinds.index("pair_done")
+        assert "".join(e["delta"] for e in evs if e["type"] == "pair" and e.get("field") == "conclusion" and "delta" in e) == "결론"
+        assert evs[-1]["results"]["p1"]["label"] == "useful" and evs[-1]["model"] == "fake-model"
+        evs = _sse(c.post("/dev/keyword-relation/stream", json=rel).text)
+        assert [e["type"] for e in evs] == ["field", "field", "field", "result"]
+        assert "".join(e["delta"] for e in evs if e["type"] == "field" and "delta" in e) == "TCP 는 전송 프로토콜의 한 종류다."
+        assert evs[-1]["result"]["verdict"] == "related" and evs[-1]["result"]["promptVersion"] == "kwrel-llm-1"
+        assert c.post("/dev/proposals/screen/stream", json={"pairs": []}).status_code == 400
+        assert c.post("/dev/keyword-relation/stream", json={**rel, "evidence": []}).status_code == 400
+    with TestClient(app, client=("10.0.0.5", 50000)) as c:
+        assert c.post("/dev/proposals/screen/stream", json={"pairs": [pair]}).status_code == 403
+        assert c.post("/dev/keyword-relation/stream", json=rel).status_code == 403
+
+
+WAL_NOTE = ("# WAL\n\n**WAL**은 **트랜잭션**이 커밋되기 전에 변경 내용을 로그로 디스크에 먼저 기록하는 방식이다. "
+            "**체크포인트**는 장애가 났을 때 복구 시간을 줄이려고 쓰는 기록 지점이다.\n")
+ACID_NOTE = ("# ACID\n\n**원자성**은 **트랜잭션**이 전부 반영되거나 전혀 반영되지 않는 성질이라는 뜻이다. "
+             "**복구**는 장애 뒤에 **트랜잭션** 로그를 다시 읽어 데이터를 되돌리는 일이다.\n")
+LOG_NOTE = "# 보관\n\n**로그 보관**은 디스크에 남은 **트랜잭션** 로그를 오래 두는 정책을 정해 둔다는 뜻이다.\n"
+CONCLUSION = "트랜잭션 로그를 먼저 디스크에 기록해 두면 장애 뒤 복구 때 그 트랜잭션 로그를 다시 읽어 되돌릴 수 있어요."
+
+
+def _accept_setup(tmp_path, monkeypatch):
+    from app.dev import router as dev
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    for name, text in (("DB-WAL", WAL_NOTE), ("ACID", ACID_NOTE), ("LOG", LOG_NOTE)):
+        (notes / f"{name}.md").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", notes)
+    monkeypatch.setattr(dev, "ACCEPTED_STORE", tmp_path / "accepted.json")
+    monkeypatch.setattr(dev, "KNOWN_STORE", tmp_path / "known.json")
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    _no_embeddings(monkeypatch)
+    return notes
+
+
+def _cands(c, note):
+    return c.post("/dev/proposals/candidates", json={"noteId": note, "limit": 90}).json()
+
+
+def _pair(c, anchor, partner):
+    return next(x for x in _cands(c, anchor)["candidates"] if x["b"]["note"] == partner)
+
+
+def test_accepting_a_card_makes_it_material_for_the_next_suggestions(tmp_path, monkeypatch):
+    notes = _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        before = {n: _cands(c, n) for n in ("DB-WAL", "ACID", "LOG")}
+        assert before["LOG"]["candidates"] and not any(x["b"].get("origin") == "generated" for r in before.values() for x in r["candidates"])
+        first = _pair(c, "DB-WAL", "ACID")
+        card = {"a": first["a"], "b": first["b"], "newKeyword": "로그 선기록과 복구", "conclusion": CONCLUSION,
+                "external": [{"url": "https://example.com/wal", "title": "WAL", "quote": "write-ahead"}]}
+        r = c.post("/dev/proposals/accept", json=card)
+        assert r.status_code == 200, r.text
+        acc = r.json()["accepted"]
+        assert acc["status"] == "live" and acc["usable"] and acc["keyword"] == "로그 선기록과 복구" and acc["notes"] == ["ACID", "DB-WAL"]
+        assert c.post("/dev/proposals/accept", json=card).json()["total"] == 1                       # 다시 눌러도 하나
+        assert (tmp_path / "accepted.json").exists() and acc["conceptId"] in (tmp_path / "accepted.json").read_text(encoding="utf-8")
+
+        after = {n: _cands(c, n) for n in ("DB-WAL", "ACID", "LOG")}
+        partners = [x["b"] for x in after["LOG"]["candidates"] if x["b"].get("origin") == "generated"]
+        assert partners and partners[0]["keyword"] == "로그 선기록과 복구" and partners[0]["text"] == CONCLUSION        # 다른 노트(LOG)의 요소와 이어진다
+        assert sorted(partners[0]["notes"]) == ["ACID", "DB-WAL"] and len(partners[0]["sources"]) == 2 and partners[0]["external"][0]["url"] == "https://example.com/wal"
+        for n in ("DB-WAL", "ACID"):                                                                    # 기댄 노트의 요소와는 이어지지 않는다
+            assert not any(x["b"].get("origin") == "generated" for x in after[n]["candidates"])
+        assert after["DB-WAL"]["anchors"] == before["DB-WAL"]["anchors"] + 1 and after["ACID"]["anchors"] == before["ACID"]["anchors"] + 1
+        assert after["LOG"]["elements"] == before["LOG"]["elements"] + 1
+
+        # 받아들인 지식 위에 쌓는다: LOG 의 요소와 받아들인 지식으로 만든 카드의 소스는 세 노트 전부다
+        pair = next(x for x in after["LOG"]["candidates"] if x["b"].get("origin") == "generated")
+        stacked = c.post("/dev/proposals/accept", json={"a": pair["a"], "b": pair["b"], "newKeyword": "보관과 복구", "conclusion": "로그를 오래 두면 복구할 때 더 먼 시점까지 되돌릴 수 있어요."})
+        assert stacked.status_code == 200, stacked.text
+        assert stacked.json()["accepted"]["notes"] == ["ACID", "DB-WAL", "LOG"] and stacked.json()["total"] == 2
+        listing = c.get("/dev/knowledge/accepted").json()
+        assert [i["status"] for i in listing["items"]] == ["live", "live"] and listing["live"] == 2
+
+        # 기댄 문장이 노트에서 사라지면 재료로 쓰지 않고, 돌아오면 되살아난다
+        (notes / "DB-WAL.md").write_text("# WAL\n\n문장을 모두 바꿔 썼어요.\n", encoding="utf-8")
+        gone = c.get("/dev/knowledge/accepted").json()
+        assert [i["status"] for i in gone["items"]] == ["evidence_lost", "evidence_lost"] and gone["live"] == 0
+        assert not any(x["b"].get("origin") == "generated" for x in _cands(c, "LOG")["candidates"])
+        (notes / "DB-WAL.md").write_text(WAL_NOTE + "\n", encoding="utf-8")
+        assert c.get("/dev/knowledge/accepted").json()["live"] == 2
+        assert any(x["b"].get("origin") == "generated" for x in _cands(c, "LOG")["candidates"])
+
+        # 되돌리기: 뺀 지식은 재료에서 빠지고, 기록이 없으면 404
+        assert c.delete(f"/dev/knowledge/accepted/{acc['conceptId']}").json() == {"removed": acc["conceptId"]}
+        assert c.delete(f"/dev/knowledge/accepted/{acc['conceptId']}").status_code == 404
+        assert [i["keyword"] for i in c.get("/dev/knowledge/accepted").json()["items"]] == ["보관과 복구"]
+
+
+def test_accept_refuses_cards_it_cannot_stand_behind(tmp_path, monkeypatch):
+    _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        first = _pair(c, "DB-WAL", "ACID")
+        card = {"a": first["a"], "b": first["b"], "newKeyword": "새 지식", "conclusion": CONCLUSION}
+        post = lambda **over: c.post("/dev/proposals/accept", json={**card, **over})
+        assert post(b=first["a"]).status_code == 400                                             # 같은 노트에 기댄 두 요소
+        assert post(newKeyword=" ").status_code == 400 and post(conclusion="").status_code == 400
+        assert post(external=[{"url": "javascript:alert(1)"}]).status_code == 400
+        edited = {**first["b"], "quote": "노트에 없는 문장이에요", "text": "노트에 없는 문장이에요"}
+        assert post(b=edited).status_code == 400                                                 # 기댄 문장이 노트에 없다
+        free = {**first["b"], "note": "(직접 입력)"}
+        assert post(b=free).status_code == 400                                                   # 저장된 노트가 아니다
+        assert c.get("/dev/knowledge/accepted").json()["items"] == []
+    with TestClient(dev_app(), client=("10.0.0.5", 50000)) as remote:
+        assert remote.post("/dev/proposals/accept", json=card).status_code in (403, 404)         # 로컬 밖에서는 받지 않는다
+        assert remote.delete("/dev/knowledge/accepted/x").status_code in (403, 404)
+
+
+def test_generating_from_accepted_knowledge_inherits_its_sources(tmp_path, monkeypatch):
+    import json as _json
+
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm.anthropic_llm import WebResult
+
+    class Fake:
+        provider, model = "anthropic", "fake"
+        def complete_web(self, system, user, schema, name, max_searches=3, submit=None):
+            u = _json.loads(user)
+            return WebResult({"status": "ok", "newKeyword": "더 쌓은 지식", "fromA": u["A"]["text"][:12], "fromB": u["B"]["text"][:12],
+                              "conclusion": "받아들인 지식과 보관 정책을 이으면 오래 둔 로그로 더 먼 시점까지 복구할 수 있다는 새 설명이 돼요.",
+                              "external": [{"url": "https://example.com/new", "title": "T", "quote": "q", "supports": "s"}], "reason": "r"},
+                             "anchored", "fake", [{"url": "https://example.com/new", "title": "새 자료"}], 1)
+
+    _accept_setup(tmp_path, monkeypatch)
+    app = dev_app()
+    app.state.knowledge_generator = KnowledgeGenerator(Fake(), None)
+    with TestClient(app, client=LOCAL) as c:
+        first = _pair(c, "DB-WAL", "ACID")
+        c.post("/dev/proposals/accept", json={"a": first["a"], "b": first["b"], "newKeyword": "로그 선기록과 복구", "conclusion": CONCLUSION,
+                                              "external": [{"url": "https://example.com/wal", "title": "WAL"}]})
+        pair = next(x for x in _cands(c, "LOG")["candidates"] if x["b"].get("origin") == "generated")
+        g = c.post("/dev/proposals/generate", json={"a": pair["a"], "b": pair["b"]}).json()                   # 받아들인 지식이 한쪽이다
+        assert g["status"] == "candidate", g
+        notes = {s["span"]["quote"] for s in g["concept"]["sources"]}
+        assert len(g["concept"]["sources"]) == 3 and len({s["noteId"] for s in g["concept"]["sources"]}) == 3, notes     # LOG + 받아들인 지식이 기댄 두 노트
+        assert [e["url"] for e in g["concept"]["external"]] == ["https://example.com/new", "https://example.com/wal"]    # 새 자료 + 이어받은 자료
+        # 받아들인 지식이 기댄 노트의 요소와는 다시 만들지 않는다 (제자리 돌기)
+        gen = pair["b"]
+        assert c.post("/dev/proposals/generate", json={"a": first["a"], "b": gen}).status_code == 400
+        assert c.post("/dev/proposals/generate/stream", json={"a": first["a"], "b": gen}).status_code == 400
+
+
+def test_candidate_ids_are_fingerprints_that_survive_edits_and_the_starting_note(tmp_path, monkeypatch):
+    notes = _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        from app.services.links.pairing import pair_basis, pair_fingerprint
+        cands = _cands(c, "DB-WAL")["candidates"] + _cands(c, "ACID")["candidates"]
+        for x in cands:                                                                                     # 어느 노트에서 시작해 A·B 가 뒤바뀌어도 같은 짝이면 같은 지문·id·기댄 내용 해시다
+            a, b = x["a"], x["b"]
+            assert x["id"] == x["fingerprint"][:16] and x["fingerprint"] == pair_fingerprint(b["conceptId"], a["conceptId"]) and len(x["fingerprint"]) == 64
+            assert x["basisHash"] == pair_basis(b["conceptId"], b["text"], a["conceptId"], a["text"])
+        every = [x["fingerprint"] for x in _cands(c, "DB-WAL")["candidates"]]
+        assert len(set(every)) == len(every)
+        fwd = _pair(c, "DB-WAL", "ACID")
+        # 노트의 다른 곳을 고쳐도 (짝이 기댄 문장은 그대로) 지문도 기댄 내용도 그대로다
+        (notes / "DB-WAL.md").write_text("# WAL (고침)\n\n나중에 정리할 메모예요.\n\n" + WAL_NOTE.split("\n\n", 1)[1], encoding="utf-8")
+        same = next(x for x in _cands(c, "DB-WAL")["candidates"] if x["fingerprint"] == fwd["fingerprint"])
+        assert same["basisHash"] == fwd["basisHash"]
+        # 짝이 기댄 문장을 고치면 지문은 그대로, 기댄 내용 해시만 바뀐다 (BE 는 id 를 지키고 내용을 새로 쓴다)
+        (notes / "DB-WAL.md").write_text(WAL_NOTE.replace("기록하는 방식이다", "기록해 두는 방식이라고 한다"), encoding="utf-8")
+        edited = next(x for x in _cands(c, "DB-WAL")["candidates"] if x["fingerprint"] == fwd["fingerprint"])
+        assert edited["basisHash"] != fwd["basisHash"] and edited["a"]["text"] != fwd["a"]["text"]
+
+
+def test_generation_result_carries_the_same_fingerprint_whichever_side_is_first(tmp_path, monkeypatch):
+    import json as _json
+
+    from app.services.links.generate import KnowledgeGenerator
+    from app.services.llm.anthropic_llm import WebResult
+
+    class Fake:
+        provider, model = "anthropic", "fake"
+        def complete_web(self, system, user, schema, name, max_searches=3, submit=None, on_event=None):
+            u = _json.loads(user)
+            return WebResult({"status": "ok", "newKeyword": "새 키워드", "fromA": u["A"]["text"][:12], "fromB": u["B"]["text"][:12],
+                              "conclusion": "두 노트의 문장을 이으면 기록한 로그로 장애 뒤에 되돌릴 수 있다는 새로운 설명이 나와요 정말로.",
+                              "external": [{"url": "https://example.com/p", "title": "T", "quote": "q", "supports": "s"}], "reason": "r"},
+                             "anchored", "fake", [{"url": "https://example.com/p", "title": "T"}], 1)
+
+    _accept_setup(tmp_path, monkeypatch)
+    app = dev_app()
+    app.state.knowledge_generator = KnowledgeGenerator(Fake(), None)
+    with TestClient(app, client=LOCAL) as c:
+        x = _pair(c, "DB-WAL", "ACID")
+        g1 = c.post("/dev/proposals/generate", json={"a": x["a"], "b": x["b"]}).json()
+        g2 = c.post("/dev/proposals/generate", json={"a": x["b"], "b": x["a"]}).json()
+        assert g1["fingerprint"] == g2["fingerprint"] == x["fingerprint"] and g1["basisHash"] == g2["basisHash"] == x["basisHash"]
+        ev = _sse(c.post("/dev/proposals/generate/stream", json={"a": x["b"], "b": x["a"]}).text)
+        assert ev[-1]["result"]["fingerprint"] == x["fingerprint"]
+
+
+def test_known_pairs_are_not_recommended_again_from_either_note(tmp_path, monkeypatch):
+    _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        before = {n: _cands(c, n) for n in ("DB-WAL", "ACID")}
+        x = _pair(c, "DB-WAL", "ACID")
+        r = c.post("/dev/proposals/known", json={"a": x["a"], "b": x["b"], "conclusion": "이미 아는 결론이에요"})
+        assert r.status_code == 200 and r.json()["known"]["fingerprint"] == x["fingerprint"] and r.json()["total"] == 1 and r.json()["removedAccepted"] == []
+        assert (tmp_path / "known.json").exists()
+        for note, other in (("DB-WAL", "ACID"), ("ACID", "DB-WAL")):                         # 어느 노트에서 시작해도 빠진다
+            after = _cands(c, note)
+            assert x["fingerprint"] not in {y["fingerprint"] for y in after["candidates"]}
+            assert after["answered"] == {"known": 1} and len(after["candidates"]) >= len(before[note]["candidates"]) - 1      # 답한 자리를 막혀 있던 다른 후보가 채울 수 있다
+        listing = c.get("/dev/knowledge/known").json()["items"]
+        assert [i["fingerprint"] for i in listing] == [x["fingerprint"]] and listing[0]["keywords"] and listing[0]["conclusion"] == "이미 아는 결론이에요"
+        # 되돌리면 다음 분석부터 다시 나온다
+        assert c.delete(f"/dev/knowledge/known/{x['fingerprint']}").json() == {"removed": x["fingerprint"]}
+        assert c.delete(f"/dev/knowledge/known/{x['fingerprint']}").status_code == 404
+        back = _cands(c, "DB-WAL")
+        assert x["fingerprint"] in {y["fingerprint"] for y in back["candidates"]} and back["answered"] == {}
+
+
+def test_a_pair_the_user_already_accepted_is_not_recommended_again_and_the_two_answers_replace_each_other(tmp_path, monkeypatch):
+    _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        x = _pair(c, "DB-WAL", "ACID")
+        card = {"a": x["a"], "b": x["b"], "newKeyword": "로그 선기록과 복구", "conclusion": CONCLUSION}
+        assert c.post("/dev/proposals/accept", json=card).json()["accepted"]["fingerprint"] == x["fingerprint"]
+        after = _cands(c, "DB-WAL")
+        assert x["fingerprint"] not in {y["fingerprint"] for y in after["candidates"]} and after["answered"] == {"accepted": 1}   # 같은 짝을 또 보이지 않는다
+        # 이해함 → 알고 있던 내용: 받아들인 지식을 그래프에서 빼고 짝은 알고 있던 내용으로 남는다
+        r = c.post("/dev/proposals/known", json={"a": x["a"], "b": x["b"]}).json()
+        assert len(r["removedAccepted"]) == 1 and c.get("/dev/knowledge/accepted").json()["items"] == []
+        assert _cands(c, "DB-WAL")["answered"] == {"known": 1}
+        assert not any(y["b"].get("origin") == "generated" for y in _cands(c, "LOG")["candidates"])
+        # 알고 있던 내용 → 이해함: 알고 있던 내용 표시는 지워진다
+        back = c.post("/dev/proposals/accept", json=card).json()
+        assert back["clearedKnown"] is True and c.get("/dev/knowledge/known").json()["items"] == []
+        assert _cands(c, "DB-WAL")["answered"] == {"accepted": 1}
+
+
+def test_caller_can_pass_fingerprints_to_exclude_and_known_needs_two_different_notes(tmp_path, monkeypatch):
+    _accept_setup(tmp_path, monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        x = _pair(c, "DB-WAL", "ACID")
+        r = c.post("/dev/proposals/candidates", json={"noteId": "DB-WAL", "limit": 90, "exclude": [x["fingerprint"]]}).json()    # 상태 없는 호출: BE 가 지문을 보낸다
+        assert x["fingerprint"] not in {y["fingerprint"] for y in r["candidates"]} and r["answered"] == {"excluded": 1}
+        assert c.get("/dev/knowledge/known").json()["items"] == []                                                            # 저장하지는 않는다
+        assert c.post("/dev/proposals/known", json={"a": x["a"], "b": {**x["b"], "note": "DB-WAL"}}).status_code == 400
+    with TestClient(dev_app(), client=("10.0.0.5", 50000)) as remote:
+        assert remote.post("/dev/proposals/known", json={"a": x["a"], "b": x["b"]}).status_code in (403, 404)
+        assert remote.delete("/dev/knowledge/known/x").status_code in (403, 404)

@@ -52,6 +52,7 @@ class Fact(Closed):
     otherKey: Key | None
     origin: Literal["extracted", "manual"]
     evidence: FactEvidence
+    contentHash: Sha256 | None = None      # 사실의 뜻 해시 (응답에는 항상). 요청에 있으면 AI 가 다시 계산해 맞는지 본다
 
 
 class FactsRequest(Closed):
@@ -73,6 +74,7 @@ class FactsResponse(Closed):
     meta: ResponseMeta
     facts: Annotated[list[Fact], Field(max_length=300)]
     dropped: list[Dropped]
+    factsHash: Sha256                      # 이 노트의 사실 전체의 뜻 해시. 노트를 고쳐도 같으면 사실이 같다 (결론은 그대로 유효)
 
 
 class DeriveRequest(Closed):
@@ -128,6 +130,8 @@ class Derivation(Closed):
     automation: Literal["extracted", "manual", "mixed"]
     explanation: Annotated[str, StringConstraints(min_length=1, max_length=8000)]
     soundness: Soundness | None
+    fingerprint: Sha256                    # 같은 추천인가 (알고리즘 × 자료 구조 × 역할). BE 가 사용자를 붙여 카드 id 를 이어 간다
+    basisHash: Sha256                      # 같은 지문의 내용이 바뀌었는가 (기댄 사실의 뜻 + 규칙 + 경우)
 
 
 class UnusedFact(Closed):

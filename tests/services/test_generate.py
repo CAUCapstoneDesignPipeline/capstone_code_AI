@@ -20,7 +20,7 @@ class Fake:
     def __init__(self, data, sources=({"url": URL, "title": "ARIES"},)):
         self.data, self.sources, self.calls = data, list(sources), 0
 
-    def complete_web(self, system, user, schema, name, max_searches=3):
+    def complete_web(self, system, user, schema, name, max_searches=3, submit=None):
         self.calls += 1
         return WebResult(self.data, self.provider, self.model, self.sources, 2)
 
@@ -72,7 +72,7 @@ def test_search_tool_is_passed_through_only_when_chosen():
     seen = []
 
     class Tool(Fake):
-        def complete_web(self, system, user, schema, name, max_searches=3, tool="default"):
+        def complete_web(self, system, user, schema, name, max_searches=3, tool="default", submit=None):
             seen.append(tool)
             return super().complete_web(system, user, schema, name, max_searches)
 
@@ -83,7 +83,7 @@ def test_search_tool_is_passed_through_only_when_chosen():
 
 def test_generator_reports_progress_and_a_stopped_listener_leaves_no_cache(tmp_path):
     class Fake2(Fake):
-        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None):
+        def complete_web(self, system, user, schema, name, max_searches=3, tool=None, on_event=None, submit=None):
             on_event({"type": "search", "query": "q"})
             return super().complete_web(system, user, schema, name, max_searches)
 
@@ -119,3 +119,114 @@ def test_at_most_three_sources_are_kept_even_if_the_model_gives_more():
     many = [{"url": f"https://example.com/{i}", "quote": "q"} for i in range(5)]
     r = run({**GOOD, "external": many}, sources=[{"url": e["url"], "title": f"T{i}"} for i, e in enumerate(many)])
     assert [e["url"] for e in r["external"]] == [e["url"] for e in many[:3]]
+
+
+# ---- 생성 뒤 확인 ----
+
+class Checker:
+    model, prompt_version = "check-model", "knowledgecheck-llm-2"
+
+    def __init__(self, result=None, error=None):
+        self.result, self.error, self.calls = result, error, []
+
+    def check(self, a, b, kw, conclusion, external):
+        self.calls.append((kw, conclusion, [e["url"] for e in external]))
+        if self.error:
+            raise self.error
+        return {"ok": True, "problems": [], "warnings": [], "external": external, "dropped": [], "reason": "", "reach": "extended", **(self.result or {})}
+
+
+def verified(data, checker, cache=None, **kw):
+    return KnowledgeGenerator(Fake(data, **kw), cache, checker=checker).generate(A, B, CID)
+
+
+def test_failed_check_holds_the_result_with_the_reasons_and_no_concept():
+    r = verified(GOOD, Checker({"ok": False, "problems": ["결론이 두 노트 문장의 주제를 벗어났다"], "reason": "SSH 로 갈아탔다"}))
+    assert r["status"] == "held" and r["concept"] is None and r["reasons"] == ["결론이 두 노트 문장의 주제를 벗어났다", "SSH 로 갈아탔다"]
+    assert r["check"]["model"] == "check-model" and r["conclusion"] == GOOD["conclusion"]               # 결론은 남겨 두어 왜 걸렀는지 볼 수 있다
+
+
+def test_sources_the_check_dropped_are_removed_from_the_card_and_the_concept():
+    other = {"url": "https://example.com/other", "title": "other"}
+    data = {**GOOD, "external": [*GOOD["external"], {"url": other["url"], "title": "other", "quote": "q", "supports": "s"}]}
+    ck = Checker({"external": [{"url": URL, "title": "ARIES", "quote": "q"}], "dropped": [{"url": other["url"], "title": "other", "quote": "q"}]})
+    r = verified(data, ck, sources=[{"url": URL, "title": "ARIES"}, other])
+    assert r["status"] == "candidate" and [e["url"] for e in r["external"]] == [URL] and [e["url"] for e in r["concept"]["external"]] == [URL]
+    assert [e["url"] for e in r["check"]["dropped"]] == [other["url"]]
+
+
+def test_warnings_are_kept_and_the_card_stays_a_candidate():
+    r = verified(GOOD, Checker({"warnings": ["노트 문장이 부정확할 수 있다"]}))
+    assert r["status"] == "candidate" and r["concept"] and r["check"]["warnings"] == ["노트 문장이 부정확할 수 있다"]
+
+
+def test_a_check_that_errors_does_not_lose_the_card():
+    from app.services.llm import LLMError
+    r = verified(GOOD, Checker(error=LLMError("timeout", "x")))
+    assert r["status"] == "candidate" and r["concept"] and r["check"]["error"] == "timeout"
+
+
+def test_only_candidates_are_checked_and_a_cached_generation_is_checked_again_without_regenerating(tmp_path):
+    ck = Checker()
+    assert verified({**GOOD, "status": "no_new_knowledge"}, ck)["status"] == "held" and ck.calls == []
+    fake = Fake(GOOD)
+    g = KnowledgeGenerator(fake, tmp_path, checker=ck)
+    g.generate(A, B, CID)
+    assert g.checker is ck and len(ck.calls) == 1
+    g.checker = Checker({"ok": False, "problems": ["새 기준"]})              # 확인 기준이 바뀌면 캐시된 생성도 새 기준으로 다시 본다
+    r = g.generate(A, B, CID)
+    assert r["cached"] is True and r["status"] == "held" and fake.calls == 1
+
+
+def test_checking_event_is_emitted_after_validating():
+    class Streaming(Fake):
+        def complete_web(self, system, user, schema, name, max_searches=3, submit=None, on_event=None):
+            return super().complete_web(system, user, schema, name, max_searches, submit)
+
+    seen = []
+    KnowledgeGenerator(Streaming(GOOD), None, checker=Checker()).generate(A, B, CID, on_event=lambda e: seen.append(e["type"]))
+    assert seen[-2:] == ["validating", "checking"]
+
+
+LEAK = "결국 B에 나온 세 가지 환경은 동기화가 얼마나 자주 일어나느냐에 따라 고를 수 있는 선택지예요."
+LEAK_PROBLEM = "결론이 입력 문장을 'A'·'B' 같은 라벨로 가리켜 혼자 읽히지 않는다"
+
+
+def test_the_prompt_tells_the_model_not_to_call_the_inputs_a_or_b():
+    from app.services.links.generate import SYSTEM
+    assert "혼자 읽혀야" in SYSTEM and "라벨" in SYSTEM
+
+
+def test_results_stored_under_the_previous_prompt_are_still_used(tmp_path):
+    """prompt 를 한 줄 고쳤다고 저장해 둔 카드를 모두 다시 만들지 않는다 (라벨 문제는 확인 단계가 잡는다)."""
+    import hashlib, json
+    from app.services.links.generate import COMPATIBLE
+    old = KnowledgeGenerator(Fake(GOOD), tmp_path)
+    old.prompt_version = COMPATIBLE[0]
+    old.generate(A, B, CID)                                                  # 이전 prompt 로 저장
+    fresh = Fake({**GOOD, "conclusion": "다시 만들면 이 결론이 나와서 달라져요. " + GOOD["conclusion"]})
+    g = KnowledgeGenerator(fresh, tmp_path)
+    r = g.generate(A, B, CID)
+    assert r["cached"] is True and fresh.calls == 0 and r["conclusion"] == GOOD["conclusion"]
+    assert len(list(tmp_path.glob("*.json"))) == 1                          # 새 prompt 의 항목을 따로 만들지 않았다
+    other = KnowledgeGenerator(Fake(GOOD), tmp_path / "empty")
+    assert other.generate(A, B, CID)["cached"] is False and len(list((tmp_path / "empty").glob("*.json"))) == 1
+
+
+def test_a_card_held_for_pointing_at_a_or_b_is_not_kept_in_the_cache_so_it_can_be_made_again(tmp_path):
+    fake = Fake({**GOOD, "conclusion": LEAK + " 그래서 같은 일도 다르게 풀 수 있다는 새 설명이 나와요 정말로."})
+    g = KnowledgeGenerator(fake, tmp_path, checker=Checker({"ok": False, "problems": [LEAK_PROBLEM], "reason": "B에 나온"}))
+    r = g.generate(A, B, CID)
+    assert r["status"] == "held" and r["reasons"][0] == LEAK_PROBLEM and fake.calls == 1
+    assert list(tmp_path.glob("*.json")) == []                               # 저장하지 않는다
+    r2 = g.generate(A, B, CID)
+    assert fake.calls == 2 and r2["cached"] is False                         # 다시 누르면 다시 만든다 (같은 결과로 굳지 않는다)
+    other = KnowledgeGenerator(Fake(GOOD), tmp_path, checker=Checker({"ok": False, "problems": ["결론이 두 노트 문장의 주제를 벗어났다"]}))
+    other.generate(A, B, CID)
+    assert len(list(tmp_path.glob("*.json"))) == 1                           # 다른 이유로 보류된 것은 지금처럼 저장한다
+
+
+def test_reach_is_shown_on_the_card_and_never_changes_its_status():
+    for reach in ("derived", "extended", "hop"):
+        r = verified(GOOD, Checker({"reach": reach}))
+        assert r["status"] == "candidate" and r["check"]["reach"] == reach and r["concept"] is not None

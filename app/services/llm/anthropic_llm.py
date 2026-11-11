@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field
 
 from . import LLMConfig, LLMError, LLMResult, parse_object
+from .partial_json import JsonStream
 
 WEB_SEARCH_TOOL = "web_search_20260209"      # Opus 5.5 · Sonnet 5.5 · Sonnet 5 에서 쓰는 동적 필터링판 (코드 실행으로 결과를 거른다)
 WEB_SEARCH_BASIC = "web_search_20250305"     # 기본판. 코드 실행 없이 검색 결과를 바로 읽는다
@@ -64,11 +65,14 @@ class AnthropicLLM:
         return LLMResult(parse_object(text), self.provider, getattr(response, "model", None) or self.model)
 
     def complete_web(self, system: str, user: str, schema: dict, name: str, max_searches: int = 3,
-                     tool: str = WEB_SEARCH_TOOL, on_event=None) -> WebResult:
+                     tool: str = WEB_SEARCH_TOOL, on_event=None, submit: str | None = None) -> WebResult:
         """웹 검색 도구를 쓰고 구조화 출력으로 답한다. 서버 도구가 한 턴에 끝나지 않으면(pause_turn) 이어서 받는다 (최대 4번).
         sources: 검색 결과에 실제로 나온 URL 들. 자동 재시도·모델 fallback 은 없다.
-        on_event(dict): 진행 상황을 그때그때 알린다 — thinking · search_start · search(query) · search_results(results) · writing(chars).
-        콜백이 예외를 던지면 스트림을 닫아 모델 호출을 멈춘다 (화면에서 중단했을 때 토큰을 더 쓰지 않으려고)."""
+        on_event(dict): 진행 상황을 그때그때 알린다 — thinking · search_start · search(query) · search_results(results) · writing(chars) ·
+        field(path, delta | value): 모델이 쓰는 JSON 의 문자열 값이 쓰이는 대로 (결론이 토큰마다 보이게), 값 하나가 끝나면 value.
+        콜백이 예외를 던지면 스트림을 닫아 모델 호출을 멈춘다 (화면에서 중단했을 때 토큰을 더 쓰지 않으려고).
+        submit: 결과를 구조화 출력 대신 이 이름의 클라이언트 도구 호출로 받는다 (input_schema = schema, eager_input_streaming). 웹 검색 뒤에 구조화 출력을 쓰면
+        결과 글이 끝에 한꺼번에 오지만 (실측: 모든 조각이 0.01초 안에), 도구 입력은 쓰이는 대로 온다 (결론 70조각이 3.5초에 걸쳐). 도구 입력은 코드가 엄격하게 다시 파싱한다."""
         import anthropic
 
         emit = on_event or (lambda e: None)
@@ -79,14 +83,21 @@ class AnthropicLLM:
         for _ in range(MAX_PAUSES + 1):
             blocks: dict[int, dict] = {}
             chars = last = 0
+            fields = JsonStream()
+            submitted: list[str] = []
+            tools = [{"type": tool, "name": "web_search", "max_uses": max_searches}]
+            output = {"effort": self.effort, "format": {"type": "json_schema", "schema": schema}}
+            if submit:
+                tools.append({"name": submit, "description": "검색을 마친 뒤 마지막에 한 번 호출해 결과를 제출한다.", "input_schema": schema, "eager_input_streaming": True})
+                output = {"effort": self.effort}
             try:
                 with self.client.messages.stream(
                         model=self.config.model,
                         max_tokens=self.config.max_output_tokens,
                         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                         messages=messages,
-                        tools=[{"type": tool, "name": "web_search", "max_uses": max_searches}],
-                        output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}}) as stream:
+                        tools=tools,
+                        output_config=output) as stream:
                     for ev in stream:
                         if ev.type == "content_block_start":
                             b = ev.content_block
@@ -104,9 +115,15 @@ class AnthropicLLM:
                             d = ev.delta
                             if d.type == "input_json_delta" and ev.index in blocks:
                                 blocks[ev.index]["json"] += d.partial_json
+                                if submit and blocks[ev.index]["name"] == submit:           # 제출 도구의 입력: 쓰이는 대로 필드를 흘린다
+                                    submitted.append(d.partial_json)
+                                    for fe in fields.feed(d.partial_json):
+                                        emit({"type": "field", **fe})
                             elif d.type == "text_delta":
                                 chars += len(d.text)
-                                if chars - last >= 200:                   # 글자마다 알리지 않는다
+                                for fe in fields.feed(d.text):            # 쓰이는 JSON 의 필드: 결론 등이 글자가 오는 대로 보인다
+                                    emit({"type": "field", **fe})
+                                if chars - last >= 200:                   # 글자 수 알림은 200자마다
                                     last = chars
                                     emit({"type": "writing", "chars": chars})
                         elif ev.type == "content_block_stop":
@@ -141,9 +158,51 @@ class AnthropicLLM:
                 continue
             if response.stop_reason == "refusal":
                 raise LLMError("refusal", f"category={getattr(getattr(response, 'stop_details', None), 'category', None)}")
-            if response.stop_reason != "end_turn":
+            if submit and response.stop_reason == "tool_use":
+                call = next((b for b in response.content if b.type == "tool_use" and b.name == submit), None)
+                if call is None:
+                    raise LLMError("invalid_output", "tool_use without the submit tool")
+                data = parse_object("".join(submitted))                  # SDK 의 너그러운 파서가 아니라 우리가 받은 글 그대로 엄격하게
+            elif response.stop_reason == "end_turn":
+                data = parse_object(next((b.text for b in reversed(response.content) if b.type == "text"), None))
+            else:
                 raise LLMError("invalid_output", f"stop_reason={response.stop_reason}")
-            text = next((b.text for b in reversed(response.content) if b.type == "text"), None)
-            return WebResult(parse_object(text), self.provider, getattr(response, "model", None) or self.model,
+            return WebResult(data, self.provider, getattr(response, "model", None) or self.model,
                              [{"url": u, "title": t} for u, t in sources.items()], searches, usage)
         raise LLMError("provider", "pause_turn 이 계속된다")
+
+    def stream_json(self, system: str, user: str, schema: dict, name: str, on_event=None) -> LLMResult:
+        """complete_json 과 같은 결과를 내되, 모델이 쓰는 JSON 의 필드를 쓰이는 대로 알린다 (선별·관계 확인이 토큰마다 보이게).
+        on_event(dict): field(path, delta | value). 콜백이 예외를 던지면 스트림을 닫아 모델 호출을 멈춘다. 오류·거절 처리는 complete_json 과 같다."""
+        import anthropic
+
+        emit = on_event or (lambda e: None)
+        fields = JsonStream()
+        try:
+            with self.client.messages.stream(
+                    model=self.config.model,
+                    max_tokens=self.config.max_output_tokens,
+                    system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                    messages=[{"role": "user", "content": user}],
+                    output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}}) as stream:
+                for ev in stream:
+                    if ev.type == "content_block_delta" and ev.delta.type == "text_delta":
+                        for fe in fields.feed(ev.delta.text):
+                            emit({"type": "field", **fe})
+                response = stream.get_final_message()
+        except anthropic.APITimeoutError as e:
+            raise LLMError("timeout", str(e))
+        except anthropic.RateLimitError as e:
+            raise LLMError("rate_limit", str(e))
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
+            raise LLMError("auth", str(e))
+        except anthropic.APIStatusError as e:
+            raise LLMError("provider", f"{e.status_code}")
+        except anthropic.APIConnectionError as e:
+            raise LLMError("provider", str(e))
+        if response.stop_reason == "refusal":
+            raise LLMError("refusal", f"category={getattr(getattr(response, 'stop_details', None), 'category', None)}")
+        if response.stop_reason != "end_turn":
+            raise LLMError("invalid_output", f"stop_reason={response.stop_reason}")
+        text = next((b.text for b in response.content if b.type == "text"), None)
+        return LLMResult(parse_object(text), self.provider, getattr(response, "model", None) or self.model)

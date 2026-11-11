@@ -19,6 +19,7 @@
   stated_result 노트가 이미 쓴 결론: subject(알고리즘)를 other(자료 구조)로 구현하면 expr (expr 없으면 '쓸 수 있다' 만)
 """
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 
@@ -75,6 +76,26 @@ def subject_key(text: str) -> str:
     return re.sub(r"[\s\-]+", "_", text.strip().lower())
 
 
+def _squash(text: str | None) -> str | None:
+    return re.sub(r"\s+", "", text) if text else None          # 식: 공백을 무시
+
+
+def _words(text: str | None) -> str | None:
+    return " ".join(text.split()) if text else None            # 조건 문장: 연속 공백을 하나로
+
+
+def _digest(*parts) -> str:
+    """값이 None 인 칸과 빈 문자열을 구분하고 칸 경계를 구분하는 sha256 (hex 64자)."""
+    raw = "\x1f".join("\x00" if p is None else str(p) for p in parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def facts_hash(facts: list["Fact"]) -> str:
+    """한 노트의 사실 묶음의 뜻 해시: 사실의 content_hash 를 정렬해 합친다 (순서·id·위치와 무관, 같은 사실이 둘이면 둘로 센다).
+    노트를 고쳐도 이 값이 같으면 사실이 같다 — 그 사실로 만든 결론은 그대로 유효하다."""
+    return _digest("facts-set-1", *sorted(f.content_hash() for f in facts))
+
+
 @dataclass(frozen=True)
 class FactEvidence:
     note_id: str
@@ -107,6 +128,12 @@ class Fact:
     @property
     def note(self) -> str:
         return self.evidence.note_id
+
+    def content_hash(self) -> str:
+        """사실의 뜻만 해시한다 (종류·주체·역할·연산·식·경우·부정·조건). 사실 id·노트에 쓴 이름·역할/연산의 한국어 이름·출처·근거 위치는
+        넣지 않는다: 노트의 다른 곳을 고치거나 다시 추출해 id 와 위치가 바뀌어도 뜻이 같으면 같은 값이다. 식의 공백은 무시한다."""
+        return _digest("fact-content-1", self.kind, self.subject_key, self.role, self.op, _squash(self.expr), self.case, self.negated,
+                       _words(self.condition), self.other_key)
 
     def text(self) -> str:
         """사실을 한 문장으로 (soundness 판정·설명에 쓴다)."""

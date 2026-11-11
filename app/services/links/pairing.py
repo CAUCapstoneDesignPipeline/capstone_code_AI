@@ -21,6 +21,7 @@ import hashlib
 import re
 import threading
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +29,7 @@ MD = re.compile(r"\*\*|__|`")
 START = re.compile(r"^(그래서|그러면|그런데|하지만|그리고|따라서|즉|또|또한|이|그|저|이런|그런|이것|그것|이를|그걸)\s")
 TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}|[가-힣]{3,}")
 MIN_CHARS, MAX_CHARS = 20, 300
+GENERATED_MAX_CHARS = 600       # 받아들인 새 지식의 결론은 2~4문장이라 노트 문장보다 길다 (실제 결과 57개: 중앙값 312자, 최대 469자 — 300자로 막으면 68% 가 재료가 못 된다). 생성에 보낼 때 자르는 길이와 같다
 TOKEN_DF = (2, 25)             # 너무 흔하거나 한 번뿐인 낱말은 연결고리가 못 된다
 PIVOT_DF = (2, 40)
 COSINE_FLOOR = 0.5
@@ -38,9 +40,9 @@ def clean(text: str) -> str:
     return MD.sub("", text).strip()
 
 
-def gate(text: str) -> bool:
+def gate(text: str, max_chars: int = MAX_CHARS) -> bool:
     """혼자 읽을 수 있는 설명인가."""
-    return MIN_CHARS <= len(text) <= MAX_CHARS and text.count("|") < 2 and "://" not in text and not START.match(text)
+    return MIN_CHARS <= len(text) <= max_chars and text.count("|") < 2 and "://" not in text and not START.match(text)
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,22 @@ class Element:
     start: int                      # 노트 안 위치 (UTF-16)
     end: int
     quote: str
+    origin: str = "extracted"       # extracted | generated ('이해함' 으로 받아들인 새 지식)
+    notes: tuple[str, ...] = ()     # generated: 기댄 노트들. 비어 있으면 (note,) 하나다. 이 노트들의 요소와는 이어지지 않는다
+    sources: tuple = field(default=(), compare=False, hash=False)    # generated: 기댄 구간들 [{noteId, note, start, end, quote}]
+    external: tuple = field(default=(), compare=False, hash=False)   # generated: 외부 자료들 [{url, title, quote, retrievedAt}]
+
+
+def pair_fingerprint(concept_a: str, concept_b: str) -> str:
+    """같은 추천인가: 두 요소의 개념 id (순서 없이). 결론 문장과 요소의 문장·근거 위치는 넣지 않는다 — 노트를 고치고 다시 분석해도,
+    다른 노트에서 시작해 A·B 가 뒤바뀌어도 같은 짝이면 같은 값이다. 사용자는 BE 가 앞에 붙인다. (회의 2026-11-04: 지문 = 근거 개념 id)"""
+    return hashlib.sha256("\x1f".join(("pair-card-1", *sorted((concept_a, concept_b)))).encode("utf-8")).hexdigest()
+
+
+def pair_basis(concept_a: str, text_a: str, concept_b: str, text_b: str) -> str:
+    """같은 짝의 내용이 바뀌었는가: 두 요소의 설명 문장 (순서 없이). 같은 지문에서 이 값이 달라지면 카드는 id 를 지키고 새 내용으로 바뀐다."""
+    texts = [t for _, t in sorted(((concept_a, text_a), (concept_b, text_b)))]
+    return hashlib.sha256("\x1f".join(("pair-basis-1", *texts)).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -72,6 +90,14 @@ class Candidate:
     def score(self) -> float:
         return len(self.channels) + (self.cos or 0.0)
 
+    @property
+    def fingerprint(self) -> str:
+        return pair_fingerprint(self.a.concept_id, self.b.concept_id)
+
+    @property
+    def basis(self) -> str:
+        return pair_basis(self.a.concept_id, self.a.text, self.b.concept_id, self.b.text)
+
 
 def elements_from(keywords, meta) -> list[Element]:
     out = []
@@ -79,15 +105,23 @@ def elements_from(keywords, meta) -> list[Element]:
         for c in k.concepts:
             src = c.sources[0]
             m = meta[c.conceptId]
+            extra = ({"origin": "generated", "notes": tuple(m["notes"]), "sources": tuple(m["sources"]), "external": tuple(m["external"])}
+                     if m.get("origin") == "generated" else {})
             out.append(Element(len(out), k.keywordId, k.name, tuple(k.aliases), m["note"], src.noteId, c.conceptId,
-                               clean(c.explanation), m.get("confidence"), src.span.startOffset, src.span.endOffset, src.span.quote))
+                               clean(c.explanation), m.get("confidence"), src.span.startOffset, src.span.endOffset, src.span.quote, **extra))
     return out
 
 
 class PairingIndex:
     def __init__(self, elements: list[Element], vectors=None):
         self.el, self.vec = elements, vectors
-        self.ok = [gate(e.text) for e in elements]
+        self.ok = [gate(e.text, GENERATED_MAX_CHARS if e.origin == "generated" else MAX_CHARS) for e in elements]
+        self.notes = [frozenset(e.notes) if e.notes else frozenset((e.note,)) for e in elements]     # 요소가 기댄 노트들 (노트에서 뽑은 요소는 자기 노트 하나)
+        by_note: dict[str, list[int]] = defaultdict(list)
+        for i, ns in enumerate(self.notes):
+            for n in ns:
+                by_note[n].append(i)
+        self._by_note = by_note
         self.low = [e.text.lower() for e in elements]
         self.tokens = [set(TOKEN.findall(t)) if ok else set() for t, ok in zip(self.low, self.ok)]
         df = Counter(w for ts in self.tokens for w in ts)
@@ -108,7 +142,7 @@ class PairingIndex:
             import numpy as np
             codes = lambda xs: np.unique(xs, return_inverse=True)[1]
             self._ok_arr = np.array(self.ok)
-            self._kid_code, self._note_code = codes([e.keyword_id for e in elements]), codes([e.note for e in elements])
+            self._kid_code = codes([e.keyword_id for e in elements])
 
     def _index_mentions(self):
         """키워드 이름·별칭이 설명에 나오는지를 글 하나당 한 번의 훑기로 모두 찾는다 (이름 trie). 요소마다 모든 이름을 훑지 않는다."""
@@ -142,17 +176,11 @@ class PairingIndex:
 
     def _valid(self, i: int, j: int) -> bool:
         a, b = self.el[i], self.el[j]
-        return self.ok[i] and self.ok[j] and a.keyword_id != b.keyword_id and a.note != b.note
+        return self.ok[i] and self.ok[j] and a.keyword_id != b.keyword_id and not (self.notes[i] & self.notes[j])
 
-    def anchors(self, note: str, limit: int = 40) -> list[int]:
-        """이 노트의 요소 중 혼자 읽을 수 있는 것. 키워드마다 하나, 신뢰도 순."""
-        best: dict[str, int] = {}
-        for e in self.el:
-            if e.note == note and self.ok[e.idx]:
-                cur = best.get(e.keyword_id)
-                if cur is None or (e.confidence or 0) > (self.el[cur].confidence or 0):
-                    best[e.keyword_id] = e.idx
-        return sorted(best.values(), key=lambda i: (-(self.el[i].confidence or 0), i))[:limit]
+    def _same_notes(self, i: int) -> list[int]:
+        """요소 i 와 기댄 노트가 겹치는 요소들 (자기 포함). 받아들인 새 지식은 기댄 노트의 요소와 이어지지 않는다."""
+        return sorted({j for n in self.notes[i] for j in self._by_note[n]})
 
     def _nearest_all(self, anchors: list[int], k: int) -> dict[int, list[int]]:
         """anchors 마다 가까운 다른 노트·다른 키워드 요소 k 개. 행렬곱 한 번(256개씩)으로 구하고 정렬 없이 k 개만 뽑는다."""
@@ -165,8 +193,9 @@ class PairingIndex:
         for s in range(0, len(anchors), 256):
             chunk = anchors[s:s + 256]
             sims = self.vec[chunk] @ self.vec.T                                  # (chunk, E)
-            bad = (~self._ok_arr[None, :] | (self._kid_code[None, :] == self._kid_code[chunk][:, None])
-                   | (self._note_code[None, :] == self._note_code[chunk][:, None]))
+            bad = ~self._ok_arr[None, :] | (self._kid_code[None, :] == self._kid_code[chunk][:, None])
+            for r, i in enumerate(chunk):
+                bad[r, self._same_notes(i)] = True                                   # 같은 노트(기댄 노트가 겹치는) 요소
             sims[bad] = -np.inf
             top = np.argpartition(-sims, k - 1, axis=1)[:, :k]
             for r, i in enumerate(chunk):
@@ -174,10 +203,10 @@ class PairingIndex:
         return out
 
     def anchors(self, note: str, limit: int = 40) -> list[int]:
-        """이 노트의 요소 중 혼자 읽을 수 있는 것. 키워드마다 하나, 신뢰도 순."""
+        """이 노트의 요소 중 혼자 읽을 수 있는 것. 키워드마다 하나, 신뢰도 순. 이 노트에 기댄 새 지식(받아들인 것)도 이 노트의 요소로 센다."""
         best: dict[str, int] = {}
         for e in self.el:
-            if e.note == note and self.ok[e.idx]:
+            if note in self.notes[e.idx] and self.ok[e.idx]:
                 cur = best.get(e.keyword_id)
                 if cur is None or (e.confidence or 0) > (self.el[cur].confidence or 0):
                     best[e.keyword_id] = e.idx
@@ -189,7 +218,7 @@ class PairingIndex:
         if self._ivf is None and not exact:
             self._ivf = _IVF(self.vec)
         q = self.vec[i]
-        kid_i, note_i = self.el[i].keyword_id, self.el[i].note
+        kid_i, notes_i = self.el[i].keyword_id, self.notes[i]
         cand = np.arange(len(self.el)) if exact else None
         probe = 4
         while True:
@@ -200,7 +229,7 @@ class PairingIndex:
             out = []
             for pos in order:
                 j = int(cand[pos])
-                if j != i and self.ok[j] and self.el[j].keyword_id != kid_i and self.el[j].note != note_i:
+                if j != i and self.ok[j] and self.el[j].keyword_id != kid_i and not (self.notes[j] & notes_i):
                     out.append(j)
                     if len(out) >= k:
                         return out
@@ -209,7 +238,10 @@ class PairingIndex:
             probe = min(self._ivf.nlist, probe * 2)             # 쓸 수 있는 이웃이 모자라면 더 넓게 훑는다
 
     def candidates(self, anchors: list[int], per_anchor: int = 3, per_partner: int = 1, limit: int = 12,
-                   neighbors: int = 10) -> tuple[list[Candidate], dict]:
+                   neighbors: int = 10, exclude: Mapping[str, str] | None = None) -> tuple[list[Candidate], dict]:
+        """exclude: 이미 답한 짝의 지문 → 이유 ("known" 알고 있던 내용 · "accepted" 이해함 …). 한도(limit)를 채우기 전에 빼므로 답한 자리를 새 후보가 채운다.
+        뺀 수는 counts["answered:이유"] 로 알린다."""
+        exclude = exclude or {}
         near = self._nearest_all(anchors, neighbors)
         found: dict[tuple[int, int], dict] = {}
 
@@ -247,6 +279,10 @@ class PairingIndex:
             cos = float(self.vec[i] @ self.vec[j]) if self.vec is not None else None
             if cos is not None and cos < COSINE_FLOOR:
                 continue
+            why = exclude.get(pair_fingerprint(self.el[i].concept_id, self.el[j].concept_id))
+            if why is not None:
+                counts[f"answered:{why}"] += 1
+                continue
             out.append(Candidate(self.el[i], self.el[j], tuple(f["channels"]), None if cos is None else round(cos, 3),
                                  f["shared"], f["via"]))
         counts["union"] = len(found)
@@ -255,8 +291,10 @@ class PairingIndex:
         picked, per_a, per_b, seen = [], Counter(), Counter(), set()
         for c in out:
             ta, tb = c.a.text, c.b.text                       # 같은 문장을 다른 키워드가 가리키는 중복은 한 번만
-            if per_a[ta] >= per_anchor or per_b[tb] >= per_partner or (ta, tb) in seen or (c.a.keyword_id, c.b.keyword_id) in seen:
+            if per_a[ta] >= per_anchor or per_b[tb] >= per_partner or (ta, tb) in seen or (c.a.keyword_id, c.b.keyword_id) in seen \
+                    or c.fingerprint in seen:
                 continue
+            seen.add(c.fingerprint)
             picked.append(c)
             per_a[ta] += 1
             per_b[tb] += 1

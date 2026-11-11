@@ -28,7 +28,7 @@ def fact_out(f: F.Fact) -> Fact:
     return build(Fact, factId=f.fact_id, kind=f.kind, subject=f.subject[:200], subjectKey=f.subject_key, role=f.role,
                  op=f.op, roleLabel=(f.role_label or None) if f.role else None,
                  opLabel=(f.op_label or None) if f.op else None, expr=f.expr, case=f.case, negated=f.negated, condition=f.condition, other=f.other,
-                 otherKey=f.other_key, origin=f.origin,
+                 otherKey=f.other_key, origin=f.origin, contentHash=f.content_hash(),
                  evidence={"noteId": e.note_id, "noteVersion": e.note_version, "bodySha256": e.body_sha256,
                            "startOffset": e.start, "endOffset": e.end, "quote": e.quote})
 
@@ -49,7 +49,7 @@ async def facts(request: Request):
         raise AiError("OUTPUT_LIMIT_EXCEEDED")
     out = [fact_out(f) for f in got.facts]
     return build(FactsResponse, context=data["context"], meta=meta(profile, t0, got.provider, got.model), facts=out,
-                 dropped=[Dropped(reason=k, count=v) for k, v in sorted(got.dropped.items())])
+                 dropped=[Dropped(reason=k, count=v) for k, v in sorted(got.dropped.items())], factsHash=F.facts_hash(got.facts))
 
 
 def _facts_in(req, docs) -> list[F.Fact]:
@@ -75,10 +75,13 @@ def _facts_in(req, docs) -> list[F.Fact]:
             raise AiError("INVALID_SPAN", [(f"{p}.evidence", "out_of_range")])
         if got != e.quote:
             raise AiError("INVALID_SPAN", [(f"{p}.evidence.quote", "invalid")])
-        out.append(F.Fact(f.factId, f.kind, f.subject, f.subjectKey,
-                          F.FactEvidence(doc.noteId, e.noteVersion, e.bodySha256, e.startOffset, e.endOffset, e.quote),
-                          role=f.role, op=f.op, role_label=f.roleLabel, op_label=f.opLabel, expr=f.expr, case=f.case, negated=f.negated, condition=f.condition,
-                          other=f.other, other_key=f.otherKey, origin=f.origin))
+        fact = F.Fact(f.factId, f.kind, f.subject, f.subjectKey,
+                      F.FactEvidence(doc.noteId, e.noteVersion, e.bodySha256, e.startOffset, e.endOffset, e.quote),
+                      role=f.role, op=f.op, role_label=f.roleLabel, op_label=f.opLabel, expr=f.expr, case=f.case, negated=f.negated, condition=f.condition,
+                      other=f.other, other_key=f.otherKey, origin=f.origin)
+        if f.contentHash is not None and f.contentHash != fact.content_hash():      # 뜻을 고쳐 놓고 옛 해시를 붙여 보낸 사실
+            raise AiError("INVALID_REFERENCE", [(f"{p}.contentHash", "invalid")])
+        out.append(fact)
     return out
 
 
@@ -93,7 +96,8 @@ def derivation_out(d) -> Derivation:
                  premiseFactIds=d.premises, noteIds=d.notes, missing=d.missing, dependsOn=d.depends_on,
                  duplicateOfFactIds=d.duplicate_of, automation=d.automation, explanation=d.explanation,
                  soundness=None if s is None else Soundness(verdict=s.verdict, reason=s.reason,
-                                                            unfaithfulFactIds=list(s.unfaithful)))
+                                                            unfaithfulFactIds=list(s.unfaithful)),
+                 fingerprint=d.fingerprint, basisHash=d.basis_hash)
 
 
 @router.post("/derivations", response_model=DeriveResponse, operation_id="deriveConclusions")

@@ -117,3 +117,98 @@ def test_work_per_anchor_does_not_grow_with_the_number_of_other_notes():
         _, counts = idx.candidates(idx.anchors("n0"), per_anchor=3, limit=12)
         anchors = len(idx.anchors("n0"))
         assert counts["union"] <= anchors * (10 + 40 * 8 + 25 * 40)          # 요소당 임베딩 10 + 공통 키워드 · 공유 낱말의 상한
+
+
+# ---- '이해함' 으로 받아들인 새 지식(generated): 기댄 노트가 둘 이상인 요소 ----
+
+def gen(i, kw, notes, text, aliases=()):
+    return Element(i, f"k-{kw}", kw, tuple(aliases), "새 지식 · " + " · ".join(notes), f"n-{notes[0]}", f"c{i}", text, None, 0, len(text), text,
+                   origin="generated", notes=tuple(notes))
+
+
+LOG = "로그를 디스크에 먼저 기록해서 장애 복구를 가능하게 한다고 한다"
+LOG2 = "장애가 나면 디스크에 남은 로그를 읽어서 복구를 진행한다고 한다"
+
+
+def test_accepted_knowledge_pairs_with_other_notes_but_never_with_the_notes_it_rests_on():
+    els = [el(0, "WAL", "A", LOG), el(1, "복구", "B", LOG2),
+           gen(2, "새지식", ["A", "B"], "로그를 디스크에 쓰고 장애가 나면 읽어서 복구한다는 두 노트를 합친 설명이다"),
+           el(3, "체크포인트", "C", "장애 복구 시간을 줄이려고 디스크에 로그를 읽는 지점을 정해 둔다고 한다")]
+    idx = PairingIndex(els)
+    assert not idx._valid(2, 0) and not idx._valid(2, 1) and not idx._valid(0, 2)           # 기댄 노트와는 이어지지 않는다
+    assert idx._valid(2, 3) and idx._valid(3, 2)                                            # 다른 노트(C)와는 이어진다
+    cands, _ = idx.candidates(idx.anchors("C"), per_anchor=9, per_partner=9, limit=9)
+    assert "새지식" in {c.b.keyword for c in cands}                                          # C 의 요소와는 이어진다
+    for note in ("A", "B"):
+        own = [i for i in idx.anchors(note) if idx.el[i].origin != "generated"]
+        cs, _ = idx.candidates(own, per_anchor=9, per_partner=9, limit=9)
+        assert "새지식" not in {c.b.keyword for c in cs}                                     # 기댄 노트의 요소가 앵커여도 이어지지 않는다
+    assert {c.b.keyword for c in idx.candidates([2], per_anchor=9, per_partner=9, limit=9)[0]} <= {"체크포인트"}   # 새 지식이 앵커여도 A·B 와는 이어지지 않는다
+
+
+def test_accepted_knowledge_counts_as_an_element_of_each_note_it_rests_on():
+    els = [el(0, "WAL", "A", LOG), gen(1, "새지식", ["A", "B"], "로그를 디스크에 쓰고 장애가 나면 읽어서 복구한다는 두 노트를 합친 설명이다"),
+           el(2, "체크포인트", "C", "장애 복구 시간을 줄이려고 디스크에 로그를 읽는 지점을 정해 둔다고 한다")]
+    idx = PairingIndex(els)
+    assert set(idx.anchors("A")) == {0, 1} and idx.anchors("B") == [1] and idx.anchors("C") == [2]
+
+
+def test_batched_nearest_skips_every_element_that_shares_a_note_with_the_anchor():
+    els = [el(0, "WAL", "A", LOG), el(1, "복구", "B", LOG2), el(2, "체크포인트", "C", "장애 복구 시간을 줄이려고 디스크에 로그를 읽는 지점을 정해 둔다고 한다"),
+           gen(3, "새지식", ["A", "B"], "로그를 디스크에 쓰고 장애가 나면 읽어서 복구한다는 두 노트를 합친 설명이다"),
+           gen(4, "다른지식", ["B", "C"], "복구 시간을 줄이는 지점과 로그를 합쳐 설명하는 또 다른 새 지식이다 정말로")]
+    v = np.ones((5, 4), dtype=np.float32)
+    v += np.random.default_rng(1).random((5, 4)).astype(np.float32) * 0.1
+    v /= np.linalg.norm(v, axis=1, keepdims=True)
+    idx = PairingIndex(els, v)
+    got = idx._nearest_all([0, 1, 2, 3, 4], 4)
+    assert set(got[0]) == {1, 2, 4}               # A: A·B 의 새지식(3)만 제외 (같은 A 에 기댄다)
+    assert set(got[1]) == {0, 2}                  # B: B 에 기댄 새지식(3)·다른지식(4)은 제외
+    assert set(got[2]) == {0, 1, 3}               # C: C 에 기댄 다른지식(4)은 제외
+    assert set(got[3]) == {2}                     # A·B 의 새지식: A·B·B·C 중 C 의 요소만 (다른지식(4)은 B 를 같이 쓴다)
+    assert got[4] == [0]                          # B·C 의 다른지식: A 의 요소만
+    for i, near in got.items():                   # 고른 이웃은 모두 이을 수 있는 쌍이다 (후보 검사와 같은 규칙)
+        assert all(idx._valid(i, j) for j in near)
+
+
+def test_accepted_knowledge_may_be_longer_than_a_note_sentence():
+    long_text = "로그를 디스크에 먼저 기록해 두면 장애 뒤에 그 로그를 다시 읽어 되돌릴 수 있어요. " * 8            # 400자 가까이 (노트 문장 한도 300자보다 길다)
+    assert 300 < len(long_text) <= 600
+    idx = PairingIndex([el(0, "WAL", "A", long_text), gen(1, "새지식", ["A", "B"], long_text)])
+    assert idx.ok == [False, True]                                      # 노트 문장은 300자까지, 받아들인 새 지식은 600자까지
+    assert not PairingIndex([gen(0, "새지식", ["A", "B"], long_text * 2)]).ok[0]
+
+
+# ---- 지문: 같은 짝이면 순서·시작 노트와 무관하게 같은 값, 답한 짝은 한도 앞에서 뺀다 ----
+
+def test_pair_fingerprint_is_the_same_pair_whichever_side_comes_first():
+    from app.services.links.pairing import pair_basis, pair_fingerprint
+    fp = pair_fingerprint("c1", "c2")
+    assert fp == pair_fingerprint("c2", "c1") and len(fp) == 64 and fp != pair_fingerprint("c1", "c3")
+    assert pair_basis("c1", "가 문장", "c2", "나 문장") == pair_basis("c2", "나 문장", "c1", "가 문장")      # 순서와 무관
+    assert pair_basis("c1", "가 문장", "c2", "나 문장") != pair_basis("c1", "가 문장을 고침", "c2", "나 문장")    # 문장이 바뀌면 달라진다
+    assert pair_basis("c1", "가", "c2", "나") != pair_basis("c1", "나", "c2", "가")                              # 어느 개념의 문장인지도 본다
+
+
+def test_candidate_fingerprint_matches_from_either_note():
+    a = el(0, "WAL", "A", LOG)
+    b = el(1, "복구", "B", LOG2)
+    both = PairingIndex([a, b])
+    ca, _ = both.candidates([0], per_anchor=5, per_partner=5)
+    cb, _ = both.candidates([1], per_anchor=5, per_partner=5)
+    assert ca and cb and ca[0].fingerprint == cb[0].fingerprint and ca[0].basis == cb[0].basis
+
+
+def test_answered_pairs_are_dropped_before_the_limit_so_new_candidates_take_their_place():
+    els = [el(0, "WAL", "A", "로그를 디스크에 먼저 기록해서 장애 복구를 가능하게 한다고 한다"),
+           el(1, "복구", "B", "장애가 나면 디스크에 남은 로그를 읽어서 복구를 진행한다고 한다"),
+           el(2, "체크포인트", "C", "장애 복구 시간을 줄이려고 디스크에 로그를 읽는 지점을 정해 둔다고 한다")]
+    idx = PairingIndex(els)
+    base, _ = idx.candidates([0], per_anchor=9, per_partner=9, limit=1)
+    assert len(base) == 1
+    first = base[0]
+    after, counts = idx.candidates([0], per_anchor=9, per_partner=9, limit=1, exclude={first.fingerprint: "known"})
+    assert len(after) == 1 and after[0].b.keyword != first.b.keyword                            # 답한 자리를 다른 후보가 채운다
+    assert counts["answered:known"] == 1
+    none, counts = idx.candidates([0], per_anchor=9, per_partner=9, limit=9, exclude={c.fingerprint: "accepted" for c in idx.candidates([0], 9, 9, 9)[0]})
+    assert none == [] and counts["answered:accepted"] == 2

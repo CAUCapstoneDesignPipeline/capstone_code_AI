@@ -12,7 +12,10 @@
   POST /dev/proposals/candidates {noteId?, text?, limit}  새 지식을 만들 요소 쌍 후보 (결정적)
   POST /dev/proposals/screen {pairs}  후보 쌍을 LLM 으로 거른다 (눌렀을 때만)
   POST /dev/proposals/generate {a, b}  두 요소 + 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만)
-  POST /dev/proposals/generate/stream {a, b}  같은 일을 진행 상황과 함께 SSE 로 (화면이 쓰는 쪽)
+  POST /dev/proposals/generate/stream {a, b}  같은 일을 진행 상황과 결론이 쓰이는 대로 SSE 로 (화면이 쓰는 쪽)
+  POST /dev/proposals/screen/stream {pairs}  LLM 선별을 쌍마다 라벨·메모가 쓰이는 대로 SSE 로
+  POST /dev/keyword-relation/stream {a, b, evidence}  관계 확인을 판정이 쓰이는 대로 SSE 로
+  POST /dev/keyword-relation/concepts[/stream] {a, b}  증거 문장 없이 두 키워드의 설명만으로 관계 확인 (JSON · SSE)
   POST /dev/keywords     {noteId?, text?, q, minPages, limit, minConfidence} 키워드(노드)와 그 안의 개념 (결정적)
   POST /dev/links        {noteId?, text?, k, minConfidence} 와 이어진 다른 노트 (결정적). text 를 주면 그 글로 잇는다
   GET /dev/links/{id}    저장된 노트로 같은 일
@@ -390,16 +393,20 @@ async def keywords(q: KeywordsQuery, request: Request):
     }
 
 
+from app.services.links.paths import weighted_paths  # noqa: E402
+from app.services.links.inference import MIN_SCORE as INFER_MIN_SCORE      # noqa: E402  (시험에서 바꿀 수 있게 이 모듈의 이름으로 둔다)
+
 LEVEL_KO = {"sentence": "같은 문장", "heading": "제목과 본문", "paragraph": "같은 문단"}
 DEFAULT_LEVELS = ["sentence", "heading"]          # 문단은 느슨해서 기본으로는 끈다
 
 
 def _levels(levels: list[str]) -> tuple[str, ...]:
+    """증거 수준(sentence · heading · paragraph) + 선택으로 inferred(추정 연결). 증거 수준은 하나 이상 있어야 하고, 결과는 센 순서 + 맨 뒤 inferred."""
     from app.services.links.keywords import LEVELS
-    bad = [x for x in levels if x not in LEVELS]
-    if bad or not levels:
-        raise HTTPException(400, f"levels 는 {', '.join(LEVELS)} 중에서 하나 이상")
-    return tuple(x for x in LEVELS if x in levels)
+    evidence = tuple(x for x in LEVELS if x in levels)
+    if any(x not in (*LEVELS, "inferred") for x in levels) or not evidence:
+        raise HTTPException(400, f"levels 는 {', '.join(LEVELS)} 중 하나 이상 (+ 선택으로 inferred)")
+    return evidence + (("inferred",) if "inferred" in levels else ())
 
 
 def _edge_view(e: dict, levels: tuple[str, ...]) -> dict | None:
@@ -439,6 +446,33 @@ def _edge_index(state, corpus, min_confidence: float, levels: tuple[str, ...]):
     return cached[1][levels]
 
 
+def _link_graph(state, corpus, min_confidence: float):
+    """추정 연결을 구하는 그래프 (증거 연결 전체 + 키워드 의미 벡터). 키워드 집합마다 한 번 만든다. 임베딩이 처음이면 오래 걸린다 (요소 6,583개에 약 34초)."""
+    from app.services.links.inference import LinkGraph, keyword_vectors
+
+    kws, _, edges = _keyword_set(state, corpus, min_confidence)
+    cached = getattr(state, "link_graph", None)
+    if cached and cached[0] is edges:
+        return cached[1]
+    ids = [k.keywordId for k in kws]
+    index, embedded, _ = _pairing_index(state, corpus, min_confidence)
+    vectors = keyword_vectors([e.keyword_id for e in index.el], index.vec, ids) if embedded else None
+    lg = LinkGraph(ids, edges.keys(), vectors)
+    state.link_graph = (edges, lg)
+    return lg
+
+
+def _inferred_edge(r, by_id) -> dict:
+    """추정 연결 하나를 선 형식으로. 증거가 아니라 점수와 근거 설명(공통 이웃·의미 유사도)이다."""
+    names = [by_id[v].name for v in r.via if v in by_id]
+    why = (f"공통 이웃 {len(names)}개: {', '.join(names)}" if names else "공통 이웃은 없고 3걸음 안에서 닿는다 (또는 의미만 가깝다)")
+    if r.cos is not None:
+        why += f" · 의미 유사도 {r.cos:.2f}"
+    a, b = sorted((r.a, r.b))
+    return {"a": a, "b": b, "score": r.weight, "pages": 0, "counts": {"inferred": 1}, "inferredScore": r.score, "cos": r.cos, "via": names,
+            "evidence": [{"level": "inferred", "note": "", "text": why}]}
+
+
 async def _graph_corpus(state, note_id: str | None, text: str | None):
     """노트 폴더 색인 (붙여넣은 글이 있으면 그 글을 노트로 더해서). (색인, 노트 이름)."""
     if state.extractor is None:
@@ -463,7 +497,7 @@ class KeywordGraphQuery(BaseModel):
     scope: str = "note"         # note: 이 노트의 키워드와 그 이웃 · all: 전체에서 연결이 센 키워드
     limit: int = 0              # 가져올 키워드 수 (0 = note 14 / all 200)
     minConfidence: float = 0.0
-    levels: list[str] = DEFAULT_LEVELS     # 쓸 증거 수준: sentence · heading · paragraph
+    levels: list[str] = DEFAULT_LEVELS     # 쓸 증거 수준: sentence · heading · paragraph (+ inferred: 구조·의미로 추정한 연결)
 
 
 @router.post("/keyword-graph")
@@ -480,7 +514,8 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
     if q.scope == "note" and note_id is None:
         raise HTTPException(400, "note 범위에는 noteId 또는 text 가 필요하다")
     mc = max(0.0, min(q.minConfidence, 1.0))
-    ei = await run_in_threadpool(_edge_index, state, corpus, mc, levels)
+    ev_levels = tuple(x for x in levels if x != "inferred")
+    ei = await run_in_threadpool(_edge_index, state, corpus, mc, ev_levels)
     kws, meta, by_id, adj, strength = ei.kws, ei.meta, ei.by_id, ei.adj, ei.strength
     mine = ei.by_note.get(note_id, set()) if note_id else set()
     if q.scope == "note":
@@ -495,7 +530,29 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
         pool = [k for k in strength if len(by_id[k].note_ids()) >= 2]
         chosen = sorted(pool, key=lambda k: (-strength[k], by_id[k].name))[:q.limit or 200]
     inside = set(chosen)
-    out_edges = sorted(({"a": a, "b": b, **ei.views[(a, b)]} for a in chosen for b in adj.get(a, {}) if b in inside and a < b),
+    inferred_edges: list[dict] = []
+    added: set[str] = set()
+    semantic = None
+    if "inferred" in levels:                                   # 증거로는 안 이어진 키워드를 구조·의미로 잇는다 (화면에 올린 키워드에 대해서만 계산)
+        lg = await run_in_threadpool(_link_graph, state, corpus, mc)
+        semantic = lg.vec is not None
+        sources = list(own) if q.scope == "note" else list(chosen)
+        found = await run_in_threadpool(lambda: [r for k in sources for r in lg.infer(k, min_score=INFER_MIN_SCORE)])
+        if q.scope == "note":                                  # 이 노트의 키워드에 이어질 만한 다른 키워드를 노드로 더한다 (키워드마다 상위 2개, 모두 최대 10개)
+            per: dict[str, int] = {}
+            for r in found:
+                if r.b not in inside and per.get(r.a, 0) < 2 and len(added) < 10:
+                    per[r.a] = per.get(r.a, 0) + 1
+                    added.add(r.b)
+            chosen = chosen + sorted(added, key=lambda k: by_id[k].name)
+            inside = set(chosen)
+        seen: set[tuple[str, str]] = set()
+        for r in found:
+            e = _inferred_edge(r, by_id)
+            if r.b in inside and (e["a"], e["b"]) not in seen:
+                seen.add((e["a"], e["b"]))
+                inferred_edges.append(e)
+    out_edges = sorted([{"a": a, "b": b, **ei.views[(a, b)]} for a in chosen for b in adj.get(a, {}) if b in inside and a < b] + inferred_edges,
                        key=lambda e: -e["score"])
     degree: dict[str, int] = {}
     for e in out_edges:
@@ -503,10 +560,11 @@ async def keyword_graph(q: KeywordGraphQuery, request: Request):
         degree[e["b"]] = degree.get(e["b"], 0) + 1
     nodes = [{
         "id": k, "title": by_id[k].name, "aliases": by_id[k].aliases[:4], "pages": len(by_id[k].note_ids()),
-        "inNote": k in mine, "degree": degree.get(k, 0),
+        "inNote": k in mine, "degree": degree.get(k, 0), "inferred": k in added,
         "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation} for c in by_id[k].concepts[:6]],
     } for k in chosen]
     return {"note": note_id, "scope": q.scope, "levels": list(levels), "nodes": nodes, "edges": out_edges,
+            "inferredEdges": len(inferred_edges), "semantic": semantic,
             "notes": len(corpus.notes), "keywords": len(kws), "linkedKeywords": len(strength), "mine": len(mine),
             "mineLinked": sum(1 for k in mine if k in strength), "ms": int((time.monotonic() - t0) * 1000)}
 
@@ -522,37 +580,32 @@ class ConnectQuery(BaseModel):
 
 @router.post("/keyword-connect")
 async def keyword_connect(q: ConnectQuery, request: Request):
-    """두 키워드가 어떻게 이어지는지: 직접 증거와, 다른 키워드를 거치는 경로 (최대 3칸). 그래프에 그리지 않은 키워드도 된다.
-    너무 많은 키워드와 이어진 허브 키워드는 경로의 중간으로 쓰지 않는다 (아무것과도 이어져서 말해 주는 게 없다). LLM 호출 없음."""
+    """두 키워드가 어떻게 이어지는지: 직접 증거와, 다른 키워드를 거치는 길들 (app/services/links/paths.py 의 가중 경로). 그래프에 그리지 않은 키워드도 된다.
+    길은 걸음 수가 아니라 비용으로 고른다: 증거가 강한 선은 싸고, 이웃이 많은 허브를 지나면 비싸다 (건너뛰지는 않는다). 서로 다른 길을 최대 6개 싼 순으로.
+    LLM 호출 없음."""
     state = request.app.state
     levels = _levels(q.levels)
     corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
     mc = max(0.0, min(q.minConfidence, 1.0))
-    ei = await run_in_threadpool(_edge_index, state, corpus, mc, levels)
+    ev_levels = tuple(x for x in levels if x != "inferred")
+    ei = await run_in_threadpool(_edge_index, state, corpus, mc, ev_levels)
     meta, by_id, views, adj, hub = ei.meta, ei.by_id, ei.views, ei.adj, ei.hub
     if q.a not in by_id or q.b not in by_id or q.a == q.b:
         raise HTTPException(404, "키워드를 찾지 못했다 (같은 키워드 둘이면 안 된다)")
+    inferred = None
+    if "inferred" in levels:                                   # 어느 증거 수준으로도 안 이어진 쌍이면 구조·의미 점수를 보인다
+        lg = await run_in_threadpool(_link_graph, state, corpus, mc)
+        r = await run_in_threadpool(lg.score, q.a, q.b)
+        if r is not None:
+            inferred = {"score": r.score, "cos": r.cos, "katz": r.katz, "via": [{"id": v, "name": by_id[v].name} for v in r.via if v in by_id],
+                        "weight": r.weight, "semantic": lg.vec is not None}
 
     def work():
         key = lambda x, y: (x, y) if x < y else (y, x)
         edge = lambda x, y: {"a": x, "b": y, **views[key(x, y)]}
         a, b = q.a, q.b
-        na, nb = adj.get(a, {}), adj.get(b, {})
-        skipped = 0
-        paths: list[tuple[int, float, list[str]]] = []
-        for c in set(na) & set(nb) - {a, b}:
-            if len(adj[c]) > hub:
-                skipped += 1
-                continue
-            paths.append((2, min(na[c], nb[c]), [a, c, b]))
-        top = lambda nbr, other: sorted((x for x in nbr if x != other and len(adj[x]) <= hub), key=lambda x: -nbr[x])[:25]
-        for x in top(na, b):
-            for y in top(nb, a):
-                if x != y and y in adj[x]:
-                    paths.append((3, min(na[x], adj[x][y], nb[y]), [a, x, y, b]))
-        paths.sort(key=lambda p: (p[0], -p[1], p[2]))
-        two, three = [p for p in paths if p[0] == 2][:6], [p for p in paths if p[0] == 3][:4]
-        used = {k for p in (*two, *three) for k in p[2]} | {a, b}
+        paths = weighted_paths(adj, a, b, hub=hub)             # 걸음 수·허브 제외 대신 비용으로 고른 서로 다른 길들 (싼 순)
+        used = {k for p in paths for k in p.nodes} | {a, b}
 
         def info(k: str, full: bool = False) -> dict:
             kw = by_id[k]
@@ -560,11 +613,11 @@ async def keyword_connect(q: ConnectQuery, request: Request):
                     "concepts": [{"note": meta[c.conceptId]["note"], "explanation": c.explanation}
                                  for c in kw.concepts[:6 if full else 2]]}
         return {
-            "pair": _best_pair(by_id[a], by_id[b], meta),
-            "a": info(a, True), "b": info(b, True), "levels": list(levels), "hubThreshold": hub, "hubsSkipped": skipped,
+            "pair": _best_pair(by_id[a], by_id[b], meta), "inferred": inferred,
+            "a": info(a, True), "b": info(b, True), "levels": list(levels), "hubThreshold": hub,
             "direct": ({"a": a, "b": b, **views[key(a, b)]} if key(a, b) in views else None),
-            "paths": [{"hops": len(p) - 1, "strength": round(sc, 4), "nodes": [info(k) for k in p],
-                       "edges": [edge(p[i], p[i + 1]) for i in range(len(p) - 1)]} for _, sc, p in (*two, *three)],
+            "paths": [{"hops": p.hops, "cost": p.cost, "strength": round(p.bottleneck, 4), "hubs": [by_id[v].name for v in p.hubs],
+                       "nodes": [info(k) for k in p.nodes], "edges": [edge(p.nodes[i], p.nodes[i + 1]) for i in range(p.hops)]} for p in paths],
             "nodes": {k: info(k) for k in used},
         }
     out = await run_in_threadpool(work)
@@ -585,7 +638,13 @@ def _best_pair(ka, kb, meta) -> dict | None:
                 score = (len(set(TOKEN.findall(x.text.lower())) & set(TOKEN.findall(y.text.lower()))), min(x.confidence or 0, y.confidence or 0))
                 if best is None or score > best[0]:
                     best = (score, x, y)
-    return None if best is None else {"a": _side(best[1]), "b": _side(best[2])}
+    if best is None:
+        return None
+    from app.services.links.pairing import pair_basis, pair_fingerprint
+
+    x, y = best[1], best[2]
+    return {"a": _side(x), "b": _side(y), "fingerprint": pair_fingerprint(x.concept_id, y.concept_id),
+            "basisHash": pair_basis(x.concept_id, x.text, y.concept_id, y.text)}
 
 
 class RelSide(BaseModel):
@@ -742,19 +801,47 @@ async def suggest(q: SuggestQuery, request: Request):
 # ---- 새 지식 제안: 키워드 A 의 요소 + 키워드 B 의 요소 + 외부 지식 ----
 
 EMBEDDING_STORE = Path("data/private/cache/element-embeddings.npz")
+ACCEPTED_STORE = Path(os.environ.get("AI_ACCEPTED_STORE") or "data/private/accepted-knowledge.json")       # '이해함' 으로 받아들인 새 지식 (노트 구간이 들어 있어 비공개 폴더)
+
+
+KNOWN_STORE = Path(os.environ.get("AI_KNOWN_STORE") or "data/private/known-knowledge.json")       # '알고 있던 내용' 으로 답한 짝 (노트 문장이 들어 있어 비공개 폴더)
+
+
+def _known_store(state):
+    from app.services.links.accepted import KnownStore
+
+    store = getattr(state, "known_store", None)
+    if store is None or store.path != KNOWN_STORE:
+        store = state.known_store = KnownStore(KNOWN_STORE)
+    return store
+
+
+def _accepted_store(state):
+    from app.services.links.accepted import AcceptedStore
+
+    store = getattr(state, "accepted_store", None)
+    if store is None or store.path != ACCEPTED_STORE:
+        store = state.accepted_store = AcceptedStore(ACCEPTED_STORE)
+    return store
 
 
 def _pairing_index(state, corpus, min_confidence: float):
     """(색인, 임베딩을 썼는지, 만든 ms). 같은 색인·기준이면 만들어 둔 것을 다시 쓴다. 임베딩은 처음에만 오래 걸리고 디스크에 남는다."""
 
+    from app.client import uid
+    from app.services.links.accepted import merge_into
     from app.services.links.pairing import EmbeddingStore, PairingIndex, elements_from
 
     with _BUILD_LOCK:
+        accepted = _accepted_store(state)
+        stamp = (accepted.path, accepted.version)
         cached = getattr(state, "pairing_cache", None)
-        if cached and cached[0] is corpus and cached[1] == min_confidence:
+        if cached and cached[0] is corpus and cached[1] == min_confidence and cached[4] == stamp:
             return cached[2], cached[3], 0
         t0 = time.monotonic()
         kws, meta, _ = _keyword_set(state, corpus, min_confidence)
+        # 받아들인 새 지식도 노트에서 뽑은 지식과 똑같이 요소가 된다 (기댄 노트 구간이 사라진 것은 빠진다)
+        kws, meta = merge_into(kws, meta, accepted.all(), {k: n.text for k, n in corpus.notes.items()}, uid)
         elements = elements_from(kws, meta)
         store = getattr(state, "emb_store", None)
         if store is None:
@@ -765,20 +852,29 @@ def _pairing_index(state, corpus, min_confidence: float):
             vectors = None
         index = PairingIndex(elements, vectors)
         built = int((time.monotonic() - t0) * 1000)
-        state.pairing_cache = (corpus, min_confidence, index, vectors is not None)
+        state.pairing_cache = (corpus, min_confidence, index, vectors is not None, stamp)
         return index, vectors is not None, built
 
 
 def _side(e) -> dict:
-    return {"keyword": e.keyword, "keywordId": e.keyword_id, "note": e.note, "noteId": e.note_id, "conceptId": e.concept_id,
-            "text": e.text, "start": e.start, "end": e.end, "quote": e.quote, "confidence": e.confidence}
+    out = {"keyword": e.keyword, "keywordId": e.keyword_id, "note": e.note, "noteId": e.note_id, "conceptId": e.concept_id,
+           "text": e.text, "start": e.start, "end": e.end, "quote": e.quote, "confidence": e.confidence}
+    if e.origin == "generated":              # 받아들인 새 지식: 기댄 노트와 구간, 외부 자료를 같이 보낸다 (이것으로 다시 만들면 그 소스를 이어받는다)
+        out.update(origin="generated", notes=list(e.notes), sources=list(e.sources), external=list(e.external))
+    return out
+
+
+# 후보 풀 깊이. 이전: 앵커 문장당 3개 · 임베딩 이웃 10 · 최대 12(엔드포인트 상한 30) → 노트 10개에서 쓸 만한 쌍(Haiku 선별) 12개.
+# 지금: 앵커당 6 · 이웃 20 · 최대 90 → 같은 노트에서 58개 (4.8배). 깊어질수록 적중률은 내려간다: 1~30위 12.7% · 31~60위 8.3% · 61~90위 6.8%, 그래서 기본은 60.
+PER_ANCHOR, NEIGHBORS, MAX_CANDIDATES, DEFAULT_CANDIDATES, MAX_SCREEN = 6, 20, 90, 60, 90
 
 
 class ProposalQuery(BaseModel):
     noteId: str | None = None
     text: str | None = None
     minConfidence: float = 0.0
-    limit: int = 12
+    limit: int = DEFAULT_CANDIDATES
+    exclude: list[str] = []     # 이미 답한 짝의 지문 (상태 없는 호출용: 운영에서는 BE 가 거절·이해함 지문을 보낸다). 저장된 '알고 있던 내용'·'이해함' 도 같이 뺀다
 
 
 @router.post("/proposals/candidates")
@@ -798,16 +894,28 @@ async def proposal_candidates(q: ProposalQuery, request: Request):
     t0 = time.monotonic()
     index, embedded, built_ms = await run_in_threadpool(_pairing_index, state, corpus, mc)
     anchors = index.anchors(note_id)
-    cands, counts = await run_in_threadpool(index.candidates, anchors, 3, 1, max(1, min(q.limit, 30)))
+    done = _answered(state)
+    done.update({fp: "excluded" for fp in q.exclude})
+    cands, counts = await run_in_threadpool(lambda: index.candidates(anchors, PER_ANCHOR, 1, max(1, min(q.limit, MAX_CANDIDATES)), NEIGHBORS, exclude=done))
+    answered = {k.split(":", 1)[1]: counts.pop(k) for k in [k for k in counts if k.startswith("answered:")]}      # 답해서 뺀 짝 (이유별)
     return {
         "note": note_id, "anchors": len(anchors), "elements": len(index.el), "embeddings": embedded, "cosineFloor": COSINE_FLOOR if embedded else None,
-        "channels": counts, "buildMs": built_ms, "ms": int((time.monotonic() - t0) * 1000),
-        "candidates": [{"id": hashlib.sha1(f"{c.a.concept_id}|{c.b.concept_id}".encode()).hexdigest()[:16], "a": _side(c.a), "b": _side(c.b),
+        "channels": counts, "answered": answered, "buildMs": built_ms, "ms": int((time.monotonic() - t0) * 1000),
+        # id 는 지문에서 만든다: 다시 분석하거나 다른 노트에서 시작해 A·B 가 뒤바뀌어도 같은 짝이면 같은 id 다
+        "candidates": [{"id": c.fingerprint[:16], "fingerprint": c.fingerprint, "basisHash": c.basis, "a": _side(c.a), "b": _side(c.b),
                         "channels": list(c.channels), "cos": c.cos, "shared": list(c.shared), "via": list(c.via), "score": round(c.score, 3)}
                        for c in cands],
     }
 
 
+def _answered(state) -> dict[str, str]:
+    """이미 답한 짝의 지문 → 이유 (이해함 · 알고 있던 내용)."""
+    from app.services.links.accepted import answered
+
+    return answered(_accepted_store(state).all(), _known_store(state).all())
+
+
+CHECK_MODEL = "claude-sonnet-5-5"      # 생성 결과 확인: Haiku 는 같은 입력에서 판정이 흔들렸고(주제 이탈을 한 번은 잡고 한 번은 놓침) Sonnet 은 3번 모두 같았다. Opus 는 주제 이탈을 놓쳤다
 SCREEN_MODEL = "claude-haiku-5-5"      # 선별은 짧은 판단이라 작은 모델로 충분하다 (275쌍 시험: 정밀도 44% · 재현율 40%, Sonnet 35% · 50%)
 
 
@@ -855,8 +963,8 @@ async def proposal_screen(q: ScreenQuery, request: Request):
 
     if not _loopback(request):
         raise HTTPException(403, "로컬에서만 부를 수 있다")
-    if not 1 <= len(q.pairs) <= 30:
-        raise HTTPException(400, "쌍은 1~30개")
+    if not 1 <= len(q.pairs) <= MAX_SCREEN:
+        raise HTTPException(400, f"쌍은 1~{MAX_SCREEN}개")
     state = request.app.state
     judge = getattr(state, "pair_screen", None)
     if judge is None:
@@ -880,9 +988,27 @@ def _knowledge_generator(state):
         cfg, llm = _proposal_llm(state, "generate", "suggest", "medium", timeout=240)
         if not hasattr(llm, "complete_web"):
             raise HTTPException(503, f"웹 검색은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
+        from app.services.links.check import KnowledgeChecker
+        _, check_llm = _proposal_llm(state, "check", "knowledge_check", "low", default_model=CHECK_MODEL)
         gen = state.knowledge_generator = KnowledgeGenerator(llm, Path("data/private/cache/new-knowledge"),
-                                                             os.environ.get("AI_SEARCH_TOOL") or WEB_SEARCH_BASIC)
+                                                             os.environ.get("AI_SEARCH_TOOL") or WEB_SEARCH_BASIC,
+                                                             checker=KnowledgeChecker(check_llm, Path("data/private/cache/knowledge-checks")))
     return gen
+
+
+class SrcRef(BaseModel):
+    noteId: str
+    note: str
+    start: int
+    end: int
+    quote: str
+
+
+class ExtRef(BaseModel):
+    url: str
+    title: str | None = None
+    quote: str | None = None
+    retrievedAt: str | None = None
 
 
 class GenSide(BaseModel):
@@ -894,6 +1020,15 @@ class GenSide(BaseModel):
     start: int
     end: int
     quote: str
+    origin: str = "extracted"          # generated: '이해함' 으로 받아들인 새 지식 (아래 세 칸이 따라온다)
+    notes: list[str] = []
+    sources: list[SrcRef] = []
+    external: list[ExtRef] = []
+
+
+def _share_note(a: "GenSide", b: "GenSide") -> bool:
+    """두 요소가 기댄 노트가 겹치는가 (받아들인 새 지식은 기댄 노트들, 아니면 자기 노트 하나)."""
+    return bool((set(a.notes) or {a.note}) & (set(b.notes) or {b.note}))
 
 
 class GenerateQuery(BaseModel):
@@ -911,56 +1046,54 @@ async def proposal_generate(q: GenerateQuery, request: Request):
     if not _loopback(request):
         raise HTTPException(403, "로컬에서만 부를 수 있다")
     gen = _knowledge_generator(request.app.state)
-    if q.a.note == q.b.note:
-        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
+    if _share_note(q.a, q.b):
+        raise HTTPException(400, "서로 다른 노트에 기댄 요소여야 한다")
     a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
     try:
         res = await run_in_threadpool(gen.generate, a, b, uid("generated", q.a.conceptId, q.b.conceptId))
     except LLMError as e:
         raise HTTPException(502, f"생성 LLM 오류: {e.kind}")
-    return res
+    return {**res, **_card_ids(q.a, q.b)}
+
+
+def _card_ids(a: "GenSide", b: "GenSide") -> dict:
+    """카드의 지문과 기댄 내용 해시 (candidates 의 fingerprint·basisHash 와 같은 값). 짝의 순서와 무관하다."""
+    from app.services.links.pairing import pair_basis, pair_fingerprint
+
+    return {"fingerprint": pair_fingerprint(a.conceptId, b.conceptId), "basisHash": pair_basis(a.conceptId, a.text, b.conceptId, b.text)}
 
 
 class _Cancelled(Exception):
     """화면이 연결을 끊었다. 모델 호출을 멈추려고 진행 알림 콜백에서 던진다."""
 
 
-@router.post("/proposals/generate/stream")
-async def proposal_generate_stream(q: GenerateQuery, request: Request):
-    """/proposals/generate 와 같은 일을 하되, 진행 상황을 SSE(text/event-stream) 로 그때그때 보낸다.
-    이벤트 (event: 이름 / data: JSON, 모두 t = 시작 뒤 초):
-      start(model, tool) · cached · thinking · search_start · search(query) · search_results(results[{url,title}]) ·
-      writing(chars) · validating(sources) · result(result = /proposals/generate 의 응답) · error(status, message)
-    연결을 끊으면 모델 호출도 멈춘다 (검색·토큰을 더 쓰지 않는다). 사전 검사 실패(403·503·400)는 보통 HTTP 오류로 돌려준다."""
-    from app.client import uid
+def _sse_job(request: Request, work) -> StreamingResponse:
+    """work(emit) 를 스레드에서 돌리고 emit 한 이벤트(dict, "type" 이 SSE 이벤트 이름)를 text/event-stream 으로 흘린다.
+    모든 이벤트에 t = 시작 뒤 초가 붙는다. 10초 동안 조용하면 `: keep-alive` 를 보낸다. 모델 오류는 error 이벤트로 끝낸다.
+    연결이 끊기면 다음 emit 에서 _Cancelled 가 올라가 일이 멈춘다 (모델 스트림이 닫혀 토큰을 더 쓰지 않는다)."""
     from app.services.llm import LLMError
 
-    if not _loopback(request):
-        raise HTTPException(403, "로컬에서만 부를 수 있다")
-    gen = _knowledge_generator(request.app.state)
-    if q.a.note == q.b.note:
-        raise HTTPException(400, "서로 다른 노트의 요소여야 한다")
-    a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
     loop, queue, cancelled, t0 = asyncio.get_running_loop(), asyncio.Queue(), threading.Event(), time.monotonic()
+    stamp = lambda ev: {**ev, "t": round(time.monotonic() - t0, 1)}
 
     def emit(ev: dict):
         if cancelled.is_set():
             raise _Cancelled()
-        loop.call_soon_threadsafe(queue.put_nowait, {**ev, "t": round(time.monotonic() - t0, 1)})
+        loop.call_soon_threadsafe(queue.put_nowait, stamp(ev))
 
-    def work():
+    def runner():
         try:
-            emit({"type": "result", "result": gen.generate(a, b, uid("generated", q.a.conceptId, q.b.conceptId), on_event=emit)})
+            work(emit)
         except _Cancelled:
             pass
         except LLMError as e:
-            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "status": 502, "message": f"생성 LLM 오류: {e.kind}", "t": round(time.monotonic() - t0, 1)})
+            loop.call_soon_threadsafe(queue.put_nowait, stamp({"type": "error", "status": 502, "message": f"LLM 오류: {e.kind}"}))
         except Exception as e:                                        # 스트림이 말없이 끊기지 않게 끝을 알린다
-            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "status": 500, "message": f"{type(e).__name__}", "t": round(time.monotonic() - t0, 1)})
+            loop.call_soon_threadsafe(queue.put_nowait, stamp({"type": "error", "status": 500, "message": f"{type(e).__name__}"}))
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
-    task = asyncio.ensure_future(run_in_threadpool(work))
+    task = asyncio.ensure_future(run_in_threadpool(runner))
 
     async def stream():
         try:
@@ -980,6 +1113,235 @@ async def proposal_generate_stream(q: GenerateQuery, request: Request):
             task.done()                                               # task 를 끝까지 붙들어 둔다 (참조가 사라지면 일이 취소될 수 있다)
 
     return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/proposals/generate/stream")
+async def proposal_generate_stream(q: GenerateQuery, request: Request):
+    """/proposals/generate 와 같은 일을 하되, 진행 상황과 **결론이 쓰이는 대로** SSE(text/event-stream) 로 보낸다.
+    이벤트 (event: 이름 / data: JSON, 모두 t = 시작 뒤 초):
+      start(model, tool) · cached · thinking · search_start · search(query) · search_results(results[{url,title}]) · writing(chars) ·
+      field(path, delta | value: 모델이 쓰는 JSON 의 newKeyword·conclusion·reason 등이 토큰마다) · validating(sources) · result(result) · error(status, message)
+    연결을 끊으면 모델 호출도 멈춘다 (검색·토큰을 더 쓰지 않는다). 사전 검사 실패(403·503·400)는 보통 HTTP 오류로 돌려준다."""
+    from app.client import uid
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    gen = _knowledge_generator(request.app.state)
+    if _share_note(q.a, q.b):
+        raise HTTPException(400, "서로 다른 노트에 기댄 요소여야 한다")
+    a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
+    cid = uid("generated", q.a.conceptId, q.b.conceptId)
+    ids = _card_ids(q.a, q.b)
+    return _sse_job(request, lambda emit: emit({"type": "result", "result": {**gen.generate(a, b, cid, on_event=emit), **ids}}))
+
+
+class AcceptQuery(BaseModel):
+    a: GenSide
+    b: GenSide
+    newKeyword: str
+    conclusion: str
+    external: list[ExtRef] = []
+
+
+@router.post("/proposals/accept")
+async def proposal_accept(q: AcceptQuery, request: Request):
+    """새 지식 카드의 '이해함': 카드를 지식 그래프의 generated 개념으로 받아들인다 (app/services/links/accepted.py).
+    다음 제안부터 이 지식이 다른 노트의 요소와 이어지는 재료가 된다. 노트 원문은 건드리지 않는다. 같은 카드를 다시 보내도 하나다.
+    카드가 기댄 구간은 지금 저장된 노트에 그대로 있어야 한다. 로컬 접속만 받는다 (노트 구간을 저장한다)."""
+    from app.client import uid
+    from app.services.links.accepted import AcceptError, build_record, fingerprint_of, locate, status_of
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if _share_note(q.a, q.b):
+        raise HTTPException(400, "서로 다른 노트에 기댄 요소여야 한다")
+    state = request.app.state
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    texts = {k: n.text for k, n in corpus.notes.items()}
+    try:
+        rec = build_record(q.a.model_dump(), q.b.model_dump(), q.newKeyword, q.conclusion, [e.model_dump() for e in q.external],
+                           uid("generated", q.a.conceptId, q.b.conceptId))
+    except AcceptError as e:
+        raise HTTPException(400, str(e))
+    paths = _note_paths()
+    if any(s["note"] not in paths for s in rec["sources"]):        # 저장된 노트가 아닌 글(직접 입력)은 나중에 다시 확인할 수 없다
+        raise HTTPException(400, "저장된 노트에서 나온 카드만 받아들인다")
+    if locate(rec, texts) is None:
+        raise HTTPException(400, "카드가 기댄 문장이 지금 노트에 없다")
+    store = _accepted_store(state)
+    saved = store.add(rec)
+    cleared = _known_store(state).remove(fingerprint_of(saved))             # 이해함으로 바꾸면 '알고 있던 내용' 표시는 지운다
+    return {"accepted": status_of(saved, texts), "total": len(store.all()), "clearedKnown": cleared}
+
+
+class KnownQuery(BaseModel):
+    a: GenSide
+    b: GenSide
+    conclusion: str | None = None      # 카드가 이미 만들어졌다면 그 결론 (되돌릴 때 무엇이었는지 보이려고)
+
+
+@router.post("/proposals/known")
+async def proposal_known(q: KnownQuery, request: Request):
+    """새 지식 카드의 '알고 있던 내용': 이 짝은 다시 추천하지 않는다 (지문 = 두 요소의 개념 id, 순서·노트 수정과 무관). 이미 이해함으로 받아들인 카드라면 그것은 그래프에서 뺀다.
+    LLM 을 부르지 않는다. 로컬 접속만 받는다 (노트 문장을 저장한다)."""
+    from app.services.links.accepted import AcceptError, fingerprint_of, known_record
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    state = request.app.state
+    try:
+        rec = known_record(q.a.model_dump(), q.b.model_dump(), q.conclusion)
+    except AcceptError as e:
+        raise HTTPException(400, str(e))
+    saved = _known_store(state).add(rec)
+    accepted = _accepted_store(state)
+    gone = [r["conceptId"] for r in accepted.all() if fingerprint_of(r) == saved["fingerprint"]]
+    for cid in gone:                                                    # 알고 있던 내용으로 바꾸면 이해함으로 받아들인 지식은 뺀다
+        accepted.remove(cid)
+    return {"known": saved, "total": len(_known_store(state).all()), "removedAccepted": gone}
+
+
+@router.get("/knowledge/known")
+async def known_list(request: Request):
+    """'알고 있던 내용' 으로 답한 짝 (다시 추천하지 않는다). 되돌리려면 DELETE."""
+    items = sorted(_known_store(request.app.state).all(), key=lambda r: r["createdAt"], reverse=True)
+    return {"items": items}
+
+
+@router.delete("/knowledge/known/{fingerprint}")
+async def known_remove(fingerprint: str, request: Request):
+    """'알고 있던 내용' 을 되돌린다: 다음 분석부터 이 짝이 다시 후보에 오른다."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not _known_store(request.app.state).remove(fingerprint):
+        raise HTTPException(404, "알고 있던 내용으로 답한 짝이 아니다")
+    return {"removed": fingerprint}
+
+
+@router.get("/knowledge/accepted")
+async def accepted_list(request: Request):
+    """받아들인 새 지식과 상태: live (재료로 쓰인다) · evidence_lost (기댄 문장이 노트에서 사라져 재료로 쓰지 않는다).
+    usable=false 는 결론이 요소로 쓰기에 너무 길거나 짧은 것 (제안 색인의 gate 와 같은 기준)이다."""
+    from app.services.links.accepted import status_of
+
+    state = request.app.state
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    texts = {k: n.text for k, n in corpus.notes.items()}
+    items = [status_of(r, texts) for r in _accepted_store(state).all()]
+    return {"items": items, "live": sum(1 for i in items if i["status"] == "live" and i["usable"])}
+
+
+@router.delete("/knowledge/accepted/{concept_id}")
+async def accepted_remove(concept_id: str, request: Request):
+    """'이해함' 을 되돌린다: 그래프에서 이 지식을 뺀다 (이것에 기대어 받아들인 다른 지식은 남는다)."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not _accepted_store(request.app.state).remove(concept_id):
+        raise HTTPException(404, "받아들인 지식이 아니다")
+    return {"removed": concept_id}
+
+
+def _screen_judge(state):
+    from app.services.links.pair_screen import PairScreen
+
+    judge = getattr(state, "pair_screen", None)
+    if judge is None:
+        _, llm = _proposal_llm(state, "screen", "pair_screen", "low", default_model=SCREEN_MODEL)
+        judge = state.pair_screen = PairScreen(llm, Path("data/private/cache/pair-screens"))
+    return judge
+
+
+@router.post("/proposals/screen/stream")
+async def proposal_screen_stream(q: ScreenQuery, request: Request):
+    """/proposals/screen 과 같은 일을 하되, 쌍마다 라벨과 메모가 **쓰이는 대로** SSE 로 보낸다.
+    이벤트: pair(id, field: label|conclusion, delta | value) — 쓰이는 대로 · pair_done(id, label, conclusion, cached) — 그 쌍이 확정 ·
+    result(results, model, promptVersion) · error. 저장된 쌍은 시작하자마자 pair_done 이다."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not 1 <= len(q.pairs) <= MAX_SCREEN:
+        raise HTTPException(400, f"쌍은 1~{MAX_SCREEN}개")
+    judge = _screen_judge(request.app.state)
+    pairs = [{"id": p.id, "a": {"keyword": p.a.keyword[:100], "text": p.a.text[:600]}, "b": {"keyword": p.b.keyword[:100], "text": p.b.text[:600]}}
+             for p in q.pairs]
+    return _sse_job(request, lambda emit: emit({"type": "result", "results": judge.screen(pairs, on_event=emit), "model": judge.model,
+                                                "promptVersion": judge.prompt_version}))
+
+
+class ConceptItem(BaseModel):
+    note: str
+    text: str
+
+
+class ConceptSide(BaseModel):
+    name: str
+    concepts: list[ConceptItem]
+
+
+class ConceptRelationQuery(BaseModel):
+    a: ConceptSide
+    b: ConceptSide
+
+
+def _concept_sides(q: ConceptRelationQuery) -> tuple[dict, dict]:
+    for x in (q.a, q.b):
+        if not 1 <= len(x.concepts) <= 6:
+            raise HTTPException(400, "키워드마다 설명은 1~6개")
+    side = lambda x: {"name": x.name[:100], "concepts": [{"note": c.note[:200], "text": c.text[:600]} for c in x.concepts]}
+    return side(q.a), side(q.b)
+
+
+@router.post("/keyword-relation/concepts")
+async def keyword_relation_concepts(q: ConceptRelationQuery, request: Request):
+    """증거 문장이 없는 두 키워드의 관계를 두 키워드의 설명(노트에서 뽑은 문장)만으로 LLM 에 묻는다 (눌렀을 때만, 로컬 접속만).
+    related 는 설명이 관계를 말할 때만이고 일반 상식에 기댄 판정은 weak 까지다. 양쪽 설명을 인용하지 못하면 unsure."""
+    from app.services.llm import LLMError
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    a, b = _concept_sides(q)
+    judge = _relation_judge(request.app.state)
+    try:
+        res = await run_in_threadpool(judge.judge_concepts, a, b)
+    except LLMError as e:
+        raise HTTPException(502, f"관계 확인 LLM 오류: {e.kind}")
+    from app.services.links.relation_llm import CONCEPT_PROMPT_VERSION
+    return {**res, "model": judge.model, "promptVersion": CONCEPT_PROMPT_VERSION}
+
+
+@router.post("/keyword-relation/concepts/stream")
+async def keyword_relation_concepts_stream(q: ConceptRelationQuery, request: Request):
+    """/keyword-relation/concepts 와 같은 일을 하되, 판정이 **쓰이는 대로** SSE 로 보낸다. 이벤트: cached · field(path, delta | value) · result(result) · error."""
+    from app.services.links.relation_llm import CONCEPT_PROMPT_VERSION
+
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    a, b = _concept_sides(q)
+    judge = _relation_judge(request.app.state)
+
+    def work(emit):
+        res = judge.judge_concepts(a, b, on_event=emit)
+        emit({"type": "result", "result": {**res, "model": judge.model, "promptVersion": CONCEPT_PROMPT_VERSION}})
+    return _sse_job(request, work)
+
+
+@router.post("/keyword-relation/stream")
+async def keyword_relation_stream(q: RelationQuery, request: Request):
+    """/keyword-relation 과 같은 일을 하되, 판정의 verdict·type·direction·reason 이 **쓰이는 대로** SSE 로 보낸다.
+    이벤트: cached · field(path, delta | value) · result(result = /keyword-relation 의 응답) · error."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    if not 1 <= len(q.evidence) <= 12:
+        raise HTTPException(400, "증거는 1~12개")
+    if any(e.level not in ("sentence", "heading", "paragraph", "path") for e in q.evidence):
+        raise HTTPException(400, "level 은 sentence · heading · paragraph · path")
+    side = lambda x: {"name": x.name[:100], "concepts": [c[:400] for c in x.concepts[:6]]}
+    ev = [{"level": e.level, "label": e.label[:200], "note": e.note[:200], "text": e.text[:800]} for e in q.evidence]
+    judge = _relation_judge(request.app.state)
+
+    def work(emit):
+        res = judge.judge(side(q.a), side(q.b), ev, on_event=emit)
+        emit({"type": "result", "result": {**res, "model": judge.model, "promptVersion": judge.prompt_version}})
+    return _sse_job(request, work)
 
 
 # ---- 관계 연결 그래프 ----

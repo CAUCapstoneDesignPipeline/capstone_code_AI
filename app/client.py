@@ -473,6 +473,30 @@ def pick_insights(derivations: list[dict], k: int = 5) -> list[dict]:
     return cards[:k]
 
 
+def reconcile_cards(shown: list[dict], cards: list[dict], dismissed: set[str] = frozenset()) -> list[dict]:
+    """다시 분석한 카드(pick_insights 결과)를 이미 보여 준 카드와 맞춘다. BE 가 카드 id 를 이어 가는 규칙의 참조 구현이다.
+
+    shown: 지금 있는 카드 [{"id", "fingerprint", "basisHash"}] (BE 가 카드를 만들 때 AI 응답에서 저장한 값).
+    cards: 새 분석의 카드 (응답의 fingerprint·basisHash 가 있다). dismissed: 사용자가 '알고 있던 내용' 으로 답한 지문.
+    같은 지문은 id 를 그대로 둔다 — 결론 문장은 규칙이 다시 쓰므로 지문에 넣지 않는다.
+    돌려주는 목록 (shown 순서, 이어서 새 카드):
+      same     같은 지문, 기댄 사실이 그대로 → 내용 갱신 없음 (노트의 다른 곳을 고쳤을 뿐이다)
+      updated  같은 지문, 기댄 사실이나 규칙이 바뀜 → id 유지, revision 을 올리고 내용을 새 카드로 바꾼다
+      lost     새 분석에 그 지문이 없다 → 근거가 사라졌다 (evidence_lost): 카드는 두되 답할 수 없게 한다
+      new      처음 보는 지문 → 새 카드 (dismissed 에 있으면 내지 않는다)
+    """
+    now = {c["fingerprint"]: c for c in cards}
+    out = []
+    for old in shown:
+        c = now.pop(old["fingerprint"], None)
+        if c is None:
+            out.append({"id": old["id"], "action": "lost", "card": None})
+        else:
+            out.append({"id": old["id"], "action": "same" if c["basisHash"] == old["basisHash"] else "updated", "card": c})
+    out += [{"id": None, "action": "new", "card": c} for fp, c in now.items() if fp not in dismissed]
+    return out
+
+
 async def derive_insights(client: AiClient, note: dict, others: list[dict], facts_cache: dict | None = None,
                           facts_profile: str = "facts-llm-3", derive_profile: str = "derive-sound-1",
                           k: int = 5) -> dict:
