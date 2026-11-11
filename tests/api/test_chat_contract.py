@@ -1,6 +1,6 @@
 """챗봇의 실제 응답이 내부 계약(docs 저장소 api/ai-openapi.yaml 의 /chat)과 같은가. 계약 파일이 없으면 건너뛴다.
 
-계약 파일 위치: 환경 변수 AI_CONTRACT_YAML, 없으면 이 저장소 옆의 docs/ · capstone_docs/ 의 api/ai-openapi.yaml.
+PyYAML 이 없거나 계약 파일이 없으면 건너뛴다. 계약 파일 위치: 환경 변수 AI_CONTRACT_YAML, 없으면 이 저장소 옆의 docs/ · capstone_docs/ 의 api/ai-openapi.yaml.
 jsonschema 에 기대지 않고 필요한 만큼(type·required·properties·additionalProperties·enum·길이·개수·pattern·$ref)만 직접 검사한다.
 """
 
@@ -9,8 +9,9 @@ import re
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
+
+yaml = pytest.importorskip("yaml")        # PyYAML 이 없는 환경(CI 의 잠긴 의존성)에서는 이 모듈을 건너뛴다
 
 from test_chat import TOKEN, FakeClient, call, make, sse
 
