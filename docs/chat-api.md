@@ -1,6 +1,6 @@
 # 챗봇 API: 새 지식 카드를 쉽게 풀어 주는 여러 턴 대화
 
-상태: 구현됨 (AI 서버, 제안 operation). 아직 계약 문서(`docs` 저장소의 `api/ai-api.md`·`ai-openapi.yaml`)에는 없다. BE 와 맞춘 뒤 올린다.
+상태: 구현됨 (AI 서버, 제안 operation). 내부 계약 문서(`docs` 저장소 `api/ai-openapi.yaml` 의 `/chat`, `api/ai-api.md`)에는 **제안**(`proposed-pending-team-review`)으로 올렸다 — 팀 검토 전이다. 계약과 실제 응답이 같은지는 `tests/api/test_chat_contract.py` 가 계약 파일로 확인한다 (계약 파일이 없으면 건너뛴다: `AI_CONTRACT_YAML` 또는 이 저장소 옆의 `docs/api/ai-openapi.yaml`).
 회의록 10/30 "이해가 안 됨 → 챗봇으로 넘어간다. 근거 A, 근거 B, 외부 지식을 컨텍스트로 넘기고, 챗봇은 이를 쉽게 풀어 설명한다. 대화 응답은 BE·AI 가 맡는다" 를 구현한 것이다.
 코드: [`app/api/v1/chat.py`](../app/api/v1/chat.py) · [`app/services/chat.py`](../app/services/chat.py) · [`app/schemas/chat.py`](../app/schemas/chat.py).
 
