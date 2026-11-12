@@ -21,6 +21,7 @@
                           effort low). AI_VERIFY_CACHE 캐시 폴더 (기본 data/private/cache/verifications)
   AI_FACTS_LLM_PROVIDER / _MODEL / _EFFORT   계산용 사실 추출(facts-llm-3, AI_RELATION_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
   AI_SOUND_LLM_PROVIDER / _MODEL / _EFFORT   조건부 결론 판정(derive-sound-1, AI_VERIFY_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
+  AI_EXTERNAL_LLM         1 이면 외부 지식(/external-knowledge, 웹 검색) 을 켠다 (기본 0 — 비용·한도 결정 뒤 배포에서 명시적으로 켠다). 모델은 AI_EXTERNAL_LLM_PROVIDER / _MODEL / _EFFORT (anthropic 만, 기본 effort medium)
   AI_CHAT_LLM             1 이면 챗봇(/chat) 을 켠다 (기본 0 — 관계 판정 LLM 처럼 배포에서 명시적으로 켠다). 모델은 AI_CHAT_LLM_PROVIDER / _MODEL / _EFFORT (기본 anthropic claude-sonnet-5-5, effort low)
   AI_EMBEDDING_PROFILES   켤 임베딩 profile id, 쉼표로 구분 (기본 없음)
   AI_DEV_UI               1 이면 개발용 playground (/dev/) 를 붙인다. 배포에서는 켜지 않는다
@@ -109,6 +110,7 @@ class Settings:
     relation_cache: Path | None = Path("data/private/cache/relations")
     explain_llm: bool = False
     chat_llm: bool = False
+    external_llm: bool = False
     explain_cache: Path | None = Path("data/private/cache/explanations")
     verify_llm: bool = False
     verify_cache: Path | None = Path("data/private/cache/verifications")
@@ -127,6 +129,7 @@ class Settings:
             relation_cache=Path(env("AI_RELATION_CACHE", "data/private/cache/relations")),
             explain_llm=env("AI_EXPLAIN_LLM", "1") == "1",
             chat_llm=env("AI_CHAT_LLM", "0") == "1",
+            external_llm=env("AI_EXTERNAL_LLM", "0") == "1",
             explain_cache=Path(env("AI_EXPLAIN_CACHE", "data/private/cache/explanations")),
             verify_llm=env("AI_VERIFY_LLM", "1") == "1",
             verify_cache=Path(env("AI_VERIFY_CACHE", "data/private/cache/verifications")),

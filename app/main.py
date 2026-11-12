@@ -25,6 +25,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
 from app.api.v1 import chat as chat_api
+from app.api.v1 import external as external_api
 from app.api.v1 import derive, embeddings, extract, health, links, reasoning
 from app.api.v1.deps import UUID_RE
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES, Settings
@@ -66,7 +67,7 @@ def explain_llm_config():
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
                explanation_judge=None, merge_judge=None, concept_filter=None, fact_extractor=None,
-               soundness_judge=None, chat=None) -> FastAPI:
+               soundness_judge=None, chat=None, external_finder=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -138,6 +139,22 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 log.info("챗봇 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
             except Exception as e:      # /chat 만 준비되지 않은 상태로 둔다
                 log.error("챗봇 LLM 을 만들지 못했다: %s", e)
+        if st.external_finder is None and settings.external_llm:
+            try:
+                from app.services.links.external import ExternalKnowledgeFinder, SourceJudge
+                from app.services.llm import make_llm
+                cfg = role_llm_config("external", "medium")      # 검색하고 출처를 고르는 호출 (개발용 지식 생성과 같은 설정)
+                if cfg is None:
+                    raise ValueError("외부 지식 LLM 제공자가 없다 (AI_EXTERNAL_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
+                if cfg.provider != "anthropic":
+                    raise ValueError(f"외부 지식은 anthropic 제공자만 쓴다 (지금 {cfg.provider})")
+                jcfg = role_llm_config("verify", "low")          # 출처 판정은 검증 LLM 과 같은 설정 (제목·URL 만 보는 짧은 판단)
+                if jcfg is None:
+                    raise ValueError("출처 판정 LLM 제공자가 없다 (AI_VERIFY_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
+                st.external_finder = ExternalKnowledgeFinder(make_llm(cfg), SourceJudge(make_llm(jcfg)))
+                log.info("외부 지식 LLM: %s · %s · effort %s (출처 판정 %s)", cfg.provider, cfg.model, cfg.effort, jcfg.model)
+            except Exception as e:      # /external-knowledge 만 준비되지 않은 상태로 둔다
+                log.error("외부 지식 LLM 을 만들지 못했다: %s", e)
         if st.explainer is None and settings.explain_llm:
             from app.services.llm import make_llm
             from app.services.reasoning.explain_llm import ExplainLLM
@@ -192,6 +209,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.fact_extractor = fact_extractor
     app.state.soundness_judge = soundness_judge
     app.state.chat = chat
+    app.state.external_finder = external_finder
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()
@@ -212,7 +230,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
         return response
 
     install_handlers(app)
-    for router in (extract.router, embeddings.router, reasoning.router, links.router, derive.router, chat_api.router, health.router):
+    for router in (extract.router, embeddings.router, reasoning.router, links.router, derive.router, chat_api.router, external_api.router, health.router):
         app.include_router(router, prefix=API_PREFIX)
     if settings.dev_ui:                 # 개발용 playground. 로컬 노트를 읽으므로 배포에서는 켜지 않는다
         from pathlib import Path

@@ -29,6 +29,7 @@ docker build -t capstone-ai --build-arg SOURCE_REVISION=$(git rev-parse HEAD) .
 | `AI_RELATION_LLM=1` | 권장 | 관계를 LLM 으로 보탠다 (`extract-hybrid-2`, `links-hybrid-1`). 끄면 노트 사이 경로가 거의 없다. effort 기본 `low`. 계산용 사실 추출 `facts-llm-3` 도 이것으로 켜진다 (effort 기본 `medium`, `AI_FACTS_LLM_*`) |
 | `AI_VERIFY_LLM` | 아니오 | 기본 1. LLM 간선 검증 `edges-llm-1`·`edges-llm-2`, LLM 설명 검증 `explanation-hybrid-2`, LLM 병합 판정 `merge-hybrid-1` (effort `low`), 조건부 결론 판정 `derive-sound-1` (effort `medium`, `AI_SOUND_LLM_*`) |
 | `AI_CHAT_LLM=1` | 아니오 | 챗봇 `POST /internal/v1/chat` ([chat-api.md](chat-api.md)). **기본 꺼짐** — provider key 가 있어도 저절로 켜지지 않는다. 모델은 `AI_CHAT_LLM_PROVIDER`·`_MODEL`·`_EFFORT` (기본 `claude-sonnet-5-5`, `low`). 스트림 하나가 처리 자리(`AI_MAX_INFLIGHT`) 하나를 끝날 때까지 쓴다 |
+| `AI_EXTERNAL_LLM=1` | 아니오 | 외부 지식 `POST /internal/v1/external-knowledge` ([external-knowledge.md](external-knowledge.md), 웹 검색 한 번). **기본 꺼짐** — 사용자 데이터가 검색 제공자로 나가므로 보존 계약 승인 뒤 명시적으로 켠다. 모델은 `AI_EXTERNAL_LLM_PROVIDER`(anthropic 만)·`_MODEL`·`_EFFORT` (기본 effort `medium`), 출처 판정은 `AI_VERIFY_LLM_*` |
 | `AI_EMBEDDING_PROFILES` | 아니오 | 켤 임베딩 profile. 별칭 병합 후보 찾기는 `embeddings-bge-m3-1` (약 2 GB 메모리, [선택 근거](eval/alias-embeddings.md)). embeddings extra 로 빌드한 이미지만 |
 | `AI_MAX_INFLIGHT`, `AI_LLM_TIMEOUT_SECONDS` | 아니오 | 동시성, LLM 한 번 호출 제한(기본 90초) |
 
@@ -159,7 +160,7 @@ manifest v1은 `deploy/gcp/manifest.py`로 검증한다. 필수 필드:
 | `profiles` | 준비되어야 할 전체 profile; dev profile 금지 |
 | `idf` | AI artifact bucket/object, 양의 숫자 generation, SHA256, 일치 source SHA |
 | `provider` | `name`, relation/facts/explain/verify/sound별 명시 `models`·`efforts`, timeout≤90초 |
-| `flags` | relation/explain/verify 명시 boolean. 켜진 profile은 readiness와 대조. 선택으로 `chat` boolean — `true` 이면 챗봇을 켠다 (`provider.models.chat`·`efforts.chat` 이 함께 고정되어 있어야 한다). 없으면 host driver 가 `AI_CHAT_LLM=0` 을 명시해 챗봇이 꺼진다 (옛 manifest 도 그대로 유효) |
+| `flags` | relation/explain/verify 명시 boolean. 켜진 profile은 readiness와 대조. 선택으로 `chat` boolean — `true` 이면 챗봇을 켠다 (`provider.models.chat`·`efforts.chat` 이 함께 고정되어 있어야 한다). 없으면 host driver 가 `AI_CHAT_LLM=0` 을 명시해 챗봇이 꺼진다 (옛 manifest 도 그대로 유효). 같은 방식의 선택으로 `external`: `flags.external` · `provider.models.external` · `provider.efforts.external` (외부 지식, 기본 꺼짐) |
 | `secrets` | serviceToken/providerKey/tlsBundle 전체 resource와 숫자 version |
 | `tls` | zonal 내부 DNS SAN, public CA PEM SHA256 |
 | `cache` | `responses: disabled`, `modelScope: pinned-revision` |

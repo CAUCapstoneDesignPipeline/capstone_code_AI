@@ -326,3 +326,32 @@ def test_chat_options_do_not_loosen_the_rest_of_the_manifest(change):
     change(m)
     with pytest.raises(ValueError):
         validate(m)
+
+
+# ---- 외부 지식: 챗봇과 같은 선택 role·flag ----
+
+def with_role(m, role, flag=True, model="synthetic-ext-1", effort="medium"):
+    m["provider"]["models"][role], m["provider"]["efforts"][role] = model, effort
+    if flag is not None:
+        m["flags"][role] = flag
+    return m
+
+
+def test_external_knowledge_is_an_optional_role_and_flag_like_chat():
+    assert validate(with_role(manifest(), "external"))
+    assert validate(with_role(manifest(), "external", flag=False))
+    assert validate(with_role(manifest(), "external", flag=None))
+    assert validate(with_role(with_role(manifest(), "chat"), "external"))       # 둘을 함께 켤 수 있다
+
+
+@pytest.mark.parametrize("change", [
+    lambda m: m["flags"].update(external=True),                                                 # 켜려면 고정한 external 모델이 있어야 한다
+    lambda m: m["provider"]["models"].update(external="synthetic-ext-1"),                       # 모델만 있고 effort 가 없다
+    lambda m: with_role(m, "external").update(flags={**m["flags"], "external": "true"}),        # bool 이 아니다
+    lambda m: with_role(m, "external", effort="max")])                                          # 정해진 effort 가 아니다
+def test_external_options_do_not_loosen_the_manifest(change):
+    m = manifest()
+    change(m)
+    with pytest.raises(ValueError):
+        validate(m)
+

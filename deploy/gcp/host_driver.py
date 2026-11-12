@@ -117,7 +117,8 @@ class HostDriver:
                 env[f"AI_{role.upper()}_LLM_EFFORT"] = manifest["provider"]["efforts"][role]
             for key, enabled in manifest["flags"].items():
                 env[f"AI_{key.upper()}_LLM"] = "1" if enabled else "0"
-            env.setdefault("AI_CHAT_LLM", "0")           # manifest 에 chat flag 가 없으면 챗봇은 꺼 둔다 (앱의 기본값에 기대지 않고 명시한다)
+            for optional in ("CHAT", "EXTERNAL"):        # manifest 에 그 flag 가 없으면 챗봇·외부 지식은 꺼 둔다 (앱의 기본값에 기대지 않고 명시한다)
+                env.setdefault(f"AI_{optional}_LLM", "0")
             compose = {"name": "capstone-ai", "services": {"ai": {
                 "image": manifest["image"], "platform": "linux/amd64", "user": "10001:10001",
                 "read_only": True, "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],

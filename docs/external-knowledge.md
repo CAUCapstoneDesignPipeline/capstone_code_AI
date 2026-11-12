@@ -1,7 +1,7 @@
 # 추천 카드의 외부 지식 (요약·출처 URL) — 제안
 
-이슈 [#19](https://github.com/CAUCapstoneDesignPipeline/capstone_code_AI/issues/19). 상태: **제안 — AI 에 이 operation 은 아직 없다.** 같은 방법은 playground 의 새 지식 만들기(`/dev/*`)에서만 돈다.
-계약 초안은 docs 저장소의 `api/ai-openapi.yaml` `/external-knowledge` (`findExternalKnowledge`, 제안)이다. 이 문서는 방법 · 출처 검증 기준 · 비용 추정 · 팀이 정할 것을 적는다.
+이슈 [#19](https://github.com/CAUCapstoneDesignPipeline/capstone_code_AI/issues/19). 상태: **AI 에 구현했다 (`POST /internal/v1/external-knowledge`, profile `external-knowledge-llm-1`). 기본 꺼짐** — 운영에서 켜는 것은 아래 "정한 것"의 조건을 BE·배포 담당이 받아들인 뒤다.
+계약은 docs 저장소의 `api/ai-openapi.yaml` `/external-knowledge` (`findExternalKnowledge`)이다. 이 문서는 방법 · 출처 검증 기준 · 비용 · 정한 것 · 켜는 법을 적는다.
 
 ## 무엇을 만드나
 
@@ -68,15 +68,36 @@ FE 카드의 `externalKnowledge` (`summary`, `sourceUrl`)를 채우는 용도다
 
 계약은 **배열(최대 3, 뒷받침이 강한 순)** 로 정했다. FE 명세는 아직 하나(`externalKnowledge` 하나)인데, 배열이면 BE 가 첫 항목을 쓰면 되고 나중에 FE 가 여럿을 보여 주기로 해도 계약이 바뀌지 않는다. 첫 링크가 죽었을 때를 위한 여분도 된다. 비용은 같다.
 
-## 팀이 정할 것
+## 정한 것 (AI 쪽 결정. 바꿀 수 있다)
 
-1. **검색 provider**: Anthropic 의 서버 검색 도구(지금 측정한 것, 검색 $10/1,000회)로 갈지, 별도 검색 API 를 쓸지. 별도 API 면 비용·출처 검증을 다시 재야 한다.
-2. **비용·한도**: 카드 하나 약 $0.035 와 분석 한 번 최대 약 $0.18 을 받아들일지, 사용자·일 단위 상한을 둘지.
-3. **사용자 데이터 보존 계약** (위).
-4. **하나인가 여럿인가** (FE 명세).
-5. 페이지를 실제로 가져와 요약을 확인할 것인가 (정확도는 오르지만 별도 도구·다운로드·비용이 든다).
+이슈에서 "팀이 정할 것" 으로 남겼던 것을 AI 담당이 아래처럼 정하고 구현했다. 모두 환경 변수·manifest 로 바꿀 수 있고, 켜기 전에 BE·배포 담당이 3·4 를 받아들여야 한다.
+
+1. **검색**: Anthropic 의 서버 검색 도구 `web_search_20250305`(기본형, 검색 $10/1,000회)를 **호출당 한 번**. 기본형이 최신형보다 입력 토큰이 약 6배 적다. 별도 검색 API 는 쓰지 않는다.
+2. **하나인가 여럿인가**: 배열 최대 3, 기본 `maxSources=1`. BE 는 첫 항목을 쓰면 된다 (계약).
+3. **비용·한도**: 호출 하나가 검색 1회 + 모델 입력 약 4~7천·출력 약 0.3~1천 토큰 + 출처 판정(작은 모델, 입력 약 650) 이다. **사용자·일 단위 상한은 AI 가 두지 않는다** — 호출 수를 정하는 것은 BE 다 ("시간과 용량" 의 권고: 화면에 보일 카드에만, 분석 뒤 비동기로, 결과는 BE 저장). AI 는 호출마다 `usage` 를 돌려줘 BE 가 비용을 센다.
+4. **사용자 데이터**: 결론과 근거 문장이 모델 제공자로 나간다 (검색어에 섞일 수 있다). 응답은 AI 가 저장하지 않는다 (release manifest 는 응답 캐시를 끈다). **보존 계약이 승인되기 전에는 운영에서 켜지 않는다** — 그래서 기본 꺼짐이다.
+5. **페이지를 가져와 읽지 않는다.** 요약은 모델이 검색 결과에서 옮긴 한 문장이고 원문 인용이 아니다. 출처가 결론을 정말 뒷받침하는지는 모델 판단이며 사실 확인이 아니다.
+
+## 구현 (`app/services/links/external.py`)
+
+1. 모델이 검색을 **한 번** 하고 `submit_external_knowledge` 로 `{url, summary}` 목록을 낸다 (일반 글로 답하지 않는다).
+2. 코드가 거른다: 검색 결과에 없던 URL(지어낸 것), 안전하지 않은 URL(http·https 만, 2,048자 이하, 공백·사용자 정보 없음, localhost·`.internal`·`.local`·사설·링크 로컬 주소 아님), 중복 URL, 비었거나 300자를 넘는 요약(**자르지 않고 버린다**). 제목은 검색 결과의 것을 쓴다 (모델이 쓰지 않는다). `/` 로 끝나는 차이는 같은 URL 로 본다.
+3. 남은 출처가 있으면 별도 판정(웹 검색 없음, 검증 LLM, effort low)이 **제목과 URL 만 보고** `yes · partly · no` 를 정한다. 모델이 쓴 요약은 주지 않는다 (무관한 페이지도 그럴듯하게 요약해 판정이 속았다 — [check.py](../app/services/links/check.py)). `no` 와 판정에서 빠진 것은 버린다.
+4. `yes` → `partly` 순으로 `maxSources` 개까지. 하나도 없으면 오류가 아니라 `status: none` (200).
+5. 응답은 코드가 계약대로 다시 검사한다 (`found` ⇔ 항목 있음, `maxSources` 초과·URL 중복·안전하지 않은 URL·정렬 위반이면 502 `INVALID_MODEL_OUTPUT`). 자동 재시도·모델 fallback 은 없다.
+
+처리 자리는 다른 LLM operation 과 같은 `AI_MAX_INFLIGHT` 하나를 쓰고, 가득 차면 429 `AI_BUSY`, 115초를 넘기면 504 `MODEL_TIMEOUT` 이다. 실측 (공개 문서 같은 결론 3개, 호출 한 번): 4~9초, 검색 1회, 입력 약 3.7~7천 토큰(캐시 읽기 포함)·출력 약 0.2~0.5천. 말이 안 되는 결론(고양이 사료 ↔ 해시 충돌)은 `none` 이었다.
+
+## 켜는 법
+
+| 어디서 | 설정 |
+| --- | --- |
+| 로컬·서버 환경 변수 | `AI_EXTERNAL_LLM=1` (기본 0). 모델은 `AI_EXTERNAL_LLM_PROVIDER`(anthropic 만)·`_MODEL`·`_EFFORT` (기본 effort medium). 출처 판정은 `AI_VERIFY_LLM_*` 설정을 쓴다. 만들지 못하면 이 operation 만 503 |
+| release manifest | 선택: `provider.models.external`·`provider.efforts.external` 와 `flags.external: true`. 켜려면 모델·effort 가 함께 고정되어 있어야 하고, 없으면 host driver 가 `AI_EXTERNAL_LLM=0` 을 명시한다 (옛 manifest 도 그대로 유효). 챗봇(`chat`)과 같은 방식이다 |
+
+배포 도구는 SHA 로 고정되어 있어 이 manifest 선택지는 새 이미지·pin 갱신과 함께 나간다 ([deploy.md](deploy.md)). 꺼진 동안 BE 는 대역(또는 호출 안 함)으로 카드를 채운다.
 
 ## 이 문서가 닫지 않는 것
 
-이슈 #19 의 완료 조건은 "내부 계약에 외부 지식 필드가 정의되고, 대역 응답으로 BE 가 카드에 채울 수 있다" 이다. 계약 초안(docs 저장소 PR)에 응답 예시(`found`·`none`)가 있어 BE 가 대역으로 카드를 채울 수는 있다.
-**AI 가 이 operation 을 실제로 구현하는 것은 위 결정(특히 1~3) 뒤에 한다.** 그때까지 이슈는 열어 둔다.
+- 운영에서 켜는 일 (보존 계약 승인, 호출 상한 정책, manifest 에 `external` 모델·flag 를 넣은 release) 은 BE·배포 담당 몫이다.
+- 출처의 사실 정확성은 검증하지 않는다 (제목·URL 로 본 주제 일치 판정뿐).
