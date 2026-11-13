@@ -2,6 +2,7 @@
 
   AiClient           계약 헤더(Bearer, X-Request-Id, X-Attempt-Id, Idempotency-Key, X-Input-SHA256)를 붙여 호출
   suggest_knowledge  노트 하나에서 시작하는 전체 흐름:
+      0. 개념 추출은 두 단계로 할 수 있다: `extract_progressive` (아래) — 빠른 학생 결과를 먼저 저장하고 LLM 결과로 바꿔 넣는다
       1. /note-links                연결된 노트와 A-B-C 경로 후보 (AI 제안 operation. 계약상 BE 가 직접 해도 된다).
                                     links-hybrid-1 은 관계를 LLM 으로 보탠다 (규칙만으로는 경로가 거의 없다)
       2. /verifications/bridges     매개 개념 B 가 두 노트에서 같은 개념인가
@@ -428,6 +429,34 @@ async def _explain(client, note, p: _Prep, policy, explain_profile, verify_profi
 # ---- 조건부 결론 (R1 구현 적용 · R2 비용 합성) ----
 
 MAX_DERIVE_DOCS = 20
+
+
+def _loose_label(label: str) -> str:
+    return re.sub(r"[\s\-_·./()\[\]'\"]+", "", label.lower())
+
+
+def swap_concepts(fast: dict, refined: dict) -> dict:
+    """첫 결과(빠른 학생)를 나중 결과(LLM)로 바꿔 넣을 때 개념이 어떻게 달라지는가. 표기는 대소문자·공백·하이픈을 무시해 같은 개념으로 본다.
+    BE 는 나중 결과를 그 노트 리비전의 최종 개념 집합으로 삼고, `removed` 는 지우고 `added` 는 더하고 `kept` 는 그대로 둔다 (개념 id 는 BE 가 표기로 정한다)."""
+    f = {_loose_label(c["label"]): c["label"] for c in fast["concepts"]}
+    r = {_loose_label(c["label"]): c["label"] for c in refined["concepts"]}
+    return {"kept": sorted(r[k] for k in r if k in f), "added": sorted(r[k] for k in r if k not in f), "removed": sorted(f[k] for k in f if k not in r)}
+
+
+async def extract_progressive(client: AiClient, note: dict, policy: dict, fast: str = "extract-student-1", refined: str = "extract-llm-1"):
+    """개념 추출 두 단계 (BE 참조 구현). 비동기 제너레이터: 약 0.1초 뒤 ("fast", 응답), 몇 초 뒤 ("refined", 응답) 을 낸다.
+    LLM 단계가 실패하면 ("refine_failed", AiCallError) 를 내고 끝난다 — 호출한 쪽은 빠른 결과를 그대로 둔다 (자동 재시도·다른 모델 fallback 은 AI 가 하지 않는다).
+    두 호출은 서로 다른 stageExecutionId(= Idempotency-Key)를 쓴다 (client.context 가 호출마다 새로 만든다). 처리 자리는 호출마다 따로 쓴다."""
+    def body(profile):
+        return {"context": client.context(note), "profileVersion": profile, "note": note, "policy": policy}
+    first = await client.call("/extract", body(fast))
+    yield "fast", first
+    try:
+        second = await client.call("/extract", body(refined))
+    except AiCallError as e:
+        yield "refine_failed", e
+        return
+    yield "refined", second
 
 
 async def extract_facts(client: AiClient, note: dict, known_subjects: list[str] = (), profile: str = "facts-llm-3",

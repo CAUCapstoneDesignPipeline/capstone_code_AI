@@ -67,7 +67,7 @@ def explain_llm_config():
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
                explanation_judge=None, merge_judge=None, concept_filter=None, fact_extractor=None,
-               soundness_judge=None, chat=None, external_finder=None) -> FastAPI:
+               soundness_judge=None, chat=None, external_finder=None, student=None, concept_llm=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -139,6 +139,23 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 log.info("챗봇 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
             except Exception as e:      # /chat 만 준비되지 않은 상태로 둔다
                 log.error("챗봇 LLM 을 만들지 못했다: %s", e)
+        if st.student is None:
+            try:
+                from app.services.concepts.student import Student
+                st.student = Student.load()
+            except Exception as e:      # extract-student-1 만 준비되지 않은 상태로 둔다
+                log.error("학생 개념 선택기를 읽지 못했다: %s", e)
+        if st.concept_llm is None and settings.concepts_llm:
+            try:
+                from app.services.concepts.llm_concepts import ConceptLLM
+                from app.services.llm import make_llm
+                cfg = role_llm_config("concepts", "medium")      # 노트 전체를 읽고 개념을 뽑는다 (정확도는 medium 에서 잰 값)
+                if cfg is None:
+                    raise ValueError("개념 LLM 제공자가 없다 (AI_CONCEPTS_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
+                st.concept_llm = ConceptLLM(make_llm(cfg))
+                log.info("개념 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
+            except Exception as e:      # extract-llm-1 만 준비되지 않은 상태로 둔다
+                log.error("개념 LLM 을 만들지 못했다: %s", e)
         if st.external_finder is None and settings.external_llm:
             try:
                 from app.services.links.external import ExternalKnowledgeFinder, SourceJudge
@@ -210,6 +227,8 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.soundness_judge = soundness_judge
     app.state.chat = chat
     app.state.external_finder = external_finder
+    app.state.student = student
+    app.state.concept_llm = concept_llm
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()

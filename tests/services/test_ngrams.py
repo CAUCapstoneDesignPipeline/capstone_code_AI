@@ -1,4 +1,4 @@
-"""높은 재현율 후보 생성(토큰 n-gram): 영어 구절을 만들고, 문장부호·조사·가린 구간에서 끊는다."""
+"""높은 재현율 후보 생성 (app.services.concepts.ngrams, 토큰 n-gram): 영어 구절을 만들고, 문장부호·조사·가린 구간에서 끊는다."""
 
 import argparse
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.cli import load_extractor
-from experiments.distill.candidates import generate
+from app.services.concepts.ngrams import generate
 
 ROOT = Path(__file__).resolve().parents[2]
 

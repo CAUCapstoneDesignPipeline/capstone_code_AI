@@ -21,6 +21,7 @@
                           effort low). AI_VERIFY_CACHE 캐시 폴더 (기본 data/private/cache/verifications)
   AI_FACTS_LLM_PROVIDER / _MODEL / _EFFORT   계산용 사실 추출(facts-llm-3, AI_RELATION_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
   AI_SOUND_LLM_PROVIDER / _MODEL / _EFFORT   조건부 결론 판정(derive-sound-1, AI_VERIFY_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
+  AI_CONCEPTS_LLM         1 이면 LLM 으로 개념을 뽑는 profile(extract-llm-1) 을 켠다 (기본 0 — 노트 원문이 LLM 제공자로 나가고 호출마다 몇 초·비용이 든다). 모델은 AI_CONCEPTS_LLM_PROVIDER / _MODEL / _EFFORT (기본 effort medium)
   AI_EXTERNAL_LLM         1 이면 외부 지식(/external-knowledge, 웹 검색) 을 켠다 (기본 0 — 비용·한도 결정 뒤 배포에서 명시적으로 켠다). 모델은 AI_EXTERNAL_LLM_PROVIDER / _MODEL / _EFFORT (anthropic 만, 기본 effort medium)
   AI_CHAT_LLM             1 이면 챗봇(/chat) 을 켠다 (기본 0 — 관계 판정 LLM 처럼 배포에서 명시적으로 켠다). 모델은 AI_CHAT_LLM_PROVIDER / _MODEL / _EFFORT (기본 anthropic claude-sonnet-5-5, effort low)
   AI_EMBEDDING_PROFILES   켤 임베딩 profile id, 쉼표로 구분 (기본 없음)
@@ -53,6 +54,8 @@ class ExtractProfile:
     max_mentions: int = 20              # ExtractedConcept.mentions maxItems
     relations: str = "none"             # "none" 또는 "rules" / "structure" / "llm" 을 + 로 이은 것
     concept_filter: bool = False        # 결정적으로 뽑은 개념 후보 중 개념이 아닌 것을 LLM 이 거른다 (빼기만)
+    student: str | None = None          # 토큰 n-gram 후보를 학습한 모델로 고른다 (추출기 후보를 쓰지 않는다, LLM 아님: app/services/concepts/student.py)
+    llm_concepts: bool = False          # LLM 이 노트를 읽고 개념을 직접 뽑는다 (app/services/concepts/llm_concepts.py)
 
     @property
     def uses_llm(self) -> bool:
@@ -72,6 +75,9 @@ EXTRACT_PROFILES = {p.id: p for p in (
     ExtractProfile("extract-hybrid-2", relations="rules+structure+llm"),
     # + 개념 후보를 LLM 이 거른다 (처음 보는 노트의 일반 낱말·문장 조각·예시 값). 위치·표기는 결정적 추출 그대로
     ExtractProfile("extract-hybrid-3", relations="rules+structure+llm", concept_filter=True),
+    # 두 단계 흐름 (docs/be-integration.md): student 가 약 0.1초에 첫 결과를 주고, llm 이 몇 초 뒤 더 나은 결과로 바꿔 넣게 한다. 관계는 둘 다 규칙+구조
+    ExtractProfile("extract-student-1", relations="rules+structure", student="extract-student-1"),
+    ExtractProfile("extract-llm-1", relations="rules+structure", llm_concepts=True),
 )}
 EXTRACT_PROFILE = "extract-det-3"       # 권장 기본값 (완전 결정적)
 
@@ -111,6 +117,7 @@ class Settings:
     explain_llm: bool = False
     chat_llm: bool = False
     external_llm: bool = False
+    concepts_llm: bool = False
     explain_cache: Path | None = Path("data/private/cache/explanations")
     verify_llm: bool = False
     verify_cache: Path | None = Path("data/private/cache/verifications")
@@ -130,6 +137,7 @@ class Settings:
             explain_llm=env("AI_EXPLAIN_LLM", "1") == "1",
             chat_llm=env("AI_CHAT_LLM", "0") == "1",
             external_llm=env("AI_EXTERNAL_LLM", "0") == "1",
+            concepts_llm=env("AI_CONCEPTS_LLM", "0") == "1",
             explain_cache=Path(env("AI_EXPLAIN_CACHE", "data/private/cache/explanations")),
             verify_llm=env("AI_VERIFY_LLM", "1") == "1",
             verify_cache=Path(env("AI_VERIFY_CACHE", "data/private/cache/verifications")),

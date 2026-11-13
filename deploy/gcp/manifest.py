@@ -5,9 +5,9 @@ import re
 
 MODEL_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
 ROLES = {"relation", "facts", "explain", "verify", "sound"}
-OPTIONAL_ROLES = {"chat", "external"}      # 챗봇·외부 지식 모델. 없는 manifest 도 유효하고, 그러면 그 기능은 꺼진다 (host_driver 가 AI_CHAT_LLM=0·AI_EXTERNAL_LLM=0 을 명시한다)
+OPTIONAL_ROLES = {"chat", "external", "concepts"}      # 챗봇·외부 지식·개념 LLM 모델. 없는 manifest 도 유효하고, 그러면 그 기능은 꺼진다 (host_driver 가 AI_CHAT_LLM=0·AI_EXTERNAL_LLM=0·AI_CONCEPTS_LLM=0 을 명시한다)
 FLAGS = {"relation", "explain", "verify"}
-OPTIONAL_FLAGS = {"chat", "external"}      # true 이면 그 기능을 켠다. 켜려면 위 같은 이름의 모델·effort 가 manifest 에 고정되어 있어야 한다
+OPTIONAL_FLAGS = {"chat", "external", "concepts"}      # true 이면 그 기능을 켠다. 켜려면 위 같은 이름의 모델·effort 가 manifest 에 고정되어 있어야 한다
 
 
 def canonical(value):

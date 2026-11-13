@@ -355,3 +355,12 @@ def test_external_options_do_not_loosen_the_manifest(change):
     with pytest.raises(ValueError):
         validate(m)
 
+
+def test_concepts_llm_is_an_optional_role_and_flag_too():
+    assert validate(with_role(manifest(), "concepts", model="synthetic-concepts-1", effort="medium"))
+    assert validate(with_role(manifest(), "concepts", flag=False, model="synthetic-concepts-1", effort="medium"))
+    bad = manifest()
+    bad["flags"]["concepts"] = True                                                    # 켜려면 고정한 concepts 모델이 있어야 한다
+    with pytest.raises(ValueError):
+        validate(bad)
+
