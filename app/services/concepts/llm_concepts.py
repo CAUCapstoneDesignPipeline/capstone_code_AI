@@ -84,6 +84,27 @@ def ground(items: list[tuple[str, list[str]]], text: str, loose) -> tuple[list[t
     return out, dropped
 
 
+# ---- 2판: 출력 형식만 줄인다 (개념 하나가 {"surface","aliases"} 객체가 아니라 "표기 | 별칭" 문자열 하나). 출력 토큰이 대부분 지연이라 JSON 의 반복되는 키를 없앤다.
+PROMPT_VERSION_V2 = "llm-only-concepts-2"
+SYSTEM_V2 = (SYSTEM
+             .replace("  - 같은 개념의 다른 표기(한국어·영어·약어)는 한 항목에 aliases 로 묶는다. 다른 개념이면 다른 항목이다.",
+                      "  - 같은 개념의 다른 표기(한국어·영어·약어)는 한 항목에 ' | ' 로 이어 쓴다 (예: 'WAL | Write Ahead Logging'). 다른 개념이면 다른 항목이다.")
+             .replace("  - surface 는 노트에 쓰인 표기 그대로", "  - 각 표기는 노트에 쓰인 그대로"))
+SCHEMA_V2 = {"type": "object", "additionalProperties": False, "required": ["concepts"],
+             "properties": {"concepts": {"type": "array", "items": {"type": "string"}}}}
+
+
+def parse_v2(data) -> list[tuple[str, list[str]]]:
+    """2판 출력 → [(표기, 별칭들)]. 문자열이 아닌 항목·빈 항목은 건너뛴다."""
+    out = []
+    for item in data.get("concepts", []) if isinstance(data, dict) else []:
+        if isinstance(item, str):
+            forms = [f.strip() for f in item.split("|") if f.strip()]
+            if forms:
+                out.append((forms[0], forms[1:]))
+    return out
+
+
 def _forms_regex(form: str):
     """원문에서 form 을 찾는 정규식: 공백·하이픈·밑줄 차이와 대소문자를 무시하고, 영문·숫자로 시작하거나 끝나면 단어 경계를 지킨다."""
     tokens = [t for t in re.split(r"[\s\-_]+", nfc(form).strip()) if t]
@@ -97,9 +118,10 @@ def _forms_regex(form: str):
 class ConceptLLM:
     """LLM 이 노트의 개념을 뽑는다. llm 은 complete_json 이 있는 어댑터 (make_llm)."""
 
-    def __init__(self, llm):
+    def __init__(self, llm, version: int = 1):
         self.llm = llm
-        self.prompt_version = PROMPT_VERSION
+        self.version = version
+        self.prompt_version = PROMPT_VERSION_V2 if version == 2 else PROMPT_VERSION
 
     @property
     def provider(self) -> str:
@@ -110,8 +132,9 @@ class ConceptLLM:
         return self.llm.model
 
     def concepts(self, text: str) -> list[tuple[str, list[str]]]:
-        res = self.llm.complete_json(SYSTEM, "<노트>\n" + text + "\n</노트>", SCHEMA, "concepts").data
-        return parse(res)
+        if self.version == 2:
+            return parse_v2(self.llm.complete_json(SYSTEM_V2, "<노트>\n" + text + "\n</노트>", SCHEMA_V2, "concepts").data)
+        return parse(self.llm.complete_json(SYSTEM, "<노트>\n" + text + "\n</노트>", SCHEMA, "concepts").data)
 
     def select(self, note_id: str, note_version: int, text: str) -> dict[str, list[Mention]]:
         """개념 key → 언급들 (원문 첫 언급 순). 원문에 없는 개념은 빠진다."""
@@ -133,5 +156,5 @@ class ConceptLLM:
         for key, spans in sorted(found.items(), key=lambda kv: (min(kv[1]), kv[0]))[:MAX_CONCEPTS]:
             uniq = sorted(set(spans))[:MAX_MENTIONS]
             out[key] = [Mention(span=Span(note_id, note_version, u16(s), u16(e)), surface=text[s:e], key=key, method=Method.LLM,
-                                method_version=f"{PROMPT_VERSION}+{self.model}", score=2.0) for s, e in uniq]
+                                method_version=f"{self.prompt_version}+{self.model}", score=2.0) for s, e in uniq]
         return out

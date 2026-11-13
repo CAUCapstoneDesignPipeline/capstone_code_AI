@@ -90,3 +90,20 @@ def test_both_profiles_yield_relations_from_the_same_rules():
             d = post(c, request(profile)).json()
             refs = {x["ref"] for x in d["concepts"]}
             assert all(r["sourceRef"] in refs and r["targetRef"] in refs for r in d["relations"])
+
+
+def test_the_concepts_llm_defaults_to_sonnet_unless_a_model_is_pinned(monkeypatch):
+    from app.core.config import Settings
+    for var in ("AI_CONCEPTS_LLM_MODEL", "AI_LLM_MODEL", "AI_CONCEPTS_LLM_PROVIDER", "AI_LLM_PROVIDER"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("AI_CONCEPTS_LLM", "1")
+    with TestClient(create_app(Settings.from_env())) as c:
+        assert c.app.state.concept_llm.model == "claude-sonnet-5-5" and "extract-llm-1" in ready_profiles(c.app.state)
+    monkeypatch.setenv("AI_CONCEPTS_LLM_MODEL", "claude-opus-5-5")
+    with TestClient(create_app(Settings.from_env())) as c:
+        assert c.app.state.concept_llm.model == "claude-opus-5-5"
+    monkeypatch.delenv("AI_CONCEPTS_LLM", raising=False)
+    with TestClient(create_app(Settings.from_env())) as c:
+        assert c.app.state.concept_llm is None                         # 기본 꺼짐
+

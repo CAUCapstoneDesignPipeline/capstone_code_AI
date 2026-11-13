@@ -25,7 +25,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from app.services.concepts.llm_concepts import PROMPT_VERSION, SCHEMA, SYSTEM, ground, nfc, parse  # noqa: E402,F401
+from app.services.concepts.llm_concepts import (PROMPT_VERSION, PROMPT_VERSION_V2, SCHEMA, SCHEMA_V2, SYSTEM, SYSTEM_V2, ground, nfc, parse,  # noqa: E402,F401
+                                                parse_v2)
 
 
 def sets_available(names: list[str]):
@@ -60,6 +61,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sets", nargs="+", default=["dev", "test", "unseen"], choices=["dev", "test", "unseen"])
     ap.add_argument("--effort", default="medium")
+    ap.add_argument("--prompt-version", type=int, default=1, choices=[1, 2], help="2 = 개념마다 \"표기 | 별칭\" 문자열 하나로 줄인 출력 (더 빠르다)")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--no-reference", action="store_true", help="det-3 · hybrid-3 행을 계산하지 않는다 (LLM 만 돌린다)")
     args = ap.parse_args()
@@ -80,14 +82,17 @@ def main():
     cache = ROOT / "data/private/cache/llm-only"
     cache.mkdir(parents=True, exist_ok=True)
 
+    v2 = args.prompt_version == 2
+    pv, system, schema, parser = (PROMPT_VERSION_V2, SYSTEM_V2, SCHEMA_V2, parse_v2) if v2 else (PROMPT_VERSION, SYSTEM, SCHEMA, parse)
+
     def ask(text: str):
-        key = hashlib.sha256(json.dumps([llm.provider, llm.model, args.effort, PROMPT_VERSION, SYSTEM, text], ensure_ascii=False).encode()).hexdigest()
+        key = hashlib.sha256(json.dumps([llm.provider, llm.model, args.effort, pv, system, text], ensure_ascii=False).encode()).hexdigest()
         p = cache / f"{key}.json"
         if p.exists():
             return json.loads(p.read_text(encoding="utf-8"))
         for attempt in range(5):
             try:
-                res = llm.complete_json(SYSTEM, "<노트>\n" + text + "\n</노트>", SCHEMA, "concepts").data
+                res = llm.complete_json(system, "<노트>\n" + text + "\n</노트>", schema, "concepts").data
                 break
             except LLMError as e:
                 if e.kind == "refusal":                    # 안전 분류기 거절 (보안 실습 노트 등): 의견 없음 = 개념 없음. 기록해 둔다
@@ -104,7 +109,7 @@ def main():
     cfilter = None if args.no_reference else ConceptFilter(make_llm(role_llm_config("relation", "low")), ROOT / "data/private/cache/relations/concepts")
     rng = np.random.default_rng(0)
     pct = lambda x: f"{x:.1%}"
-    print(f"모델 {llm.model} · effort {args.effort} · {PROMPT_VERSION}\n")
+    print(f"모델 {llm.model} · effort {args.effort} · {pv}\n")
     for name, (gold, texts) in data.items():
         notes = sorted(gold)
         with ThreadPoolExecutor(args.workers) as pool:
@@ -112,7 +117,7 @@ def main():
         per = {"LLM only": {}, "extract-det-3": {}, "extract-hybrid-3 (LLM filter)": {}}
         stats = {"proposed": 0, "dropped": 0, "refused": 0}
         for n in notes:
-            items = parse(raw[n])
+            items = parser(raw[n])
             grounded, dropped = ground(items, texts[n], loose)
             stats["proposed"] += len(items)
             stats["dropped"] += dropped

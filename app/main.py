@@ -152,6 +152,11 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 cfg = role_llm_config("concepts", "medium")      # 노트 전체를 읽고 개념을 뽑는다 (정확도는 medium 에서 잰 값)
                 if cfg is None:
                     raise ValueError("개념 LLM 제공자가 없다 (AI_CONCEPTS_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
+                import os
+
+                from dataclasses import replace
+                if cfg.provider == "anthropic" and not any(os.environ.get(n) for n in ("AI_CONCEPTS_LLM_MODEL", "AI_LLM_MODEL")):
+                    cfg = replace(cfg, model="claude-sonnet-5-5")      # 모델을 따로 정하지 않았으면 Sonnet: 정확도는 Opus 와 같거나 낫고 더 빠르다 (docs/eval/concept-student.md)
                 st.concept_llm = ConceptLLM(make_llm(cfg))
                 log.info("개념 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
             except Exception as e:      # extract-llm-1 만 준비되지 않은 상태로 둔다

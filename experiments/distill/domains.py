@@ -32,7 +32,7 @@ def main():
     ap.add_argument("--no-lodo", action="store_true")
     ap.add_argument("--scaling", action="store_true", help="학습에 쓰는 web 분야 수(0·3·6·11)에 따른 뺀 분야의 재현율을 잰다")
     ap.add_argument("--no-gold", action="store_true")
-    ap.add_argument("--df-from", default="all", choices=["course", "all"], help="말뭉치 문서 빈도를 만들 글: 과목 노트만 / 과목+web (라벨 없는 통계)")
+    ap.add_argument("--df-from", default="all", choices=["course", "all", "deployed"], help="말뭉치 문서 빈도를 만들 글: 과목 노트만 / 과목+web (라벨 없는 통계)")
     args = ap.parse_args()
 
     from app.cli import load_extractor
@@ -49,10 +49,13 @@ def main():
     web = {p.stem: nfc(p.read_text(encoding="utf-8")) for p in sorted((ROOT / "data/private/notes-web").glob("*.md"))}
     df = defaultdict(int)
     corpus = dict(course_all) if args.df_from == "course" else {**course_all, **web}
-    for t in corpus.values():
-        for k in generate(ex, t)[1]:
-            df[k] += 1
-    n_docs = len(corpus)
+    if args.df_from == "deployed":                       # 이미 배포되는 IDF(마운트 파일)의 문서 빈도만 쓴다 (새 배포물 없음)
+        df, n_docs = dict(ex.idf.df), ex.idf.n_docs
+    else:
+        for t in corpus.values():
+            for k in generate(ex, t)[1]:
+                df[k] += 1
+        n_docs = len(corpus)
     print(f"df over {n_docs} docs ({args.df_from}), {len(df)} keys", flush=True)
 
     def build(name, text, forms):

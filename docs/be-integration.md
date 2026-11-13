@@ -39,14 +39,14 @@ AI 쪽 구현이 정한 것(profile·판정 기준)을 적는다. 실행되는 �
 
 **개념 추출 두 단계 (빠른 첫 결과 → LLM 결과로 교체)** — 노트를 저장하자마자 개념을 보여 주려면 `POST /extract` 를 두 번 부른다.
 1. `profileVersion: "extract-student-1"` — 학습한 모델이 후보를 고른다. **LLM 없음, 노트 하나에 평균 수십 ms** (처리 자리 한 개를 그동안만 쓴다). 항상 켜져 있다.
-2. `profileVersion: "extract-llm-1"` — LLM 이 노트를 읽고 개념을 뽑는다. **몇 초** (짧은 노트 4~5초, 긴 노트는 더 걸린다). **기본 꺼짐**(`AI_CONCEPTS_LLM=1`), 켜지 않으면 503.
+2. `profileVersion: "extract-llm-1"` — LLM 이 노트를 읽고 개념을 뽑는다. **몇 초** (기본 모델 Sonnet 5.5: 1천 자 노트 약 3초, 8천 자 노트 약 5.5초). **기본 꺼짐**(`AI_CONCEPTS_LLM=1`), 켜지 않으면 503.
    - 첫 호출의 응답을 그 노트 리비전의 개념·관계로 바로 저장해 쓴다. 두 번째 호출은 BE 의 백그라운드 작업(큐)으로 보내고, 성공하면 **그 응답을 최종 결과로 바꿔 넣는다**.
    - 바꿔 넣을 때는 표기(대소문자·공백·하이픈 무시)로 같은 개념을 맞춘다. 없어진 것은 지우고 새로 생긴 것은 더하고 남은 것은 그대로 둔다 (참조 구현 `app/client.py` 의 `swap_concepts`, `extract_progressive`).
    - **LLM 호출이 실패해도 첫 결과를 그대로 둔다.** 실패는 계약 오류다 (거절·형식 위반 502 `INVALID_MODEL_OUTPUT`, 시간 초과 504, 한도 429 `AI_BUSY`, 인증 503). AI 는 자동 재시도·다른 모델 fallback 을 하지 않는다. 재시도와 간격은 BE 가 정한다.
    - 두 호출은 서로 다른 `stageExecutionId`(= `Idempotency-Key`)와 `X-Attempt-Id` 를 쓴다. 응답의 `meta.profileVersion` 으로 어느 단계의 결과인지 안다. 개념 `ref` 는 응답마다 새로 매기므로 두 응답의 ref 를 섞지 않는다.
    - 관계·근거는 두 profile 모두 같은 규칙(`rules+structure`)으로 만든다. LLM profile 이 개념을 더 정확히 골라 관계도 그 개념들 사이에서 다시 만들어진다.
    - 노트 원문이 LLM 제공자로 나간다 (이 profile 만). 응답은 AI 가 저장하지 않는다. 호출 한 번이 처리 자리(`AI_MAX_INFLIGHT`)를 몇 초 쓰므로 큐에서 한 번에 하나씩 보내는 것이 안전하다.
-   측정 (정답은 AI 초안, 재현율은 core): 학생 78~89% · 정밀도 60~76% (임계값 0.45 에서 dev 78/76, test 83/65, 다른 분야 56/68), LLM 96~98% · 85~91%. 한계는 [eval/concept-student.md](eval/concept-student.md).
+   측정 (정답은 AI 초안, 재현율은 core): 학생 재현율 56~83% · 정밀도 65~76% (임계값 0.45 에서 dev 78/76, test 83/65, 다른 분야 56/68), LLM(Sonnet) 재현율 95% · 정밀도 89~95%. 한계는 [eval/concept-student.md](eval/concept-student.md).
 
 **외부 지식** (카드의 결론을 뒷받침하는 웹 자료의 한 문장 요약·출처 URL) 은 `POST /internal/v1/external-knowledge` (`findExternalKnowledge`, profile `external-knowledge-llm-1`) 이고 [external-knowledge.md](external-knowledge.md) 에 있다. 요청은 `context` · `profileVersion` · `claim{conclusion, evidence[A·B]}` · `maxSources`(기본 1, 최대 3), 헤더는 다른 추론 operation 과 같다(X-Attempt-Id·Idempotency-Key 필수). 응답은 `status: found | none`, `externalKnowledge[]`(`summary`, `sourceUrl`, `title`, `retrievedAt`, `support: yes | partly`, 강한 순), `usage`. **기본 꺼짐**이라 꺼져 있으면 503 이다. 한 번에 4~20초이고 처리 자리를 쓰므로 화면에 보일 카드에만 분석 뒤 따로 부르고 결과는 BE 가 저장한다. `none` 은 오류가 아니다.
 
