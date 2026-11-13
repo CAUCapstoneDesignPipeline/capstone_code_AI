@@ -67,9 +67,9 @@ def _context(text: str, spans, surf: str, tf_rel: float, tf_rank: float) -> list
             c["mid_cap"] / n, c["acro"] / n, tf_rel, tf_rank, in_list / n, c["dash_after"] / n]
 
 
-def rows(extractor, text: str):
-    """(NFC 원문, [dict(key, surface, spans, x)]). x 는 FEATURES 순서."""
-    text, cands = generate(extractor, text)
+def rows(extractor, text: str, symbols: bool = False):
+    """(NFC 원문, [dict(key, surface, spans, x, words)]). x 는 FEATURES 순서. symbols=True 는 후보 생성 2판 (이름 속 기호를 잇는다)."""
+    text, cands = generate(extractor, text, symbols=symbols)
     masked = mask(text)
     regs = regions(masked)
     first_line_end = text.find("\n") if "\n" in text else len(text)
@@ -116,7 +116,7 @@ def rows(extractor, text: str):
               covered[k] / tf[k], math.log(len(text) + 1), sent_start / tf[k], n_lines]
         x += [len(longer), len(shorter), sum(tf[o] for o in longer)]
         x += _context(text, c.spans, surf, tf[k] / max_tf, bisect.bisect_left(order, tf[k]) / max(1, len(order)))
-        out.append(dict(key=k, surface=surf, spans=c.spans, x=x))
+        out.append(dict(key=k, surface=surf, spans=c.spans, x=x, words=words))
     return text, out
 
 

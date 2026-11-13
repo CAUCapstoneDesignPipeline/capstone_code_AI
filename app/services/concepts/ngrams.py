@@ -15,6 +15,7 @@ from .extract import CONNECTORS, DETACHED_PARTICLES, INNER_TAGS, _after_symbol, 
 from .markdown import mask, nfc, strip_inline_marks
 
 START_TAGS = frozenset({"NNG", "NNP", "SL", "SH", "SN", "XR", "NR"})
+SYMBOL_NAME_TAGS = frozenset({"W_SERIAL"})            # 2판: "0-1" 같은 일련 번호 토큰도 이름의 일부다
 END_TAGS = frozenset({"NNG", "NNP", "SL", "SH", "SN", "XR", "NR", "XSN"})
 MIDDLE_TAGS = frozenset(INNER_TAGS | {"XR", "NR", "XSN", "XPN"})
 MAX_TOKENS, MAX_CHARS = 6, 60
@@ -30,7 +31,7 @@ class Cand:
     n_tokens: int = 1
 
 
-def tokens(ex, text: str):
+def tokens(ex, text: str, symbols: bool = False):
     """(NFC 원문, 토큰 목록). 토큰 = (form, tag, start, end), 가린 구간에 걸치면 tag 를 'HID' 로 한다."""
     text = nfc(text)
     masked = mask(text)
@@ -50,6 +51,8 @@ def tokens(ex, text: str):
             merged[-1][0] = text[merged[-1][2]:tok[3]]
         else:
             merged.append(tok)
+    if symbols:                                        # 2판: 이름 속 기호를 한 낱말로 잇는다 (Banker's, A*, C++, ε-production, min_conf)
+        merged = _join_symbols(text, merged)
     out = []
     for form, tag, s, e in merged:
         if tag in ("SL", "SH", "SN"):
@@ -63,12 +66,38 @@ def tokens(ex, text: str):
     return text, out, masked
 
 
-def segments(text: str, toks: list, masked: str):
+def _join_symbols(text: str, toks: list) -> list:
+    out: list = []
+    i = 0
+    while i < len(toks):
+        form, tag, s, e = toks[i]
+        nxt = toks[i + 1] if i + 1 < len(toks) else None
+        nxt2 = toks[i + 2] if i + 2 < len(toks) else None
+        if tag == "SW" and len(form) == 1 and form.isalpha():            # 그리스 문자 등 낱글자 기호(ε, λ)는 낱말로 본다
+            tag = "SL"
+        if out and out[-1][1] == "SL" and tag == "SS" and form in ("'", "’") and out[-1][3] == s and nxt and nxt[1] == "SL" and nxt[2] == e:
+            out[-1] = (text[out[-1][2]:nxt[3]], "SL", out[-1][2], nxt[3])      # Banker + ' + s → Banker's
+            i += 2
+            continue
+        if out and out[-1][1] == "SL" and tag == "SW" and form and set(form) <= set("*+#") and out[-1][3] == s and not (nxt and nxt[2] == e and nxt[1] in ("SL", "SN", "NNG", "NNP")):
+            out[-1] = (text[out[-1][2]:e], "SL", out[-1][2], e)                 # A + * → A*, C + + → C+ (다음 +도 이어서)
+            i += 1
+            continue
+        if out and out[-1][1] == "SL" and tag == "SW" and form == "_" and out[-1][3] == s and nxt and nxt[1] == "SL" and nxt[2] == e:
+            out[-1] = (text[out[-1][2]:nxt[3]], "SL", out[-1][2], nxt[3])      # min + _ + conf → min_conf
+            i += 2
+            continue
+        out.append((form, tag, s, e))
+        i += 1
+    return out
+
+
+def segments(text: str, toks: list, masked: str, symbols: bool = False):
     """끊김 없이 이어지는 토큰 묶음들. 끊는 것: 명사류가 아닌 토큰, 가린 구간, 줄바꿈이 낀 간격, 공백 둘 이상."""
     seg, prev_end = [], None
     for form, tag, s, e in toks:
-        is_conn = tag == "SO" and form in CONNECTORS
-        ok = tag in MIDDLE_TAGS or (is_conn and seg)
+        is_conn = (tag == "SO" and form in CONNECTORS) or (symbols and tag in ("SP", "SW") and form in CONNECTORS and prev_end == s)
+        ok = tag in MIDDLE_TAGS or (symbols and tag in SYMBOL_NAME_TAGS) or (is_conn and seg)
         if ok:
             gap = masked[prev_end:s] if prev_end is not None else ""
             if seg and gap not in ("", " "):
@@ -84,18 +113,19 @@ def segments(text: str, toks: list, masked: str):
         yield seg
 
 
-def generate(ex, text: str) -> tuple[str, dict[str, Cand]]:
+def generate(ex, text: str, symbols: bool = False) -> tuple[str, dict[str, Cand]]:
     """(NFC 원문, 키 → 후보). 같은 키의 언급 위치는 모두 모은다."""
-    text, toks, masked = tokens(ex, text)
+    text, toks, masked = tokens(ex, text, symbols)
     out: dict[str, Cand] = {}
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for seg in segments(text, toks, masked):
+    start_tags, end_tags = (START_TAGS | SYMBOL_NAME_TAGS, END_TAGS | SYMBOL_NAME_TAGS) if symbols else (START_TAGS, END_TAGS)
+    for seg in segments(text, toks, masked, symbols):
         n = len(seg)
         for i in range(n):
-            if seg[i][1] not in START_TAGS:
+            if seg[i][1] not in start_tags:
                 continue
             for j in range(i, min(n, i + MAX_TOKENS)):
-                if seg[j][1] not in END_TAGS:
+                if seg[j][1] not in end_tags:
                     continue
                 s, e = seg[i][2], seg[j][3]
                 if e - s > MAX_CHARS:

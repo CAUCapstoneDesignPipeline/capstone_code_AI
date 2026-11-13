@@ -66,8 +66,10 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--effort", default="medium")
     ap.add_argument("--web", action="store_true", help="data/private/notes-web 의 공개 글에 만든다 (기본은 정답 없는 과목 노트)")
+    ap.add_argument("--dir", default=None, help="data/private/<이름> 폴더의 글에 만든다 (예: notes-lex)")
     args = ap.parse_args()
-    notes = {p.stem: nfc(p.read_text(encoding="utf-8")) for p in sorted((ROOT / "data/private/notes-web").glob("*.md"))} if args.web else teacher_notes()
+    folder = args.dir or ("notes-web" if args.web else None)
+    notes = {p.stem: nfc(p.read_text(encoding="utf-8")) for p in sorted((ROOT / "data/private" / folder).glob("*.md"))} if folder else teacher_notes()
     ask = asker(args.effort)
     done = refused = 0
     with ThreadPoolExecutor(args.workers) as pool:

@@ -48,3 +48,16 @@ def test_spans_point_at_the_original_text(ex):
     for c in cands.values():
         for s, e in c.spans:
             assert text[s:e].lower().replace("  ", " ") and len(text[s:e]) <= 60
+
+
+def test_version_2_keeps_names_with_symbols_whole(ex):
+    text = "Banker's Algorithm 은 교착을. 0-1 Knapsack 문제와 SSL/TLS 프로토콜. A* Search 와 ε-production, min_conf 값. I/O-bound 작업과 4+1 View. C++ 언어."
+    v1, v2 = keys(ex, text), set(generate(ex, text, symbols=True)[1])
+    wanted = {"banker's algorithm", "0-1 knapsack", "ssl/tls", "a* search", "ε-production", "min_conf", "i/o-bound", "4+1 view", "c++"}
+    assert wanted <= v2 and not (wanted & v1)                    # 1판은 그대로 두고 2판만 이름 속 기호를 잇는다 (이미 출고한 학생 모델의 후보가 바뀌지 않는다)
+
+
+def test_version_2_does_not_join_across_spaces_or_sentences(ex):
+    k = set(generate(ex, "Models scale + data grow. Next / other * thing", symbols=True)[1])
+    assert not any(c in k for c in ("scale + data", "next / other", "other * thing", "grow next"))     # 공백이 낀 기호·문장 끝을 넘는 구간은 없다
+

@@ -31,17 +31,15 @@ FEATURES = (["n_tokens", "n_chars", "n_words", "hangul", "latin", "digit", "symb
             + ["lex_seen", "lex_rate", "first_seen", "first_rate", "last_seen", "last_rate"])
 
 
-def teacher_concepts(text: str, effort: str = "medium"):
-    """캐시된 LLM 개념 목록 → 원문에 있는 개념 [(대표 표기, loose 표기 집합)]. 캐시에 없으면 None (여기서는 LLM 을 부르지 않는다)."""
-    from app.main import role_llm_config
-    from app.services.llm import make_llm
-    llm = make_llm(role_llm_config("relation", effort))
-    for body in (nfc(text), text):
-        key = hashlib.sha256(json.dumps([llm.provider, llm.model, effort, PROMPT_VERSION, SYSTEM, body], ensure_ascii=False).encode()).hexdigest()
-        p = ROOT / "data/private/cache/llm-only" / f"{key}.json"
-        if p.exists():
-            grounded, _ = ground(parse(json.loads(p.read_text(encoding="utf-8"))), nfc(text), loose)
-            return grounded
+def teacher_concepts(text: str, effort: str = "medium", models=("claude-opus-5-5", "claude-sonnet-5-5")):
+    """캐시된 LLM 개념 목록 → 원문에 있는 개념 [(대표 표기, loose 표기 집합)]. 교사 모델 캐시를 차례로 찾고, 없으면 None (여기서는 LLM 을 부르지 않는다)."""
+    for model in models:
+        for body in (nfc(text), text):
+            key = hashlib.sha256(json.dumps(["anthropic", model, effort, PROMPT_VERSION, SYSTEM, body], ensure_ascii=False).encode()).hexdigest()
+            p = ROOT / "data/private/cache/llm-only" / f"{key}.json"
+            if p.exists():
+                grounded, _ = ground(parse(json.loads(p.read_text(encoding="utf-8"))), nfc(text), loose)
+                return grounded
     return None
 
 
