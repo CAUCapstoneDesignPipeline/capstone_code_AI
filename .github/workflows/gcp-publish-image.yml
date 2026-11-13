@@ -1,6 +1,11 @@
 name: gcp-publish-image
 on:
   workflow_dispatch:
+  # gcp-cd.yml 이 push 된 커밋을 게시한 뒤 자동 배포한다.
+  workflow_call:
+    outputs:
+      digest:
+        value: ${{ jobs.publish.outputs.digest }}
 permissions:
   contents: read
 concurrency:
@@ -18,6 +23,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      digest: ${{ steps.pushed.outputs.digest }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:

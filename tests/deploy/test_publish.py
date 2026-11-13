@@ -32,3 +32,18 @@ def test_denies_identity_or_destination_change(key, value):
     env[key] = value
     with pytest.raises(ValueError):
         module.validate(env)
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_automatic_release_caller(event):
+    env = identity()
+    env.update(GITHUB_EVENT_NAME=event, GITHUB_WORKFLOW_REF=module.WORKFLOWS + "gcp-cd.yml@refs/heads/develop")
+    module.validate(env)
+
+
+@pytest.mark.parametrize("event,workflow", [("push", "gcp-publish-image.yml"), ("pull_request", "gcp-cd.yml"), ("push", "ci.yml")])
+def test_denies_other_callers(event, workflow):
+    env = identity()
+    env.update(GITHUB_EVENT_NAME=event, GITHUB_WORKFLOW_REF=module.WORKFLOWS + workflow + "@refs/heads/develop")
+    with pytest.raises(ValueError):
+        module.validate(env)
