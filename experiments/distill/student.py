@@ -75,6 +75,7 @@ def main():
     ap.add_argument("--no-nms", action="store_true")
     ap.add_argument("--threshold", type=float, default=None, help="없으면 dev 에서 F1 이 가장 높은 값")
     ap.add_argument("--max-teacher", type=int, default=0)
+    ap.add_argument("--ood-fold", type=int, default=None, help="0 또는 1: unseen 노트의 절반(교사 라벨)을 학습에 더하고 나머지 절반으로만 unseen 을 잰다")
     ap.add_argument("--drop", default="", help="뺄 특징 묶음: corpus(df·idf·old_score) lex(교사 사전) emb(탐침·주제 거리)")
     args = ap.parse_args()
 
@@ -108,6 +109,19 @@ def main():
         if args.max_teacher and len(train) >= args.max_teacher:
             break
     print(f"train notes {len(train)} (teacher labels missing: {skipped}), rows {sum(len(r) for _, r, _ in train)}, positives {sum(sum(y) for _, _, y in train)}", flush=True)
+    ood_eval = None
+    if args.ood_fold is not None:
+        from experiments.llm_only.baseline import sets_available as _sa
+        ug, ut = _sa(["unseen"])["unseen"]
+        names = sorted(ug)
+        ood_eval = {n for i, n in enumerate(names) if i % 2 == args.ood_fold}
+        for i, n in enumerate(names):
+            if n in ood_eval:
+                continue
+            forms = teacher_forms(ut[n])
+            text, rows = note_rows(ex, ut[n], df, len(all_course), old_scores(ex, n, ut[n]))
+            train.append((n, rows, [bool({loose(r["surface"]), *(loose(text[s:e]) for s, e in r["spans"][:3])} & forms) for r in rows]))
+        print(f"OOD fold {args.ood_fold}: +{len(names) - len(ood_eval)} unseen-domain notes in training; evaluating unseen on the other {len(ood_eval)}", flush=True)
     lex = Lexicon()
     for _, rows, ys in train:
         lex.add(rows, ys)
@@ -118,18 +132,22 @@ def main():
     for name, (gold, texts) in data.items():
         prep[name] = {n: note_rows(ex, texts[n], df, len(all_course), old_scores(ex, n, texts[n])) for n in sorted(gold)}
     # 임베딩: 후보 표기 → 벡터, 표기만 보고 개념인지 고르는 선형 탐침(노트 단위 교차로 학습해 새는 것을 막는다) + 노트 주제와의 가까움
-    strings = [r["surface"] for _, rows, _ in train for r in rows] + [r["surface"] for per in prep.values() for _, rows in per.values() for r in rows]
-    E = embed_all(strings)
+    strings = [r["surface"] for _, rows, _ in train for r in rows] + [r["surface"] for per in prep.values() for _, rows in per.values() for r in rows] if "emb" not in args.drop.split(",") else []
+    use_emb = "emb" not in args.drop.split(",")
+    E = embed_all(strings) if use_emb else None
     from sklearn.linear_model import LogisticRegression
     from sklearn.model_selection import GroupKFold
-    Etr = np.vstack([np.stack([E[r["surface"]] for r in rows]) for _, rows, _ in train])
+    Etr = np.vstack([np.stack([E[r["surface"]] for r in rows]) for _, rows, _ in train]) if use_emb else None
     y = np.array([int(v) for _, _, ys in train for v in ys])
     groups = np.concatenate([[i] * len(rows) for i, (_, rows, _) in enumerate(train)])
     oof = np.zeros(len(y))
-    for tr, te in GroupKFold(5).split(Etr, y, groups):
-        oof[te] = LogisticRegression(C=0.5, max_iter=400).fit(Etr[tr], y[tr]).predict_proba(Etr[te])[:, 1]
-    probe = LogisticRegression(C=0.5, max_iter=400).fit(Etr, y)
-    sims_tr = np.concatenate([note_sims(rows, E) for _, rows, _ in train])
+    if use_emb:
+        for tr, te in GroupKFold(5).split(Etr, y, groups):
+            oof[te] = LogisticRegression(C=0.5, max_iter=400).fit(Etr[tr], y[tr]).predict_proba(Etr[te])[:, 1]
+        probe = LogisticRegression(C=0.5, max_iter=400).fit(Etr, y)
+        sims_tr = np.concatenate([note_sims(rows, E) for _, rows, _ in train])
+    else:
+        probe, sims_tr = None, np.zeros(len(y))
     X = np.array([r["x"] + lex.feats(r, yy) for _, rows, ys in train for r, yy in zip(rows, ys)], float)
     X = np.column_stack([X, oof, sims_tr])
     names = FEATURES[:-6] + [f"lex{i}" for i in range(6)] + ["emb_probe", "emb_sim"]
@@ -141,12 +159,18 @@ def main():
     X = X[:, keep_cols]
     model = fit_model(X, y)
     print(f"trained on {len(y)} rows ({y.mean():.1%} positive); probe OOF AUC-ish mean prob pos {oof[y == 1].mean():.2f} vs neg {oof[y == 0].mean():.2f}", flush=True)
+    if ood_eval is not None:
+        prep['unseen'] = {n: v for n, v in prep['unseen'].items() if n in ood_eval}
     evals = {}
     for name, per in prep.items():
         evals[name] = {}
         for n, (text, rows) in per.items():
-            Ev = np.stack([E[r["surface"]] for r in rows])
-            Xe = np.column_stack([np.array([r["x"] + lex.feats(r) for r in rows], float), probe.predict_proba(Ev)[:, 1], note_sims(rows, E)])[:, keep_cols]
+            base_x = np.array([r["x"] + lex.feats(r) for r in rows], float)
+            if use_emb:
+                Ev = np.stack([E[r["surface"]] for r in rows])
+                Xe = np.column_stack([base_x, probe.predict_proba(Ev)[:, 1], note_sims(rows, E)])[:, keep_cols]
+            else:
+                Xe = np.column_stack([base_x, np.zeros(len(rows)), np.zeros(len(rows))])[:, keep_cols]
             evals[name][n] = (text, rows, model.predict_proba(Xe)[:, 1])
 
     def run(name, thr):
@@ -156,6 +180,7 @@ def main():
             idx = nms(rows, p, thr) if not args.no_nms else [i for i, q in enumerate(p) if q >= thr]
             ext = [Extracted(rows[i]["surface"], frozenset({loose(rows[i]["surface"]), *(loose(text[s:e]) for s, e in rows[i]["spans"])}), float(p[i])) for i in idx]
             sc[n] = score(gold[n], ext)
+        run.counts = (sum(s.core_hit for s in sc.values()), sum(s.core for s in sc.values()), sum(s.extracted_hit for s in sc.values()), sum(s.extracted for s in sc.values()))
         R = sum(s.core_hit for s in sc.values()) / sum(s.core for s in sc.values())
         P = sum(s.extracted_hit for s in sc.values()) / max(1, sum(s.extracted for s in sc.values()))
         return R, P, sum(s.extracted for s in sc.values())
@@ -169,7 +194,7 @@ def main():
     print(f"\nthreshold {best} (chosen on dev){' · no NMS' if args.no_nms else ''}")
     for name in ("dev", "test", "unseen"):
         r, p, k = run(name, best)
-        print(f"  {name:7s} core recall {r:.1%}  precision {p:.1%}  kept {k}")
+        print(f"  {name:7s} core recall {r:.1%}  precision {p:.1%}  kept {k}   counts(core_hit,core,tp,kept)={run.counts}")
 
 
 if __name__ == "__main__":

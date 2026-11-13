@@ -27,6 +27,7 @@ FEATURES = (["n_tokens", "n_chars", "n_words", "hangul", "latin", "digit", "symb
             + ["en_stop_first", "en_stop_last", "stop_frac", "kr_stop_first", "kr_stop_last", "ends_ko_verbish"]
             + ["tf", "log_tf", "first_pos", "n_heading", "n_bold", "n_table", "in_title", "standalone", "covered_frac", "doc_len_log", "sent_start_frac", "n_lines"]
             + ["log_df", "idf", "contained_in", "contains", "longer_tf", "old_score"]
+            + ["paren_after", "in_paren", "colon_after", "quote_before", "bold_marker", "def_ko", "called_cue", "mid_cap", "acronym_pair", "tf_rel", "tf_rank", "in_list", "dash_after"]
             + ["lex_seen", "lex_rate", "first_seen", "first_rate", "last_seen", "last_rate"])
 
 
@@ -46,6 +47,36 @@ def teacher_forms(text: str, effort: str = "medium") -> frozenset | None:
     return frozenset().union(*[k for _, k in grounded]) if grounded else frozenset()
 
 
+_CALLED = re.compile(r"(called|known as|named|so-called|termed|referred to as|stands for|denoted|dubbed|introduce[sd]?|propose[sd]?|define[sd]?)\s+(a |an |the )?[\"'“‘`*]*$", re.I)
+_DEF_KO = re.compile(r"^\s*(은|는|이란|란|이라는|라는|이라고|라고|을 말|를 말|이라 함|라 함)")
+_ACRO = re.compile(r"\(([A-Z][A-Za-z0-9\-]{1,9})\)")
+
+
+def context_feats(text: str, spans, surf: str, tf_rel: float, tf_rank: float):
+    """언급 앞뒤 글에서 읽는 단서(정의·별칭·강조). 언어를 가리지 않는 것만 쓴다. 앞 8개 언급의 비율."""
+    m = spans[:8]
+    n = len(m)
+    c = defaultdict(int)
+    for s, e in m:
+        before, after = text[max(0, s - 24):s], text[e:e + 24]
+        a = after.lstrip(" ")
+        c["paren_after"] += a.startswith(("(", "（"))
+        c["in_paren"] += before.rstrip(" ").endswith(("(", "（"))
+        c["colon_after"] += a.startswith((":", "："))
+        c["quote_before"] += before[-1:] in "\"'“‘`"
+        c["bold_marker"] += before.endswith(("**", "__"))
+        c["def_ko"] += bool(_DEF_KO.match(after))
+        c["called"] += bool(_CALLED.search(before)) or bool(re.match(r"\s*(이?라고 (한다|부른다|부르|합니다|불리))", after))
+        sent_start = s == 0 or text[max(0, s - 3):s].strip(" ") in ("", ".", "?", "!", "#", "-", "*", ">") or text[s - 1] == "\n"
+        c["mid_cap"] += surf[:1].isupper() and not sent_start
+        c["acro"] += bool(_ACRO.match(a)) or bool(re.search(r"\([^()]{2,40}\)\s*$", before) and surf.isupper())
+        c["dash_after"] += a.startswith(("-", "–", "—", "→"))
+    first = text[max(0, m[0][0] - 3):m[0][0]]
+    in_list = sum(1 for s, _ in m if re.match(r"\s*([-*•]|\d+[.)])\s", text[text.rfind("\n", 0, s) + 1:s + 1]))
+    return [c["paren_after"] / n, c["in_paren"] / n, c["colon_after"] / n, c["quote_before"] / n, c["bold_marker"] / n, c["def_ko"] / n, c["called"] / n,
+            c["mid_cap"] / n, c["acro"] / n, tf_rel, tf_rank, in_list / n, c["dash_after"] / n]
+
+
 def _words(key: str):
     return [w for w in re.split(r"[\s\-_/+]+", key) if w]
 
@@ -62,6 +93,9 @@ def note_rows(ex, text: str, df: dict[str, int], n_docs: int, old_scores: dict[s
     spans = sorted((s, e, k) for k, c in cands.items() for s, e in c.spans)
     tf = {k: len(c.spans) for k, c in cands.items()}
     starts = [s for s, _, _ in spans]
+    max_tf = max(tf.values()) if tf else 1
+    order = sorted(tf.values())
+    import bisect as _b
     import bisect
     covered = defaultdict(int)
     for s, e, k in spans:
@@ -100,6 +134,7 @@ def note_rows(ex, text: str, df: dict[str, int], n_docs: int, old_scores: dict[s
         x += [tf[k], math.log1p(tf[k]), c.spans[0][0] / n, n_head, n_bold, n_tab, bool(title and loose(surf) and loose(surf) in title), tf[k] - covered[k],
               covered[k] / tf[k], math.log(len(text) + 1), sent_start / tf[k], text.count("\n")]
         x += [math.log1p(df_k), math.log1p(n_docs / (1 + df_k)), len(longer), len(shorter), sum(tf[o] for o in longer), old_scores.get(k, 0.0)]
+        x += context_feats(text, c.spans, surf, tf[k] / max_tf, _b.bisect_left(order, tf[k]) / max(1, len(order)))
         rows.append(dict(key=k, surface=surf, spans=c.spans, x=x, words=words))
     return text, rows
 
