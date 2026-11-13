@@ -27,7 +27,7 @@ jobs:
   release:
     needs: publish
     if: always() && github.repository == 'CAUCapstoneDesignPipeline/capstone_code_AI' && github.ref == 'refs/heads/develop' && vars.GCP_DEPLOY_ENABLED == 'true' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && inputs.operation == 'rollback'))
-    uses: CAUCapstoneDesignPipeline/capstone_code_BE/.github/workflows/gcp-ai-cd-reusable.yml@ac28f0fbe226029f46164273d4a605abe376d540
+    uses: CAUCapstoneDesignPipeline/capstone_code_BE/.github/workflows/gcp-ai-cd-reusable.yml@93db3c88657fa5b2726332d2cb8239d5a8d88212
     permissions:
       contents: read
       id-token: write
@@ -35,4 +35,4 @@ jobs:
       operation: ${{ inputs.operation || 'deploy' }}
       source_sha: ${{ github.sha }}
       image_digest: ${{ needs.publish.outputs.digest }}
-      deploy_tool_sha: ac28f0fbe226029f46164273d4a605abe376d540
+      deploy_tool_sha: 93db3c88657fa5b2726332d2cb8239d5a8d88212
