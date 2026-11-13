@@ -25,6 +25,7 @@ def main():
     ap.add_argument("--max-lex", type=int, default=0, help="어휘집용 글 수 상한 (0 = 전부)")
     ap.add_argument("--min-seen", type=int, default=1, help="사전에서 이 횟수 미만으로 나온 항목은 뺀다 (파일 크기를 줄인다)")
     ap.add_argument("--only-c", action="store_true", help="변형 C 만 돌린다")
+    ap.add_argument("--grid", action="store_true", help="변형 C 로 학습 설정(깊이·트리 수·정규화·과목 노트 가중치) 몇 가지를 견준다")
     args = ap.parse_args()
 
     from sklearn.ensemble import HistGradientBoostingClassifier
@@ -77,8 +78,8 @@ def main():
                 out.append(r["x"] + (lex.feats(r, y if own else None) if with_lex else []))
         return np.array(out, float), np.array([int(v) for _, ys in items for v in ys])
 
-    def fit(X, y):
-        return HistGradientBoostingClassifier(max_depth=5, learning_rate=0.08, max_iter=150, min_samples_leaf=30, l2_regularization=1.0, random_state=0).fit(X, y)
+    def fit(X, y, depth=5, iters=150, lr=0.08, leaf=30, l2=1.0, weight=None):
+        return HistGradientBoostingClassifier(max_depth=depth, learning_rate=lr, max_iter=iters, min_samples_leaf=leaf, l2_regularization=l2, random_state=0).fit(X, y, sample_weight=weight)
 
     data = sets_available(["dev", "test", "unseen"])
     prepared = {}
@@ -124,6 +125,18 @@ def main():
         thr, res, curve = run(model, with_lex)
         f1 = lambda r, p: 2 * r * p / (r + p + 1e-9)
         print(f"{label:44s} {thr:.2f}  " + "   ".join(f"{res[k][0]:.1%}/{res[k][1]:.1%} ({f1(*res[k]):.2f})" for k in ("dev", "test", "unseen")) + f"   [{len(y)} rows, {time.time() - t1:.0f}s]", flush=True)
+        if args.grid and with_lex:
+            sizes = [len(a) for a, _ in parts]                 # 풀 순서(course, web, lex)대로 행 수
+            course_rows = sizes[0]
+            print("\ntraining settings on variant C (threshold chosen on dev; test / paper-reviews measured once at it):")
+            for cfg in (dict(), dict(depth=4), dict(depth=6, iters=200, lr=0.06), dict(depth=8, iters=300, lr=0.05, leaf=50, l2=3.0),
+                        dict(iters=300, lr=0.04), dict(course_w=3), dict(course_w=6), dict(depth=6, iters=300, lr=0.05, leaf=100, l2=5.0, course_w=3)):
+                w = np.ones(len(y))
+                w[:course_rows] = cfg.get("course_w", 1)
+                kw = {k: v for k, v in cfg.items() if k != "course_w"}
+                m = fit(X, y, weight=w, **kw)
+                t, r_, _ = run(m, with_lex)
+                print(f"  {str(cfg or 'base'):70s} thr {t:.2f}  " + "   ".join(f"{r_[k][0]:.1%}/{r_[k][1]:.1%} ({f1(*r_[k]):.2f})" for k in ("dev", "test", "unseen")), flush=True)
 
 
 if __name__ == "__main__":
