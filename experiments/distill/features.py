@@ -31,20 +31,24 @@ FEATURES = (["n_tokens", "n_chars", "n_words", "hangul", "latin", "digit", "symb
             + ["lex_seen", "lex_rate", "first_seen", "first_rate", "last_seen", "last_rate"])
 
 
-def teacher_forms(text: str, effort: str = "medium") -> frozenset | None:
-    """캐시된 LLM 개념 목록 → 원문에 있는 개념의 loose 표기 집합. 캐시에 없으면 None (여기서는 LLM 을 부르지 않는다)."""
+def teacher_concepts(text: str, effort: str = "medium"):
+    """캐시된 LLM 개념 목록 → 원문에 있는 개념 [(대표 표기, loose 표기 집합)]. 캐시에 없으면 None (여기서는 LLM 을 부르지 않는다)."""
     from app.main import role_llm_config
     from app.services.llm import make_llm
     llm = make_llm(role_llm_config("relation", effort))
-    key = hashlib.sha256(json.dumps([llm.provider, llm.model, effort, PROMPT_VERSION, SYSTEM, nfc(text)], ensure_ascii=False).encode()).hexdigest()
-    p = ROOT / "data/private/cache/llm-only" / f"{key}.json"
-    if not p.exists():
-        key = hashlib.sha256(json.dumps([llm.provider, llm.model, effort, PROMPT_VERSION, SYSTEM, text], ensure_ascii=False).encode()).hexdigest()
+    for body in (nfc(text), text):
+        key = hashlib.sha256(json.dumps([llm.provider, llm.model, effort, PROMPT_VERSION, SYSTEM, body], ensure_ascii=False).encode()).hexdigest()
         p = ROOT / "data/private/cache/llm-only" / f"{key}.json"
-        if not p.exists():
-            return None
-    grounded, _ = ground(parse(json.loads(p.read_text(encoding="utf-8"))), nfc(text), loose)
-    return frozenset().union(*[k for _, k in grounded]) if grounded else frozenset()
+        if p.exists():
+            grounded, _ = ground(parse(json.loads(p.read_text(encoding="utf-8"))), nfc(text), loose)
+            return grounded
+    return None
+
+
+def teacher_forms(text: str, effort: str = "medium") -> frozenset | None:
+    """교사 개념의 loose 표기 집합 (없으면 None)."""
+    g = teacher_concepts(text, effort)
+    return None if g is None else (frozenset().union(*[k for _, k in g]) if g else frozenset())
 
 
 _CALLED = re.compile(r"(called|known as|named|so-called|termed|referred to as|stands for|denoted|dubbed|introduce[sd]?|propose[sd]?|define[sd]?)\s+(a |an |the )?[\"'“‘`*]*$", re.I)
