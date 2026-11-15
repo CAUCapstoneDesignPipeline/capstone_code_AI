@@ -67,7 +67,7 @@ def explain_llm_config():
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
                explanation_judge=None, merge_judge=None, concept_filter=None, fact_extractor=None,
-               soundness_judge=None, chat=None, external_finder=None, student=None, concept_llm=None) -> FastAPI:
+               soundness_judge=None, chat=None, external_finder=None, student=None, concept_llm=None, student_judge=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -161,6 +161,22 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 log.info("개념 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
             except Exception as e:      # extract-llm-1 만 준비되지 않은 상태로 둔다
                 log.error("개념 LLM 을 만들지 못했다: %s", e)
+        if st.student_judge is None and settings.decisions_judge:
+            try:
+                import os
+
+                import openai
+
+                from app.services.concepts.judge import DEFAULT_MODEL, DecisionsJudge, StudentJudge
+                if st.student is None:
+                    raise ValueError("학생 개념 선택기가 없다")
+                model = os.environ.get("AI_DECISIONS_MODEL", DEFAULT_MODEL)
+                # 요청 두 개가 동시에 나가고 전체 처리 제한(REQUEST_TIMEOUT_S) 안에 끝나야 한다: 시간 제한 30초, 재시도 1번
+                client = openai.OpenAI(max_retries=1, timeout=30.0)
+                st.student_judge = StudentJudge(st.student, DecisionsJudge(client, model))
+                log.info("Decisions 판정: %s", model)
+            except Exception as e:      # extract-student-decisions-1 만 준비되지 않은 상태로 둔다
+                log.error("Decisions 판정을 만들지 못했다: %s", e)
         if st.external_finder is None and settings.external_llm:
             try:
                 from app.services.links.external import ExternalKnowledgeFinder, SourceJudge
@@ -234,6 +250,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.external_finder = external_finder
     app.state.student = student
     app.state.concept_llm = concept_llm
+    app.state.student_judge = student_judge
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()

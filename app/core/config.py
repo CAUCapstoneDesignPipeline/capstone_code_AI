@@ -22,6 +22,8 @@
   AI_FACTS_LLM_PROVIDER / _MODEL / _EFFORT   계산용 사실 추출(facts-llm-3, AI_RELATION_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
   AI_SOUND_LLM_PROVIDER / _MODEL / _EFFORT   조건부 결론 판정(derive-sound-1, AI_VERIFY_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
   AI_CONCEPTS_LLM         1 이면 LLM 으로 개념을 뽑는 profile(extract-llm-1) 을 켠다 (기본 0 — 노트 원문이 LLM 제공자로 나가고 호출마다 몇 초·비용이 든다). 모델은 AI_CONCEPTS_LLM_PROVIDER / _MODEL / _EFFORT (기본 effort medium)
+  AI_DECISIONS_JUDGE      1 이면 학생 후보를 OpenAI Decisions API 로 판정하는 profile(extract-student-decisions-1) 을 켠다 (기본 0 — 노트 원문이 OpenAI 로 나가고
+                          호출마다 약 1초·토큰 비용이 든다. 미리보기 API 라 모델은 AI_DECISIONS_MODEL, 기본 gpt-6-luna). 키는 OPENAI_API_KEY
   AI_EXTERNAL_LLM         1 이면 외부 지식(/external-knowledge, 웹 검색) 을 켠다 (기본 0 — 비용·한도 결정 뒤 배포에서 명시적으로 켠다). 모델은 AI_EXTERNAL_LLM_PROVIDER / _MODEL / _EFFORT (anthropic 만, 기본 effort medium)
   AI_CHAT_LLM             1 이면 챗봇(/chat) 을 켠다 (기본 0 — 관계 판정 LLM 처럼 배포에서 명시적으로 켠다). 모델은 AI_CHAT_LLM_PROVIDER / _MODEL / _EFFORT (기본 anthropic claude-sonnet-5-5, effort low)
   AI_EMBEDDING_PROFILES   켤 임베딩 profile id, 쉼표로 구분 (기본 없음)
@@ -56,6 +58,7 @@ class ExtractProfile:
     concept_filter: bool = False        # 결정적으로 뽑은 개념 후보 중 개념이 아닌 것을 LLM 이 거른다 (빼기만)
     student: str | None = None          # 토큰 n-gram 후보를 학습한 모델로 고른다 (추출기 후보를 쓰지 않는다, LLM 아님: app/services/concepts/student.py)
     llm_concepts: bool = False          # LLM 이 노트를 읽고 개념을 직접 뽑는다 (app/services/concepts/llm_concepts.py)
+    decisions: bool = False             # student 후보를 OpenAI Decisions API 가 판정해 학생 확률과 섞는다 (app/services/concepts/judge.py)
 
     @property
     def uses_llm(self) -> bool:
@@ -78,6 +81,8 @@ EXTRACT_PROFILES = {p.id: p for p in (
     # 두 단계 흐름 (docs/be-integration.md): student 가 약 0.1초에 첫 결과를 주고, llm 이 몇 초 뒤 더 나은 결과로 바꿔 넣게 한다. 관계는 둘 다 규칙+구조
     ExtractProfile("extract-student-1", relations="rules+structure", student="extract-student-1"),
     ExtractProfile("extract-llm-1", relations="rules+structure", llm_concepts=True),
+    # 중간 단계 (기본 꺼짐): student 가 후보를 내고 Decisions API 가 약 1초에 판정해 섞는다. 정확도는 student 와 llm 사이 (docs/eval/concept-student.md)
+    ExtractProfile("extract-student-decisions-1", relations="rules+structure", student="extract-student-1", decisions=True),
 )}
 EXTRACT_PROFILE = "extract-det-3"       # 권장 기본값 (완전 결정적)
 
@@ -118,6 +123,7 @@ class Settings:
     chat_llm: bool = False
     external_llm: bool = False
     concepts_llm: bool = False
+    decisions_judge: bool = False
     explain_cache: Path | None = Path("data/private/cache/explanations")
     verify_llm: bool = False
     verify_cache: Path | None = Path("data/private/cache/verifications")
@@ -138,6 +144,7 @@ class Settings:
             chat_llm=env("AI_CHAT_LLM", "0") == "1",
             external_llm=env("AI_EXTERNAL_LLM", "0") == "1",
             concepts_llm=env("AI_CONCEPTS_LLM", "0") == "1",
+            decisions_judge=env("AI_DECISIONS_JUDGE", "0") == "1",
             explain_cache=Path(env("AI_EXPLAIN_CACHE", "data/private/cache/explanations")),
             verify_llm=env("AI_VERIFY_LLM", "1") == "1",
             verify_cache=Path(env("AI_VERIFY_CACHE", "data/private/cache/verifications")),

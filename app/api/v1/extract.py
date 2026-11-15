@@ -16,6 +16,7 @@ from app.schemas.extract import (ExtractedConcept, ExtractedEvidence, ExtractedR
                                  ExtractResponse, ResponseMeta)
 from app.services.concepts import Mention
 from app.services.concepts.filter_llm import PROMPT_VERSION as FILTER_PROMPT
+from app.services.concepts.judge import PROMPT_VERSION as DECISIONS_PROMPT
 from app.services.llm import LLMError
 from app.services.relations import PROMPT_VERSION, extract_relations
 
@@ -42,7 +43,7 @@ async def extract(request: Request):
     state = request.app.state
     if state.extractor is None or (profile.uses_llm and state.typer is None) or \
             (profile.concept_filter and state.concept_filter is None) or (profile.student and state.student is None) or \
-            (profile.llm_concepts and state.concept_llm is None):
+            (profile.llm_concepts and state.concept_llm is None) or (profile.decisions and state.student_judge is None):
         raise AiError("SERVICE_UNAVAILABLE", retry_after=30)
     if state.inflight.locked():
         raise AiError("AI_BUSY", retry_after=1)
@@ -51,6 +52,8 @@ async def extract(request: Request):
     def work():
         if profile.llm_concepts:                  # LLM 이 개념을 직접 뽑는다 (형태소 분석기를 쓰지 않는다)
             selected = state.concept_llm.select(req.note.noteId, req.note.noteVersion, req.note.body)
+        elif profile.decisions:                   # 학생 후보를 Decisions 가 판정한다 (형태소 분석기 잠금은 후보를 만드는 동안만 — 네트워크 호출 중에는 풀어 둔다)
+            selected = state.student_judge.select(state.extractor, req.note.noteId, req.note.noteVersion, req.note.body, lock=state.kiwi_lock)
         elif profile.student:
             with state.kiwi_lock:
                 selected = state.student.select(state.extractor, req.note.noteId, req.note.noteVersion, req.note.body)
@@ -87,12 +90,14 @@ async def extract(request: Request):
     cfg = state.extractor.config_version
     llm = profile.uses_llm
     if profile.student or profile.llm_concepts:
-        src = state.concept_llm if profile.llm_concepts else None
+        src = state.concept_llm if profile.llm_concepts else state.student_judge if profile.decisions else None
+        revision = (f"{src.prompt_version}+{src.model}" if profile.llm_concepts else state.student_judge.version + f"+{src.model}" if profile.decisions
+                    else state.student.version)
         return ExtractResponse(context=data["context"], concepts=concepts, evidence=ev_out, relations=rel_out, meta=ResponseMeta(
             profileVersion=req.profileVersion, provider=f"local+{src.provider}" if src else "local",
-            model=f"{src.model}+rules-relations" if src else "ngram-student+rules-relations",
-            modelRevision=state.student.version if profile.student else f"{src.prompt_version}+{src.model}",
-            promptVersion=(src.prompt_version if src else "student-1") + f"+rules-{cfg}", schemaVersion=SCHEMA_VERSION, preprocessingVersion=f"md-mask-{cfg}",
+            model=f"{src.model}+rules-relations" if src else "ngram-student+rules-relations", modelRevision=revision,
+            promptVersion=(DECISIONS_PROMPT if profile.decisions else src.prompt_version if src else "student-1") + f"+rules-{cfg}",
+            schemaVersion=SCHEMA_VERSION, preprocessingVersion=f"md-mask-{cfg}",
             durationMs=min(120000, int((time.monotonic() - t0) * 1000))))
     meta = ResponseMeta(
         profileVersion=req.profileVersion,

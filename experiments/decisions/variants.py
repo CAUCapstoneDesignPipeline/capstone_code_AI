@@ -24,25 +24,14 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from app.services.concepts.judge import CHOICE, CRITERIA, LEVELS      # 출고 profile 과 같은 문구 (한 곳에서만 고친다)
 CACHE = Path("/private/tmp/claude-501/-Users-klee9-capstone/6ecbcd7c-aceb-429f-97e6-1e37e2c2da24/scratchpad/decisions_variants_cache.pkl")
 
 STRICT = ('In this study note, is "{s}" a technical concept that deserves its own node in a knowledge graph (a field-specific term, algorithm, model, metric, '
           'dataset or named technique), and not a generic word, a heading frame, an example value, or a person/venue name?')
-CRITERIA = (
-    'Judge the exact string "{s}" as written in this study note. It is TRUE only if it is a CONCEPT a student would want as a node in a knowledge graph of this note: '
-    'a field-specific technical term, or a named algorithm, protocol, data structure, technique, theorem, formula, model, architecture, dataset or metric, '
-    'that the note explains, relates to other concepts, or mentions in passing as a standard term of its field (examples of TRUE: "Raft", "ACID", "backpropagation", '
-    '"Page Table", "정규화", "Bellman 방정식", "Q-learning"). It is FALSE for: general words usable in any field (method, result, data, system, user, 방법, 문제, 성능); '
-    'section or heading frames (Abstract, Step 1, 핵심 아이디어, 문제 상황); example values, variables, file names, page numbers (age = 30, x1, TID 10, p.20); '
-    'people, company, venue or lecture names (Jack Edmonds, Google); and sentence fragments or strings that cut a longer term short or add extra words to it '
-    '(a term as written in the note is the complete one, so "Interrupt vs" or half of a two-word term is FALSE).')
-CHOICE = 'Classify the exact string "{s}" as written in this study note.'
 CHOICES = [{"value": "core", "description": "a field-specific concept the note explains, defines, or relates to other concepts"},
            {"value": "mentioned", "description": "a field-specific term that appears in passing but is still a standard term of the field"},
            {"value": "not_concept", "description": "a generic word, section/heading frame, example value or variable, person/company/venue name, sentence fragment, or a string that cuts a longer term short or adds extra words to it"}]
-LEVELS = [{"label": "not_concept", "description": "generic word, heading frame, example value, person/venue name, fragment, or a mis-bounded piece of a longer term"},
-          {"label": "mentioned_term", "description": "a standard field-specific term that only appears in passing"},
-          {"label": "core_concept", "description": "a field-specific concept the note explains, defines, or relates to other concepts"}]
 BOUNDARY = ('Is "{s}" the complete term exactly as the note uses it (not a truncated piece of a longer term, and not a longer string that adds extra words around a shorter term)?')
 
 
