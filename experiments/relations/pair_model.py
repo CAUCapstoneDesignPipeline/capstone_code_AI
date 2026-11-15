@@ -78,6 +78,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-decisions", action="store_true", help="Decisions 확률 없이 구조·위치 특징만")
     ap.add_argument("--no-judge", action="store_true")
+    ap.add_argument("--named", action="store_true", help="Decisions 선택지에 실제 표기를 넣은 질문의 확률을 쓴다")
     ap.add_argument("--teacher", default="llm:anthropic:claude-sonnet-5-5")
     ap.add_argument("--folds", type=int, default=5)
     args = ap.parse_args()
@@ -100,7 +101,7 @@ def main():
         for note in notes.values():
             ms = harness.mentions_for(note)
             pairs = candidate_pairs(note.text, ms)
-            probs, _ = D.ask_all(client, "gpt-6-luna", note, pairs, cache)
+            probs, _ = D.ask_all(client, "gpt-6-luna", note, pairs, cache, named=args.named)
             dec = {(a, b): (p or {}) for (a, b, _), p in zip(pairs, probs)}
             by_loose = {loose(f): c for c, forms in note.concepts.items() for f in forms}
             teach = {}

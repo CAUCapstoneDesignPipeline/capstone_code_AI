@@ -80,7 +80,7 @@ def method_hybrid(spec):
     return run
 
 
-def method_decisions(spec):
+def method_decisions(spec, named=False):
     """후보 쌍(같은 문장·절·제목↔절)마다 Decisions 객관식 질문 하나: decisions:임계값."""
     import openai
     import pickle
@@ -92,7 +92,7 @@ def method_decisions(spec):
 
     def run(note, mentions):
         pairs = candidate_pairs(note.text, mentions)
-        probs, secs = D.ask_all(client, "gpt-6-luna", note, pairs, cache)
+        probs, secs = D.ask_all(client, "gpt-6-luna", note, pairs, cache, named=named)
         out = []
         for (a, b, _), p in zip(pairs, probs):
             if p is None or 1.0 - p.get("none", 0.0) < thr:
@@ -104,9 +104,37 @@ def method_decisions(spec):
     return run
 
 
+def method_decisions2(spec):
+    """Decisions 두 질문 (객관식 + '노트가 관계를 말하는가' predicate): 관계 확률 = 둘의 평균, 유형·방향 = 객관식. decisions2:임계값."""
+    import openai
+    import pickle
+    from concurrent.futures import ThreadPoolExecutor
+    from experiments.relations import decisions_pairs as D
+    from experiments.relations.candidates import candidate_pairs
+    thr = float(spec)
+    client = openai.OpenAI(max_retries=2, timeout=120)
+    cache = pickle.load(open(D.CACHE, "rb")) if D.CACHE.exists() else {}
+
+    def run(note, mentions):
+        pairs = candidate_pairs(note.text, mentions)
+        with ThreadPoolExecutor(2) as pool:                     # 두 요청을 동시에 보낸다
+            f1 = pool.submit(D.ask_all, client, "gpt-6-luna", note, pairs, cache)
+            f2 = pool.submit(D.ask_pred, client, "gpt-6-luna", note, pairs, cache)
+            (probs, s1), (pred, s2) = f1.result(), f2.result()
+        out = []
+        for (a, b, _), p, q in zip(pairs, probs, pred):
+            if p is None or (1.0 - p.get("none", 0.0) + q) / 2 < thr:
+                continue
+            best = max((v for v in p if v != "none"), key=lambda v: p[v])
+            t, a_src = D.decode(best)
+            out.append((a, b, t) if a_src else (b, a, t))
+        return out, max(s1, s2)
+    return run
+
+
 def build(m):
     return (method_rules() if m == "rules" else method_llm(m[4:]) if m.startswith("llm:") else method_hybrid(m[7:]) if m.startswith("hybrid:")
-            else method_decisions(m[10:]) if m.startswith("decisions:") else None)
+            else method_decisions(m[10:]) if m.startswith("decisions:") else method_decisions2(m[11:]) if m.startswith("decisions2:") else method_decisions(m[11:], named=True) if m.startswith("decisionsn:") else None)
 
 
 def main():

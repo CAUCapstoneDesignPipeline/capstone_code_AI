@@ -38,6 +38,41 @@ CHOICES = [("none", "the note states no relation between A and B"),
 CHOICE_LIST = [{"value": v, "description": d} for v, d in CHOICES]
 
 
+PRED = ('Read the study note. Does the NOTE ITSELF state a relation between the two terms "{a}" and "{b}" - one is a kind of, a part of, a cause of, a requirement of, '
+        'used for, or an example of the other, or the note explicitly contrasts or compares them - in a sentence, list, table or heading structure? '
+        'Answer TRUE only if the note says it. Mere co-occurrence, listing, sitting in the same section, or outside knowledge is FALSE.')
+
+
+def ask_pred(client, model, note, pairs, cache):
+    """쌍마다 '노트가 관계를 말하는가' predicate 확률 → ([확률], 지연 초)."""
+    labels = [(a, b) for a, b, _ in pairs]
+    wording = "pred-" + hashlib.sha256(PRED.encode()).hexdigest()[:10]
+    chunks = [labels[i:i + MAX_Q] for i in range(0, len(labels), MAX_Q)]
+
+    def call(chunk):
+        key = (model, wording, hashlib.sha256((note.text + "\x00" + "\x1f".join(f"{a}\x1e{b}" for a, b in chunk)).encode()).hexdigest())
+        if key in cache:
+            return cache[key]
+        qs = [{"type": "predicate", "instructions": PRED.format(a=a, b=b)} for a, b in chunk]
+        for attempt in range(8):
+            t0 = time.perf_counter()
+            try:
+                d = client.decisions.create(model=model, input=note.text, questions=qs)
+                break
+            except Exception:
+                if attempt == 7:
+                    raise
+                time.sleep(min(30, 3 + attempt * 3))
+        cache[key] = dict(probs=[0.0 if a.type == "refusal" else a.probability for a in d.answers], seconds=time.perf_counter() - t0, tokens=d.usage.input_tokens)
+        return cache[key]
+
+    if not chunks:
+        return [], 0.0
+    with ThreadPoolExecutor(len(chunks)) as pool:
+        outs = list(pool.map(call, chunks))
+    return [p for o in outs for p in o["probs"]], max(o["seconds"] for o in outs)
+
+
 def decode(value):
     """선택지 값 → (유형, a 가 주어인가) 또는 None."""
     if value == "none":
@@ -48,10 +83,15 @@ def decode(value):
     return t, d == "ab"
 
 
-def ask_all(client, model, note, pairs, cache):
+def named_choices(a, b):
+    """선택지 설명에 A·B 대신 실제 표기를 넣는다."""
+    return [{"value": v, "description": d.replace("A and B", f'"{a}" and "{b}"').replace("A is", f'"{a}" is').replace("B is", f'"{b}" is').replace("A needs", f'"{a}" needs').replace("B needs", f'"{b}" needs').replace("A causes", f'"{a}" causes').replace("B causes", f'"{b}" causes').replace("A work", f'"{a}" work').replace(" of B", f' of "{b}"').replace(" of A", f' of "{a}"').replace("for B", f'for "{b}"').replace("for A", f'for "{a}"').replace("in B", f'in "{b}"').replace("to B", f'to "{b}"').replace("to A", f'to "{a}"')} for v, d in CHOICES]
+
+
+def ask_all(client, model, note, pairs, cache, named=False):
     """쌍마다 선택지 확률 dict 를 돌려준다 → ([dict], 이 노트의 지연 초)."""
     labels = [(a, b) for a, b, _ in pairs]
-    wording = hashlib.sha256(repr([QUESTION, CHOICES]).encode()).hexdigest()[:10]
+    wording = hashlib.sha256(repr([QUESTION, CHOICES, "named" if named else ""]).encode()).hexdigest()[:10]
     chunks = [labels[i:i + MAX_Q] for i in range(0, len(labels), MAX_Q)]
     results, seconds = [], 0.0
 
@@ -59,7 +99,7 @@ def ask_all(client, model, note, pairs, cache):
         key = (model, wording, hashlib.sha256((note.text + "\x00" + "\x1f".join(f"{a}\x1e{b}" for a, b in chunk)).encode()).hexdigest())
         if key in cache:
             return cache[key]
-        qs = [{"type": "choice", "instructions": QUESTION.format(a=a, b=b), "choices": CHOICE_LIST} for a, b in chunk]
+        qs = [{"type": "choice", "instructions": QUESTION.format(a=a, b=b), "choices": named_choices(a, b) if named else CHOICE_LIST} for a, b in chunk]
         for attempt in range(8):
             t0 = time.perf_counter()
             try:
