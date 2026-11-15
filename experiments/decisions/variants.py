@@ -24,8 +24,9 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from experiments.cache import scratch
 from app.services.concepts.judge import CHOICE, CRITERIA, LEVELS      # 출고 profile 과 같은 문구 (한 곳에서만 고친다)
-CACHE = Path("/private/tmp/claude-501/-Users-klee9-capstone/6ecbcd7c-aceb-429f-97e6-1e37e2c2da24/scratchpad/decisions_variants_cache.pkl")
+CACHE = scratch("decisions_variants_cache.pkl")
 
 STRICT = ('In this study note, is "{s}" a technical concept that deserves its own node in a knowledge graph (a field-specific term, algorithm, model, metric, '
           'dataset or named technique), and not a generic word, a heading frame, an example value, or a person/venue name?')

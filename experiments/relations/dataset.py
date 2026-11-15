@@ -13,7 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-OUT = Path("/private/tmp/claude-501/-Users-klee9-capstone/6ecbcd7c-aceb-429f-97e6-1e37e2c2da24/scratchpad/rel_dataset.pkl")
+from experiments.cache import scratch
+OUT = scratch("rel_dataset.pkl")
 
 
 def main():

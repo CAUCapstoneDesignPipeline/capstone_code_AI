@@ -20,8 +20,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-SP = Path("/private/tmp/claude-501/-Users-klee9-capstone/6ecbcd7c-aceb-429f-97e6-1e37e2c2da24/scratchpad")
-CACHE = SP / "encoder_cache.pkl"
+from experiments.cache import scratch
+CACHE = scratch("encoder_cache.pkl")
 MODEL = "intfloat/multilingual-e5-small"
 MAX_MENTIONS = 5
 

@@ -20,7 +20,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-CACHE = Path("/private/tmp/claude-501/-Users-klee9-capstone/6ecbcd7c-aceb-429f-97e6-1e37e2c2da24/scratchpad/decisions_variants_cache.pkl")
+from experiments.cache import scratch
+CACHE = scratch("decisions_variants_cache.pkl")
 VARIANTS = ("score", "criteria")
 
 
@@ -167,7 +168,7 @@ def main():
         best = max(grid, key=lambda t: f1(*evaluate("dev", how, t)))
         r = {k: evaluate(k, how, best) for k in data}
         print(f"{how:44s} {best:.2f}  " + "   ".join(f"{r[k][0]:.1%}/{r[k][1]:.1%} ({f1(*r[k]):.3f})" for k in ("dev", "test", "unseen")), flush=True)
-    pickle.dump({k: v[0] for k, v in models.items()}, open(Path("/private/tmp/claude-501/-Users-klee9-capstone/6ecbcd7c-aceb-429f-97e6-1e37e2c2da24/scratchpad/combiner_models.pkl"), "wb"))
+    pickle.dump({k: v[0] for k, v in models.items()}, open(scratch("combiner_models.pkl"), "wb"))
 
 
 if __name__ == "__main__":

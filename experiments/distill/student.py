@@ -19,6 +19,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from experiments.cache import scratch
 
 
 def fit_model(X, y, seed=0):
@@ -26,7 +27,7 @@ def fit_model(X, y, seed=0):
     return HistGradientBoostingClassifier(max_depth=6, learning_rate=0.06, max_iter=300, min_samples_leaf=30, l2_regularization=1.0, random_state=seed).fit(X, y)
 
 
-EMB_CACHE = Path("/private/tmp/claude-501/-Users-klee9-capstone/6ecbcd7c-aceb-429f-97e6-1e37e2c2da24/scratchpad/emb-cache.pkl")
+EMB_CACHE = scratch("emb-cache.pkl")
 
 
 def embed_all(strings):
