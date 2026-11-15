@@ -67,8 +67,9 @@ class Pool:
                 try:
                     res = self.judge().complete_json(A.SYSTEM, user, A.SCHEMA, "adjudicate").data
                     break
-                except Exception:
+                except Exception as e:
                     if attempt == 3:
+                        print(f"판정 실패: {name}/{note.name} 쌍 {len(chunk)}개 입력 {len(user)}자: {e}", flush=True)
                         raise
                     import time
                     time.sleep(5 * (attempt + 1))
