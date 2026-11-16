@@ -127,6 +127,11 @@ def extract_relations(text: str, mentions: dict[str, list[Mention]], policy_type
     for k in [k for k in found if k[1] in generic and frozenset((k[0], k[2])) in typed_pairs]:
         del found[k]
 
+    return finalize(text, found, limits)
+
+
+def finalize(text: str, found: dict, limits: Limits) -> tuple[list[Evidence], list[Relation]]:
+    """found: (source, code, target) → {"evidence": {(start, end)}, "confidence", "method"} 에서 한도 안으로 고르고 응답 모양으로 만든다."""
     # 선택: 확신도 높은 순 → 첫 근거 위치 → key. 근거는 위치 순으로 최대 8개.
     ranked = sorted(found.items(), key=lambda kv: (-kv[1]["confidence"], min(kv[1]["evidence"]), kv[0]))
     chosen, used = [], set()

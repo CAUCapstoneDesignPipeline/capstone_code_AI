@@ -19,7 +19,7 @@ def ready_profiles(state) -> list[str]:
         out += [p.id for p in EXTRACT_PROFILES.values() if (not p.uses_llm or state.typer is not None)
                 and (not p.concept_filter or state.concept_filter is not None)
                 and (not p.student or state.student is not None) and (not p.llm_concepts or state.concept_llm is not None)
-                and (not p.decisions or state.student_judge is not None)]
+                and (not p.decisions or state.student_judge is not None) and (not p.uses_pairs or state.pair_relations is not None)]
     out += list(state.embedders)
     out += [p.id for p in REASONING_PROFILES.values() if p.ready(state)]
     return sorted(out)

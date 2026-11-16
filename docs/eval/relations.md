@@ -40,6 +40,20 @@
 - 구조·위치 특징만으로는 쌍은 .56 정도 찾지만 유형·방향을 몰라 strict .11~.18 이다. Decisions 확률이 그 유형 판단을 채운다.
 - Haiku 지연은 한 번에 4개씩 보냈을 때의 값이라 흔들린다 (Sonnet 보다 느린 것은 출력이 길어서일 수 있다).
 
+## 출고한 빠른 관계 profile: `pairs-1`
+
+지연을 최우선으로 두고 괜찮은 성능이면 되는 쪽의 선택이다 (strict F1 은 Sonnet 의 약 70~75%, 지연은 약 1/4~1/8). `app/services/relations/pairs.py`, 모델 `pairs-1.json` (2 MB, numpy 로 계산, 같은 입력·같은 판정이면 항상 같은 결과).
+
+- **흐름**: 후보 쌍(`candidates.py`) → Decisions 객관식 요청 하나(노트 원문은 한 번, 쌍마다 질문 하나, 선택지에 실제 표기를 넣음, 400쌍까지) → 구조·위치 특징 + 선택지 확률을 학습한 트리 둘(관계가 있는가 · 있다면 유형·방향) → 임계값 0.2 → 관계.
+  **근거**는 두 개념이 같은 문장에 가장 가까이 나온 곳의 그 문장이고 (같은 문장이 없으면 가장 가까운 두 언급이 든 문장·제목 줄), 코드가 원문에서 그대로 자르므로 quote 는 항상 원문 slice 다. LLM-only 에는 없던 부분이다.
+- **profile**: `extract-student-pairs-1` (학생 개념 + 이 관계, 개념 단계 약 0.1초 + 관계 단계 약 0.8초), `extract-student-decisions-pairs-1` (Decisions 개념 판정 + 이 관계, 약 0.8초 + 0.8초, 두 요청이 차례로 나간다). 둘 다 **기본 꺼짐**(`AI_DECISIONS_JUDGE=1`). 규칙·구조 관계는 쓰지 않는다 (strict F1 .02).
+- **성능**: 위 표의 분류기 행과 같다. 노트 단위 5겹 교차검증, 임계값은 dev 예측에서 골랐다 — strict F1 .43 / .41 / .40, pair F1 .66 / .66 / .64. 출고 모델은 59개 노트 전체로 다시 학습했다 (교사는 Sonnet LLM-only, 캐시된 응답).
+- **지연** (출고 코드를 정답 노트 59개에서 실제로 불러 잼, 개념은 정답 개념, `eval_pairs.py`): 관계 단계 중앙값 **0.80초**, p90 1.25초, 최대 1.45초 (dev 0.87 · test 1.06 · 논문 0.48초). 노트당 후보 쌍 평균 258 · 359 · 65개, 낸 관계 평균 56 · 65 · 21개.
+  지연은 쌍 수에 거의 늘지 않는다 (요청 하나). 쌍은 노트당 800개까지만 판정한다 (`MAX_PAIRS`, 같은 문장·제목 쌍과 가까운 쌍을 먼저) — 개념이 아주 많은 노트의 비용을 묶는다. 요청 하나는 입력 토큰 약 6만이라 분당 한도(TPM)를 쓴다.
+- **한계**: 임계값 0.2 는 탐색한 격자의 가장자리라 (그 아래 예측은 판정하지 않았다) 더 낮은 값이 더 나을 수 있다. 낸 관계가 많은 편이다 (노트당 정답 20~27개에 56~65개, 정밀도 37~50%). 교사가 Sonnet 이라 Sonnet 의 오류를 따라 한다.
+  실제 서비스에서는 개념 추출의 오차가 더해진다. 노트 원문이 OpenAI 로 나간다. 질문 문구·선택지·특징·임계값이 모델의 일부라 바꾸면 `PROMPT_VERSION` 과 profile id 를 함께 올린다. 학습은 `train_pair.py` (`--threshold`, `--write`), 파일의 특징 목록이 코드와 다르면 로드를 거부한다.
+- 정확도가 더 필요하면: Sonnet LLM-only (strict .56 / .53 / .62, 3~7초) 를 두 번째 단계로 둔다 (아직 서비스에 넣지 않았다. 근거는 같은 방식으로 코드가 찾아야 한다).
+
 ## 읽을 때 주의
 
 - **정답·판정이 AI 가 만든 것이다** (사람 검토 전). 판정자(Opus)가 정답 초안을 쓴 모델과 같고 Sonnet 이 검토에 참여했으므로 Claude 계열 방법이 정답과 판단이 닮아 유리하다. 독립적인 읽기로 gpt-5.4-mini 를 같이 쟀지만 작은 모델이라 낮은 점수가 그 탓인지 가려지지 않는다.
@@ -58,4 +72,6 @@ uv run --env-file .env python experiments/relations/adjudicate.py               
 uv run --env-file .env python experiments/relations/decisions_pairs.py             # Decisions 객관식 (쌍마다 질문 하나)
 uv run --env-file .env python experiments/relations/pooled_eval.py --methods rules hybrid:anthropic:claude-sonnet-5-5:low llm:anthropic:claude-sonnet-5-5 llm:anthropic:claude-haiku-5-5 llm:openai:gpt-5.4-mini decisions:0.55
 uv run --env-file .env python experiments/relations/pair_model.py --named [--no-decisions]  # 학습한 쌍 분류기 (교차검증, --named = 선택지에 표기를 넣은 질문)
+uv run --env-file .env python experiments/relations/train_pair.py --threshold 0.2 --write   # 출고 모델 (pairs-1.json) 학습·내보내기
+uv run --env-file .env python experiments/relations/eval_pairs.py                  # 출고 코드를 실제로 불러 지연 재기
 ```

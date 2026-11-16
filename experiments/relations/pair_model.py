@@ -18,60 +18,34 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-SYM = ("contrasts_with", "analogous_to")
-CUES = ["은", "는", "이다", "입니다", "한다", "된다", "의", "와", "과", "및", "또는", "→", "->", ":", "(", ")", ",", "를", "을", "에서", "으로", "로", "위해", "때문", "필요", "달리", "반면", "예", "등", "처럼", "vs", "VS", "|", "-"]
-CLASSES = ["is_a_ab", "is_a_ba", "part_of_ab", "part_of_ba", "causes_ab", "causes_ba", "requires_ab", "requires_ba", "used_for_ab", "used_for_ba",
-           "example_of_ab", "example_of_ba", "contrasts_with", "analogous_to"]
+from app.services.relations.pairs import CLASSES, SYM, decision_features, positions, structure_features  # noqa: E402
 
 
 def features(note, ms, pairs, decisions=None):
-    """쌍마다 특징 벡터. decisions: {(a, b): {선택지: 확률}} 또는 None."""
-    from app.services.relations.extract import _py_offsets
-    from app.services.relations.sentences import sentence_spans
-    text = note.text
-    P = {}
-    for o in _py_offsets(text, ms):
-        P.setdefault(o.key, []).append((o.start, o.end))
-    sents = sentence_spans(text)
-    sent_of = lambda p: next((i for i, (s, e) in enumerate(sents) if s <= p < e), -1)
-    lines, pos = [], 0
-    for line in text.split("\n"):
-        lines.append((pos, pos + len(line), line))
-        pos += len(line) + 1
-    line_of = lambda p: next((i for i, (s, e, _) in enumerate(lines) if s <= p <= e), -1)
-    head_level = lambda i: (len(re.match(r"^#+", lines[i][2]).group(0)) if i >= 0 and re.match(r"^#+\s", lines[i][2]) else 0)
-    is_list = lambda i: i >= 0 and bool(re.match(r"^\s*([-*+]|\d+[.)])\s", lines[i][2]))
-    is_table = lambda i: i >= 0 and lines[i][2].lstrip().startswith("|")
-    n_chars, n_lines = max(1, len(text)), max(1, len(lines))
-    X = []
-    for a, b, kinds in pairs:
-        pa, pb = P[a], P[b]
-        sa, sb = [sent_of(s) for s, _ in pa], [sent_of(s) for s, _ in pb]
-        la, lb = [line_of(s) for s, _ in pa], [line_of(s) for s, _ in pb]
-        sd = min(abs(x - y) for x in sa for y in sb)
-        both_sent = len(set(sa) & set(sb))
-        both_line = len(set(la) & set(lb))
-        cd = min(abs(s2 - e1) if s2 >= e1 else abs(s1 - e2) for s1, e1 in pa for s2, e2 in pb for e2 in [e2] if True) if True else 0
-        # 가장 가까운 언급 쌍 사이 글
-        best = min(((abs(s2 - e1) if s2 >= e1 else abs(s1 - e2)), s1, e1, s2, e2) for s1, e1 in pa for s2, e2 in pb)
-        _, s1, e1, s2, e2 = best
-        between = text[min(e1, e2):max(s1, s2)] if max(s1, s2) > min(e1, e2) else ""
-        between = between[:80]
-        ha = [head_level(i) for i in la]
-        hb = [head_level(i) for i in lb]
-        f = [("sent" in kinds), ("section" in kinds), ("head" in kinds), sd, both_sent, both_line, min(cd, 400), len(between),
-             max(ha), max(hb), min(h for h in ha if h) if any(ha) else 0, min(h for h in hb if h) if any(hb) else 0,
-             len(pa), len(pb), len(pa) * len(pb), pa[0][0] / n_chars, pb[0][0] / n_chars, min(len(pa), len(pb)) / max(len(pa), len(pb)),
-             any(is_list(i) for i in la), any(is_list(i) for i in lb), any(is_table(i) for i in la), any(is_table(i) for i in lb),
-             pa[0][0] < pb[0][0], len(a), len(b), bool(re.search(r"[A-Za-z]", a)), bool(re.search(r"[A-Za-z]", b)), bool(re.search(r"[가-힣]", a)), bool(re.search(r"[가-힣]", b)),
-             a.lower() in b.lower() or b.lower() in a.lower(), text[e1:e1 + 1] in ("(", "（"), text[e2:e2 + 1] in ("(", "（"),
-             s1 < s2 and (re.search(r"\*\*", text[max(0, s1 - 2):s1]) is not None), (re.search(r"\*\*", text[max(0, s2 - 2):s2]) is not None)]
-        f += [between.count(c) for c in CUES]
-        if decisions is not None:
-            d = decisions[(a, b)]
-            f += [1.0 - d.get("none", 0.0)] + [d.get(c, 0.0) for c in CLASSES]
-        X.append(f)
-    return np.array(X, float)
+    """쌍마다 특징 벡터 (구조·위치 + 선택적으로 Decisions 확률). 특징 정의는 서비스 코드(app/services/relations/pairs.py)와 같다."""
+    X = structure_features(note.text, positions(note.text, ms), pairs)
+    return X if decisions is None else np.column_stack([X, decision_features(pairs, decisions)])
+
+
+def teacher_labels(teacher, note, pairs):
+    """교사(LLM-only 가 이 쌍에 관계를 냈는가, 냈다면 CLASSES 번호) → (yp, yt). 안 냈으면 yt = -1."""
+    from app.services.concepts.gold import loose
+    from experiments.relations import llm_only
+    by_loose = {loose(f): c for c, forms in note.concepts.items() for f in forms}
+    teach = {}
+    for s, t, ty in llm_only.ask(teacher, list(note.concepts), note.text)[0]:
+        s, t = by_loose.get(loose(s)), by_loose.get(loose(t))
+        if s and t and s != t:
+            teach.setdefault(frozenset((s, t)), (s, t, ty))
+    yp = np.array([int(frozenset((a, b)) in teach) for a, b, _ in pairs])
+    yt = []
+    for (a, b, _), y in zip(pairs, yp):
+        if not y:
+            yt.append(-1)
+            continue
+        s, t, ty = teach[frozenset((a, b))]
+        yt.append(CLASSES.index(ty if ty in SYM else f"{ty}_{'ab' if (s, t) == (a, b) else 'ba'}"))
+    return yp, np.array(yt)
 
 
 def main():
@@ -87,7 +61,6 @@ def main():
     from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.model_selection import GroupKFold
 
-    from app.services.concepts.gold import loose
     from experiments.relations import decisions_pairs as D
     from experiments.relations import harness, llm_only
     from experiments.relations.candidates import candidate_pairs
@@ -110,21 +83,7 @@ def main():
             pairs = candidate_pairs(note.text, ms)
             probs, _ = D.ask_all(client, "gpt-6-luna", note, pairs, cache, named=args.named)
             dec = {(a, b): (p or {}) for (a, b, _), p in zip(pairs, probs)}
-            by_loose = {loose(f): c for c, forms in note.concepts.items() for f in forms}
-            teach = {}
-            for s, t, ty in llm_only.ask(teacher, list(note.concepts), note.text)[0]:
-                s, t = by_loose.get(loose(s)), by_loose.get(loose(t))
-                if s and t and s != t:
-                    teach.setdefault(frozenset((s, t)), (s, t, ty))
-            yp = np.array([int(frozenset((a, b)) in teach) for a, b, _ in pairs])
-            yt = []
-            for (a, b, _), y in zip(pairs, yp):
-                if not y:
-                    yt.append(-1)
-                    continue
-                s, t, ty = teach[frozenset((a, b))]
-                cls = ty if ty in SYM else f"{ty}_{'ab' if (s, t) == (a, b) else 'ba'}"
-                yt.append(CLASSES.index(cls))
+            yp, yt = teacher_labels(teacher, note, pairs)
             X = features(note, ms, pairs, None if args.no_decisions else dec)
             if enc is not None:
                 H, offs = enc.tokens(note.text)
@@ -135,7 +94,7 @@ def main():
                 V, _ = candidate_vectors(H, offs, [{"spans": P[k]} for k in keys])
                 idx = {k: i for i, k in enumerate(keys)}
                 E_all.append(np.array([np.concatenate([V[idx[a]], V[idx[b]], V[idx[a]] * V[idx[b]]]) for a, b, _ in pairs], np.float32).reshape(len(pairs), -1))
-            rows.append((name, note, pairs, X, yp, np.array(yt)))
+            rows.append((name, note, pairs, X, yp, yt))
     X = np.vstack([r[3] for r in rows])
     yp = np.concatenate([r[4] for r in rows])
     yt = np.concatenate([r[5] for r in rows])

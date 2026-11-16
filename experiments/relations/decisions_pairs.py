@@ -24,17 +24,7 @@ from experiments.cache import scratch  # noqa: E402
 
 CACHE = scratch("relations_decisions.pkl")
 MAX_Q = 400
-QUESTION = ('Read the study note and decide what relation the NOTE ITSELF states between the two terms "{a}" (A) and "{b}" (B), in the sentence, list, table or heading structure where they appear. '
-            'Use only what the note says, never outside knowledge. Mere co-occurrence, listing, or sitting in the same section is NOT a relation: choose "none" then.')
-CHOICES = [("none", "the note states no relation between A and B"),
-           ("is_a_ab", "A is a kind of B (A is a subtype or specific form of B)"), ("is_a_ba", "B is a kind of A"),
-           ("part_of_ab", "A is a component or part of B"), ("part_of_ba", "B is a component or part of A"),
-           ("causes_ab", "A causes, produces or leads to B"), ("causes_ba", "B causes, produces or leads to A"),
-           ("requires_ab", "A needs B in order to hold or work"), ("requires_ba", "B needs A in order to hold or work"),
-           ("used_for_ab", "A is used for B (B is the purpose or goal of A)"), ("used_for_ba", "B is used for A (A is the purpose or goal of B)"),
-           ("example_of_ab", "A is a concrete example or instance of B"), ("example_of_ba", "B is a concrete example or instance of A"),
-           ("contrasts_with", "the note contrasts or compares A and B (neither is the subject)"),
-           ("analogous_to", "A and B work on a similar principle")]
+from app.services.relations.pairs import CHOICES, QUESTION, decode, named_choices  # noqa: E402,F401  (문구는 서비스 코드가 가진다)
 CHOICE_LIST = [{"value": v, "description": d} for v, d in CHOICES]
 
 
@@ -71,21 +61,6 @@ def ask_pred(client, model, note, pairs, cache):
     with ThreadPoolExecutor(len(chunks)) as pool:
         outs = list(pool.map(call, chunks))
     return [p for o in outs for p in o["probs"]], max(o["seconds"] for o in outs)
-
-
-def decode(value):
-    """선택지 값 → (유형, a 가 주어인가) 또는 None."""
-    if value == "none":
-        return None
-    if value in ("contrasts_with", "analogous_to"):
-        return value, True
-    t, d = value.rsplit("_", 1)
-    return t, d == "ab"
-
-
-def named_choices(a, b):
-    """선택지 설명에 A·B 대신 실제 표기를 넣는다."""
-    return [{"value": v, "description": d.replace("A and B", f'"{a}" and "{b}"').replace("A is", f'"{a}" is').replace("B is", f'"{b}" is').replace("A needs", f'"{a}" needs').replace("B needs", f'"{b}" needs').replace("A causes", f'"{a}" causes').replace("B causes", f'"{b}" causes').replace("A work", f'"{a}" work').replace(" of B", f' of "{b}"').replace(" of A", f' of "{a}"').replace("for B", f'for "{b}"').replace("for A", f'for "{a}"').replace("in B", f'in "{b}"').replace("to B", f'to "{b}"').replace("to A", f'to "{a}"')} for v, d in CHOICES]
 
 
 def ask_all(client, model, note, pairs, cache, named=False):

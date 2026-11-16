@@ -57,6 +57,24 @@ def _criteria_probability(answer):
 QUESTIONS = (("score", _score_question, _score_probability), ("criteria", _criteria_question, _criteria_probability))
 
 
+def create_answers(client, model: str, text: str, questions: list[dict]) -> list:
+    """Decisions 요청 하나를 보내 질문마다의 답을 돌려준다. 제공자 오류는 LLMError 로 바꾼다 (관계 판정(relations/pairs.py)도 쓴다)."""
+    import openai
+    try:
+        d = client.decisions.create(model=model, input=text, questions=questions)
+    except openai.RateLimitError as e:
+        raise LLMError("rate_limit", str(e)) from e
+    except openai.APITimeoutError as e:
+        raise LLMError("timeout", str(e)) from e
+    except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
+        raise LLMError("auth", str(e)) from e
+    except openai.APIError as e:
+        raise LLMError("provider", str(e)) from e
+    if len(d.answers) != len(questions):
+        raise LLMError("invalid_output", f"{len(d.answers)} answers for {len(questions)} questions")
+    return d.answers
+
+
 class DecisionsJudge:
     """후보 표기마다 '개념인가' 확률을 돌려준다. client 는 openai.OpenAI 처럼 decisions.create 가 있는 것."""
 
@@ -66,21 +84,9 @@ class DecisionsJudge:
         self.client, self.model = client, model
 
     def _ask(self, question, reduce, text: str, surfaces: list[str]) -> np.ndarray:
-        import openai
-        try:
-            d = self.client.decisions.create(model=self.model, input=text, questions=[question(s) for s in surfaces])
-        except openai.RateLimitError as e:
-            raise LLMError("rate_limit", str(e)) from e
-        except openai.APITimeoutError as e:
-            raise LLMError("timeout", str(e)) from e
-        except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
-            raise LLMError("auth", str(e)) from e
-        except openai.APIError as e:
-            raise LLMError("provider", str(e)) from e
-        if len(d.answers) != len(surfaces):
-            raise LLMError("invalid_output", f"{len(d.answers)} answers for {len(surfaces)} questions")
+        answers = create_answers(self.client, self.model, text, [question(s) for s in surfaces])
         # 답을 거절하거나 확률이 오지 않은 후보는 개념이 아니라고 본다
-        return np.array([0.0 if a.type == "refusal" else float(reduce(a)) for a in d.answers])
+        return np.array([0.0 if a.type == "refusal" else float(reduce(a)) for a in answers])
 
     def probabilities(self, text: str, surfaces: list[str]) -> np.ndarray:
         """두 질문의 확률 평균. 질문마다 요청을 하나씩 동시에 보낸다."""

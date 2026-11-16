@@ -67,7 +67,7 @@ def explain_llm_config():
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
                explanation_judge=None, merge_judge=None, concept_filter=None, fact_extractor=None,
-               soundness_judge=None, chat=None, external_finder=None, student=None, concept_llm=None, student_judge=None) -> FastAPI:
+               soundness_judge=None, chat=None, external_finder=None, student=None, concept_llm=None, student_judge=None, pair_relations=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -177,6 +177,19 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 log.info("Decisions 판정: %s", model)
             except Exception as e:      # extract-student-decisions-1 만 준비되지 않은 상태로 둔다
                 log.error("Decisions 판정을 만들지 못했다: %s", e)
+        if st.pair_relations is None and settings.decisions_judge:
+            try:
+                import os
+
+                import openai
+
+                from app.services.concepts.judge import DEFAULT_MODEL
+                from app.services.relations.pairs import DecisionsPairs, PairModel, PairRelations
+                client = openai.OpenAI(max_retries=1, timeout=30.0)
+                st.pair_relations = PairRelations(DecisionsPairs(client, os.environ.get("AI_DECISIONS_MODEL", DEFAULT_MODEL)), PairModel.load())
+                log.info("관계 분류기: %s", st.pair_relations.version)
+            except Exception as e:      # *-pairs-1 profile 만 준비되지 않은 상태로 둔다
+                log.error("관계 분류기를 만들지 못했다: %s", e)
         if st.external_finder is None and settings.external_llm:
             try:
                 from app.services.links.external import ExternalKnowledgeFinder, SourceJudge
@@ -251,6 +264,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.student = student
     app.state.concept_llm = concept_llm
     app.state.student_judge = student_judge
+    app.state.pair_relations = pair_relations
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()
