@@ -398,6 +398,19 @@ async function runSuggest() {
   render();
   if (r === S.run && S.sg.auto && S.sg.data?.candidates?.length) generateTop(AUTO_N);       // 요소 쌍이 이어지면 새 지식을 바로 만든다
 }
+// 관계를 뽑아 두지 않은 노트를 서버가 배경에서 채운다 (노트마다 OpenAI 요청 하나). 끝나면 후보를 다시 불러 점수를 붙인다
+async function relWarm() {
+  const res = await fetch("/dev/proposals/relations/warm", { method: "POST" });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) { S.sg.screenError = d.detail || `HTTP ${res.status}`; return render(); }
+  S.sg.relWarm = d; render();
+  while (S.sg.relWarm?.running) {
+    await new Promise((r) => setTimeout(r, 3000));
+    S.sg.relWarm = await (await fetch("/dev/proposals/relations")).json();
+    render();
+  }
+  runSuggest();
+}
 async function runScreen() {
   const D = S.sg.data;
   if (!D || D === "loading" || D.error || S.sg.screening) return;
@@ -591,7 +604,9 @@ function sgOrdered() {
   const hidden = S.sg.known.filter((k) => S.note === FREE || k.notes.includes(S.note));
   const shown = cs;
   const rank = (c) => ({ useful: 0, vague: 1 }[scr[c.id]?.label] ?? 2);
-  const sorted = [...shown].sort((x, y) => (screened ? rank(x) - rank(y) : 0));
+  // 같은 라벨 안에서는 관계 점수가 높은 쌍을 앞에 둔다 (점수가 없으면 후보 순서 그대로). 위 3개를 만드는 쪽도 이 순서를 따른다
+  const rel = (c) => c.relationScore ?? -1;
+  const sorted = [...shown].sort((x, y) => (screened ? rank(x) - rank(y) : 0) || rel(y) - rel(x));
   return { main: screened ? sorted.filter((c) => rank(c) < 2) : sorted, rest: screened ? sorted.filter((c) => rank(c) >= 2) : [], hidden, screened };
 }
 
@@ -668,9 +683,11 @@ function paintScreen(id) {
   if (chip) chip.innerHTML = scrChip(c);
   if (memo) memo.innerHTML = scrMemo(c);
 }
+const relTitle = (c) => `관계 점수 ${c.relationScore} (후보 안에서의 순위, 0~1) · 직접 선 ${c.relationSignals.direct} · 이웃 사이 선 ${c.relationSignals.nb_links} · 공통 이웃 ${c.relationSignals.shared_nb}`;
 function sgCard(c) {
   const g = S.sg.gen[c.id];
   const chips = [...c.channels.map((ch) => `<span class="tag" title="${esc(ch === "terms" ? "공유 낱말: " + c.shared.join(", ") : ch === "pivot" ? "둘 다 언급하는 키워드: " + c.via.join(", ") : "임베딩 코사인 " + c.cos)}">${SG_CH[ch]}${ch === "embed" && c.cos != null ? " " + c.cos : ""}</span>`),
+    ...(c.relationScore == null ? [] : [`<span class="tag" title="${esc(relTitle(c))}">관계 ${c.relationScore.toFixed(2)}</span>`]),
     `<span id="scr-${c.id}">${scrChip(c)}</span>`].join(" ");
   const where = (e) => e.origin === "generated"
     ? `<span class="tag" title="이해함으로 받아들인 새 지식. 이 노트들의 문장에 기댄다">새 지식</span> ${(e.notes || []).map((n) => `<button class="linkBtn" data-open="${esc(n)}" title="${esc(n)}">${esc(shortTitle(n, 18))}</button>`).join(" · ")}`
@@ -695,7 +712,11 @@ function suggestView(source) {
   if (D === "loading") return `${head}<p class="count"><span class="spin"></span>요소 쌍 후보를 찾는 중이에요… (처음 한 번은 임베딩 때문에 1분쯤 걸려요)</p>`;
   if (D.error) return `${head}<p class="error">${esc(D.error)}</p>`;
   const o = sgOrdered(), ch = D.channels;
-  const stats = `이 노트의 요소 ${D.anchors}개 · 전체 요소 ${D.elements}개 → 후보 ${D.candidates.length}개 (공유 낱말 ${ch.terms || 0} · 공통 키워드 ${ch.pivot || 0} · 의미 비슷 ${ch.embed || 0}${D.embeddings ? ` · 코사인 ${D.cosineFloor} 미만은 뺌` : " · 임베딩 없음"}) · ${D.ms}ms${answeredNote(D.answered)}`;
+  const R = D.relations || { ready: 0, total: 0 }, W = S.sg.relWarm;
+  const relNote = R.total && R.ready < R.total
+    ? ` · 관계 점수: 노트 ${R.ready}/${R.total}개 준비${W?.running ? ` (채우는 중 ${W.done}/${W.todo})` : ""} <button class="linkBtn" data-sg="relwarm" ${W?.running ? "disabled" : ""}>관계 채우기</button>`
+    : R.total ? ` · 관계 점수 ${R.ready}/${R.total}` : "";
+  const stats = `이 노트의 요소 ${D.anchors}개 · 전체 요소 ${D.elements}개 → 후보 ${D.candidates.length}개 (공유 낱말 ${ch.terms || 0} · 공통 키워드 ${ch.pivot || 0} · 의미 비슷 ${ch.embed || 0}${D.embeddings ? ` · 코사인 ${D.cosineFloor} 미만은 뺌` : " · 임베딩 없음"}) · ${D.ms}ms${answeredNote(D.answered)}${relNote}`;
   const tools = `<p class="actions"><button class="act" data-sg="screen" ${S.sg.screening || !D.candidates.length ? "disabled" : ""}>${S.sg.screening ? "선별하는 중…" : "LLM 선별"}</button>
     <button class="act" data-sg="top" ${D.candidates.length ? "" : "disabled"}>상위 ${AUTO_N}개 새 지식 만들기</button>
     <label class="note"><input type="checkbox" data-auto ${S.sg.auto ? "checked" : ""}>이어지면 자동으로 선별하고 상위 ${AUTO_N}개의 새 지식을 만들기</label>
@@ -745,6 +766,7 @@ $("#body").addEventListener("click", (e) => {
   if (k === "cancel") S.sg.abort[id]?.abort();
   else if (k === "screen") runScreen();
   else if (k === "top") generateTop(3);
+  else if (k === "relwarm") relWarm();
   else if (k === "gen") (id === "cn" ? runConnectGenerate() : runGenerate(id));
   else if (k === "known") { const c = cardFor(id), g = genFor(id); if (c && g && g !== "loading") markKnown(c, g); }
   else if (k === "unknown") unmarkKnown(id);

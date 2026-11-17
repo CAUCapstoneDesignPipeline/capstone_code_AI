@@ -39,6 +39,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES
+from app.services.links.note_relations import VERSION as NOTE_RELATIONS_VERSION
 from app.services.llm import DEFAULT_MODELS, PROVIDERS, LLMConfig, make_llm
 from app.services.relations import RelationTyper
 
@@ -801,6 +802,8 @@ async def suggest(q: SuggestQuery, request: Request):
 # ---- 새 지식 제안: 키워드 A 의 요소 + 키워드 B 의 요소 + 외부 지식 ----
 
 EMBEDDING_STORE = Path("data/private/cache/element-embeddings.npz")
+NOTE_RELATIONS_PROFILE = NOTE_RELATIONS_VERSION      # 이 profile 의 개념·관계를 쓴다
+NOTE_RELATIONS_DIR = Path("data/private/cache/note-relations")      # 노트마다 개념·관계 (후보 순위를 관계로 매기는 재료)
 ACCEPTED_STORE = Path(os.environ.get("AI_ACCEPTED_STORE") or "data/private/accepted-knowledge.json")       # '이해함' 으로 받아들인 새 지식 (노트 구간이 들어 있어 비공개 폴더)
 
 
@@ -885,6 +888,7 @@ async def proposal_candidates(q: ProposalQuery, request: Request):
     import hashlib
 
     from app.services.links.pairing import COSINE_FLOOR
+    from app.services.links.relation_rank import relation_scores
 
     state = request.app.state
     corpus, note_id = await _graph_corpus(state, q.noteId, q.text)
@@ -898,14 +902,68 @@ async def proposal_candidates(q: ProposalQuery, request: Request):
     done.update({fp: "excluded" for fp in q.exclude})
     cands, counts = await run_in_threadpool(lambda: index.candidates(anchors, PER_ANCHOR, 1, max(1, min(q.limit, MAX_CANDIDATES)), NEIGHBORS, exclude=done))
     answered = {k.split(":", 1)[1]: counts.pop(k) for k in [k for k in counts if k.startswith("answered:")]}      # 답해서 뺀 짝 (이유별)
+    graph, ready, total = await run_in_threadpool(_relation_graph, state, corpus)
+    rel = relation_scores(graph, [(c.a, c.b) for c in cands]) if ready else [None] * len(cands)
     return {
+        "relations": {"ready": ready, "total": total},          # 관계 점수는 관계를 뽑아 둔 노트의 요소끼리만 (모자라면 POST /dev/proposals/relations/warm)
         "note": note_id, "anchors": len(anchors), "elements": len(index.el), "embeddings": embedded, "cosineFloor": COSINE_FLOOR if embedded else None,
         "channels": counts, "answered": answered, "buildMs": built_ms, "ms": int((time.monotonic() - t0) * 1000),
         # id 는 지문에서 만든다: 다시 분석하거나 다른 노트에서 시작해 A·B 가 뒤바뀌어도 같은 짝이면 같은 id 다
         "candidates": [{"id": c.fingerprint[:16], "fingerprint": c.fingerprint, "basisHash": c.basis, "a": _side(c.a), "b": _side(c.b),
-                        "channels": list(c.channels), "cos": c.cos, "shared": list(c.shared), "via": list(c.via), "score": round(c.score, 3)}
-                       for c in cands],
+                        "channels": list(c.channels), "cos": c.cos, "shared": list(c.shared), "via": list(c.via), "score": round(c.score, 3),
+                        "relationScore": r["score"] if r else None, "relationSignals": {k: v for k, v in r.items() if k != "score"} if r else None}
+                       for c, r in zip(cands, rel)],
     }
+
+
+def _relation_store(state):
+    from app.services.links.note_relations import NoteRelations, Warmup
+
+    if getattr(state, "note_relations", None) is None:
+        state.note_relations, state.relation_warmup = NoteRelations(NOTE_RELATIONS_DIR), Warmup()
+    return state.note_relations, state.relation_warmup
+
+
+def _relation_graph(state, corpus):
+    """(그래프, 관계를 뽑아 둔 노트 수, 전체 노트 수). 캐시만 읽는다 — 모델을 부르지 않는다. 같은 색인·같은 캐시 상태면 만들어 둔 그래프를 다시 쓴다."""
+    store, _ = _relation_store(state)
+    texts = {k: n.text for k, n in corpus.notes.items()}
+    lacking = set(store.missing(texts))
+    ready = tuple(sorted(n for n in texts if n not in lacking))
+    cached = getattr(state, "relation_graph", None)
+    if cached and cached[0] is corpus and cached[1] == ready:
+        return cached[2], len(ready), len(texts)
+    graph, _ = store.graph(texts)
+    state.relation_graph = (corpus, ready, graph)
+    return graph, len(ready), len(texts)
+
+
+@router.get("/proposals/relations")
+async def proposal_relations_status(request: Request):
+    """후보 순위를 매길 관계를 뽑아 둔 노트 수와 채우는 중인지."""
+    state = request.app.state
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    _, ready, total = await run_in_threadpool(_relation_graph, state, corpus)
+    _, warm = _relation_store(state)
+    return {"ready": ready, "total": total, "canWarm": state.pair_relations is not None and state.student is not None, **warm.status()}
+
+
+@router.post("/proposals/relations/warm")
+async def proposal_relations_warm(request: Request):
+    """관계를 뽑아 두지 않은 노트를 배경에서 채운다 (노트마다 OpenAI 요청 하나: 노트 원문이 OpenAI 로 나가므로 누른 뒤에만, 로컬 접속만).
+    진행은 GET /dev/proposals/relations. 이미 돌고 있으면 새로 시작하지 않는다."""
+    if not _loopback(request):
+        raise HTTPException(403, "로컬에서만 부를 수 있다")
+    state = request.app.state
+    if state.pair_relations is None or state.student is None:
+        raise HTTPException(503, "관계 분류기가 없다. AI_DECISIONS_JUDGE=1 과 OPENAI_API_KEY 가 필요하다")
+    corpus, _ = await run_in_threadpool(_links_corpus, state)
+    store, warm = _relation_store(state)
+    texts = {k: n.text for k, n in corpus.notes.items()}
+    todo = store.missing(texts)
+    profile, policy = EXTRACT_PROFILES[NOTE_RELATIONS_PROFILE], _policy_types()
+    started = bool(todo) and warm.start(todo, lambda n: store.compute(state.student, state.extractor, state.pair_relations, n, texts[n], policy, profile.limits))
+    return {**warm.status(), "started": started, "todo": len(todo)}
 
 
 def _answered(state) -> dict[str, str]:
