@@ -46,12 +46,29 @@ AI 쪽 구현이 정한 것(profile·판정 기준)을 적는다. 실행되는 �
    - 두 호출은 서로 다른 `stageExecutionId`(= `Idempotency-Key`)와 `X-Attempt-Id` 를 쓴다. 응답의 `meta.profileVersion` 으로 어느 단계의 결과인지 안다. 개념 `ref` 는 응답마다 새로 매기므로 두 응답의 ref 를 섞지 않는다.
    - 관계·근거는 두 profile 모두 같은 규칙(`rules+structure`)으로 만든다. LLM profile 이 개념을 더 정확히 골라 관계도 그 개념들 사이에서 다시 만들어진다.
    - 노트 원문이 LLM 제공자로 나간다 (이 profile 만). 응답은 AI 가 저장하지 않는다. 호출 한 번이 처리 자리(`AI_MAX_INFLIGHT`)를 몇 초 쓰므로 큐에서 한 번에 하나씩 보내는 것이 안전하다.
-3. (선택) `profileVersion: "extract-student-decisions-1"` — 학생이 낸 후보를 OpenAI Decisions API 가 판정해 섞는다. **약 1초** (노트 59개 중앙값 0.8초, p90 1.3초, 최대 3.1초). **기본 꺼짐**(`AI_DECISIONS_JUDGE=1` 과 `OPENAI_API_KEY`), 켜지 않으면 503.
+3. (선택) `profileVersion: "extract-student-decisions-1"` — 학생이 낸 후보를 OpenAI Decisions API 가 판정해 섞는다. **약 1초** (노트 59개 중앙값 0.8초, p90 1.3초, 최대 3.1초). **`OPENAI_API_KEY` 가 있으면 기본 켜짐**(`AI_DECISIONS_JUDGE=0` 으로 끈다), 꺼져 있으면 503.
    LLM 을 기다리지 않고 학생보다 낫게 하려는 중간 단계다 (F1 dev .90 · test .85 · 다른 분야 .78, 학생 .77 · .73 · .61, Sonnet LLM .95 · .92 · .92). 쓰는 법은 위 2번과 같아서 첫 결과(학생) → 이 결과 → (켠 경우) LLM 결과로 차례로 바꿔 넣어도 되고, 이 단계만 학생 다음에 둬도 된다.
    실패는 LLM profile 과 같은 계약 오류다 (한도 429 `AI_BUSY`, 시간 초과 504, 제공자 오류 502). 노트 원문이 OpenAI 로 나가고, 한도(분당 토큰) 때문에 처리량이 제한된다 (노트 하나에 요청 두 개). 한계와 측정은 [eval/concept-student.md](eval/concept-student.md).
    측정 (정답은 AI 초안, 재현율은 core): 학생 재현율 56~83% · 정밀도 65~76% (임계값 0.45 에서 dev 78/76, test 83/65, 다른 분야 56/68), LLM(Sonnet) 재현율 95% · 정밀도 89~95%. 한계는 [eval/concept-student.md](eval/concept-student.md).
    **관계도 빠르게 받으려면** `profileVersion: "extract-student-pairs-1"` (학생 개념, 약 0.9초) 또는 `"extract-student-decisions-pairs-1"` (Decisions 개념, 약 1.7초). 개념은 각각 `extract-student-1` · `extract-student-decisions-1` 과 같고, 관계는 규칙 대신 후보 쌍마다 Decisions 로 판정해 학습한 분류기로 고른다 (관계 단계 약 0.8초, p90 1.3초; 근거는 두 개념이 가장 가까이 나온 문장).
-   관계 정확도는 규칙(`rules+structure`, 정답 관계의 1% 만 찾는다)보다 훨씬 높고 (strict F1 약 .4 대 .02) Sonnet LLM 읽기의 70~75% 수준이다. **기본 꺼짐**(`AI_DECISIONS_JUDGE=1`, 둘 다 같은 플래그), 켜지 않으면 503. 한 요청이 입력 토큰 약 6만을 쓴다. 측정·한계는 [eval/relations.md](eval/relations.md).
+   관계 정확도는 규칙(`rules+structure`, 정답 관계의 1% 만 찾는다)보다 훨씬 높고 (strict F1 약 .4 대 .02) Sonnet LLM 읽기의 70~75% 수준이다. **`OPENAI_API_KEY` 가 있으면 기본 켜짐**(`AI_DECISIONS_JUDGE`, 둘 다 같은 플래그), 꺼져 있으면 503. 한 요청이 입력 토큰 약 6만을 쓴다. 측정·한계는 [eval/relations.md](eval/relations.md).
+
+**기본 파이프라인과 바꾸는 API (AI 쪽 제안 operation: 계약 v0.1.0 에 없다)** — 개념과 관계를 한 번에 받는 기본은 **학생 + Decisions 개념 · `pairs-1` 관계** (`extract-student-decisions-pairs-1`, 약 1.7초 · Sonnet 두 단계 LLM 약 6~12초) 다.
+`POST /extract` 의 `profileVersion` 에 별명 **`extract-default`** 를 보내면 서버가 지금의 기본으로 돌고, 응답의 `meta.profileVersion` 은 **실제로 돈 profile id** 다 (BE 는 이것을 저장한다). `profileVersion` 을 직접 쓰는 요청은 지금처럼 그 profile 로 돈다.
+기본은 준비된 것 중 첫 번째다: `extract-student-decisions-pairs-1` (`OPENAI_API_KEY` 가 있고 `AI_DECISIONS_JUDGE` 가 0 이 아닐 때) → `extract-student-1` (LLM·OpenAI 없음, 규칙 관계) → `extract-det-3`. 정해 둔 기본(`AI_PIPELINE` 또는 아래 PUT)이 준비되지 않았으면 다른 방법으로 몰래 돌지 않고 503 이다.
+
+| 호출 | 하는 일 |
+|---|---|
+| `GET /internal/v1/pipeline` | 지금 기본(`default`, `source`: `override`·`env`·`auto`), profile 마다 `ready`·개념/관계 방법·노트 원문이 나가는 곳(`externalProvider`: `openai`·`llm`·`none`) |
+| `PUT /internal/v1/pipeline/{profileVersion}` | 기본을 바꾼다. 준비되지 않은 profile 은 503, 모르는 id 는 422 `UNSUPPORTED_PROFILE`. 본문 없음 |
+| `DELETE /internal/v1/pipeline` | `AI_PIPELINE`(없으면 자동)으로 되돌린다 |
+
+헤더는 `Authorization: Bearer` 와 `X-Request-Id`(UUID) 만 있으면 된다. 바꾼 값은 **그 서버 프로세스의 메모리에만** 있다 (다시 시작하면 `AI_PIPELINE` 으로 돌아오고, 서버를 여러 개 띄웠다면 서버마다 따로 바꾼다). 영구히 바꾸려면 `AI_PIPELINE=<profile id>` 를 쓴다.
+```bash
+curl -H "Authorization: Bearer $TOKEN" -H "X-Request-Id: $(uuidgen)" localhost:8000/internal/v1/pipeline
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "X-Request-Id: $(uuidgen)" localhost:8000/internal/v1/pipeline/extract-student-1   # 이전 방법(OpenAI 없음)으로
+```
+OpenAI 키가 있는 서버에서는 `extract-default` 요청의 노트 원문이 OpenAI 로 나간다. 보내지 않으려면 `AI_DECISIONS_JUDGE=0` (그러면 기본이 `extract-student-1` 이 된다) 이거나 `PUT .../extract-student-1` 로 바꾼다.
 
 **외부 지식** (카드의 결론을 뒷받침하는 웹 자료의 한 문장 요약·출처 URL) 은 `POST /internal/v1/external-knowledge` (`findExternalKnowledge`, profile `external-knowledge-llm-1`) 이고 [external-knowledge.md](external-knowledge.md) 에 있다. 요청은 `context` · `profileVersion` · `claim{conclusion, evidence[A·B]}` · `maxSources`(기본 1, 최대 3), 헤더는 다른 추론 operation 과 같다(X-Attempt-Id·Idempotency-Key 필수). 응답은 `status: found | none`, `externalKnowledge[]`(`summary`, `sourceUrl`, `title`, `retrievedAt`, `support: yes | partly`, 강한 순), `usage`. **기본 꺼짐**이라 꺼져 있으면 503 이다. 한 번에 4~20초이고 처리 자리를 쓰므로 화면에 보일 카드에만 분석 뒤 따로 부르고 결과는 BE 가 저장한다. `none` 은 오류가 아니다.
 
@@ -265,6 +282,7 @@ BE 가 할 일 (참조 구현 `app/client.py` `reconcile_cards`, 시험 `tests/s
 | extractKnowledge | `extract-llm-1` | LLM 이 노트를 읽고 개념(표기·별칭)을 뽑고, 코드가 원문에 없는 것을 버리고 나온 자리를 모두 찾아 언급으로 돌려준다. 몇 초. **기본 꺼짐**(`AI_CONCEPTS_LLM`). `extract-student-1` 결과를 바꿔 넣는 용도 |
 | extractKnowledge | `extract-student-decisions-1` | 학생이 후보를 내고 OpenAI Decisions API 가 후보마다 개념 여부를 판정해 학생 확률과 섞는다(0.3 학생 + 0.7 판정, 임계값 0.70). 노트 하나에 약 1초(p90 1.3초). 정확도는 학생과 LLM 사이. **기본 꺼짐**(`AI_DECISIONS_JUDGE`), 켜지 않으면 503. 관계는 `rules+structure`. 미리보기 API |
 | extractKnowledge | `extract-student-pairs-1` · `extract-student-decisions-pairs-1` | 개념은 각각 `extract-student-1` · `extract-student-decisions-1`, 관계는 후보 쌍마다 Decisions 객관식으로 판정해 학습한 트리 분류기(`pairs-1.json`)로 고른다 (규칙·구조 관계 없음). 관계 단계 약 0.8초(p90 1.3초), strict F1 약 .4. 근거는 두 개념이 함께 나온 문장. **기본 꺼짐**(`AI_DECISIONS_JUDGE`), 켜지 않으면 503. 미리보기 API ([측정](eval/relations.md)) |
+| extractKnowledge | `extract-default` | 별명: 서버의 기본 파이프라인(위 "기본 파이프라인과 바꾸는 API"). 응답 `meta.profileVersion` 은 실제로 돈 profile id 다. `GET·PUT·DELETE /pipeline` 로 보고 바꾼다 |
 | extractKnowledge | **`extract-hybrid-3`** (권장) | `extract-det-3` 의 개념 후보를 LLM(관계 LLM, effort low)이 노트 원문과 함께 읽고 개념이 아닌 것(일반 낱말·문장 조각·예시 값·이름)을 **빼기만** 한다. 위치·표기는 결정적 추출 그대로. 관계는 `extract-hybrid-2` 와 같다. 노트 원문으로 캐시. 처음 보는 노트에서 정밀도 43% → 73%, 재현율 85% → 84% ([측정](eval/links-and-explanations.md)) |
 | decideConceptMerges | `merge-det-1` | 아래 동일성 규칙 (병합용, 덜 엄격) |
 | decideConceptMerges | `merge-hybrid-1` | `merge-det-1` + 규칙이 same 이라 하지 못한 쌍과 주제가 다른 same 쌍을 LLM(검증 LLM, effort low)이 두 표기와 근거 문장만 보고 판정. LLM same 은 확신 0.8 이상만 같음, 규칙 same 인데 LLM 이 아니라고 하면 애매. 쌍마다 캐시. 번역·음역(`Mutex ↔ 뮤텍스`)을 잇는다 ([측정](eval/alias-embeddings.md)) |

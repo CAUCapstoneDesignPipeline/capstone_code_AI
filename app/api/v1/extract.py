@@ -22,6 +22,7 @@ from app.services.relations import PROMPT_VERSION, extract_relations
 from app.services.relations.pairs import PROMPT_VERSION as PAIRS_PROMPT
 
 from .deps import common_checks, parse_model, read_json_body, require_uuid_header
+from .pipeline import resolve_profile
 
 router = APIRouter()
 
@@ -39,9 +40,9 @@ async def extract(request: Request):
     idem = require_uuid_header(request, "Idempotency-Key")
     data = await read_json_body(request)
     req: ExtractRequest = parse_model(ExtractRequest, data)
-    profile = check_semantics(req, idem)
-
     state = request.app.state
+    profile = check_semantics(req, idem, state)
+
     if state.extractor is None or (profile.uses_llm and state.typer is None) or \
             (profile.concept_filter and state.concept_filter is None) or (profile.student and state.student is None) or \
             (profile.llm_concepts and state.concept_llm is None) or (profile.decisions and state.student_judge is None) or \
@@ -102,14 +103,14 @@ async def extract(request: Request):
         relations_tag = "pair-relations" if pairs else "rules-relations"
         concept_prompt = DECISIONS_PROMPT if profile.decisions else src.prompt_version if src else "student-1"
         return ExtractResponse(context=data["context"], concepts=concepts, evidence=ev_out, relations=rel_out, meta=ResponseMeta(
-            profileVersion=req.profileVersion, provider=f"local+{ext.provider}" if ext else "local",
+            profileVersion=profile.id, provider=f"local+{ext.provider}" if ext else "local",
             model=f"{src.model if src else pairs.decisions.model if pairs else 'ngram-student'}+{relations_tag}",
             modelRevision=revision,
             promptVersion=concept_prompt + (f"+{PAIRS_PROMPT}" if pairs else f"+rules-{cfg}"),
             schemaVersion=SCHEMA_VERSION, preprocessingVersion=f"md-mask-{cfg}",
             durationMs=min(120000, int((time.monotonic() - t0) * 1000))))
     meta = ResponseMeta(
-        profileVersion=req.profileVersion,
+        profileVersion=profile.id,
         provider=f"local+{state.typer.provider}" if llm else "local",
         model=(f"kiwi-tfidf-markdown+{state.typer.model}" + ("+concept-filter" if profile.concept_filter else "")
                if llm else "kiwi-tfidf-markdown"),
@@ -122,8 +123,8 @@ async def extract(request: Request):
     return ExtractResponse(context=data["context"], meta=meta, concepts=concepts, evidence=ev_out, relations=rel_out)
 
 
-def check_semantics(req: ExtractRequest, idempotency_key: str) -> ExtractProfile:
-    """스키마로 못 잡는 교차 필드 검증 (§3). 실패는 409 또는 422."""
+def check_semantics(req: ExtractRequest, idempotency_key: str, state=None) -> ExtractProfile:
+    """스키마로 못 잡는 교차 필드 검증 (§3). 실패는 409 또는 422. profileVersion 이 "extract-default" 면 지금의 기본 파이프라인 (api/v1/pipeline.py)."""
     ctx, note = req.context, req.note
     if idempotency_key.lower() != ctx.stageExecutionId.lower():
         raise AiError("INPUT_IDENTITY_MISMATCH", [("header.Idempotency-Key", "invalid")])
@@ -139,7 +140,7 @@ def check_semantics(req: ExtractRequest, idempotency_key: str) -> ExtractProfile
     if hashlib.sha256(note.body.encode("utf-8")).hexdigest() != note.bodySha256:
         raise AiError("INVALID_REFERENCE", [("note.bodySha256", "invalid")])
 
-    profile = EXTRACT_PROFILES.get(req.profileVersion)
+    profile = EXTRACT_PROFILES.get(resolve_profile(state, req.profileVersion) if state is not None else req.profileVersion)
     if profile is None:
         raise AiError("UNSUPPORTED_PROFILE", [("profileVersion", "unknown_reference")])
 

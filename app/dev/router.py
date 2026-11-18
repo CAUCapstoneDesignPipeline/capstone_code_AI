@@ -38,6 +38,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
+from app.api.v1.pipeline import default_source as default_extract_source
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES
 from app.services.links.note_relations import VERSION as NOTE_RELATIONS_VERSION
 from app.services.llm import DEFAULT_MODELS, PROVIDERS, LLMConfig, make_llm
@@ -82,7 +83,7 @@ async def config(request: Request):
         "apiPrefix": API_PREFIX,
         # 로컬 접속일 때만 토큰을 채워 준다 (직접 붙여넣지 않아도 되게)
         "token": st.settings.service_token if loopback else None,
-        "extractProfiles": [{"id": p.id, "relations": p.relations, "llm": p.uses_llm, "default": p.id == EXTRACT_PROFILE}
+        "extractProfiles": [{"id": p.id, "relations": p.relations, "llm": p.uses_llm, "default": p.id == (default_extract_source(st)[0] or EXTRACT_PROFILE)}
                             for p in EXTRACT_PROFILES.values()],
         "embeddingProfiles": [{"id": p.id, "dims": p.dims, "loaded": p.id in st.embedders}
                               for p in EMBEDDING_PROFILES.values()],

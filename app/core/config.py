@@ -22,8 +22,12 @@
   AI_FACTS_LLM_PROVIDER / _MODEL / _EFFORT   계산용 사실 추출(facts-llm-3, AI_RELATION_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
   AI_SOUND_LLM_PROVIDER / _MODEL / _EFFORT   조건부 결론 판정(derive-sound-1, AI_VERIFY_LLM=1 일 때)에만 다른 설정 (effort 기본 medium)
   AI_CONCEPTS_LLM         1 이면 LLM 으로 개념을 뽑는 profile(extract-llm-1) 을 켠다 (기본 0 — 노트 원문이 LLM 제공자로 나가고 호출마다 몇 초·비용이 든다). 모델은 AI_CONCEPTS_LLM_PROVIDER / _MODEL / _EFFORT (기본 effort medium)
-  AI_DECISIONS_JUDGE      1 이면 OpenAI Decisions API 를 쓰는 profile (extract-student-decisions-1: 학생 후보를 판정, extract-student-pairs-1·extract-student-decisions-pairs-1: 관계를 후보 쌍마다 판정) 을 켠다 (기본 0 — 노트 원문이 OpenAI 로 나가고
-                          호출마다 약 1초·토큰 비용이 든다. 미리보기 API 라 모델은 AI_DECISIONS_MODEL, 기본 gpt-6-luna). 키는 OPENAI_API_KEY
+  AI_DECISIONS_JUDGE      OpenAI Decisions API 를 쓰는 profile (extract-student-decisions-1: 학생 후보를 판정, extract-student-pairs-1·extract-student-decisions-pairs-1: 관계를 후보 쌍마다 판정) 을 켠다.
+                          정하지 않으면 OPENAI_API_KEY 가 있을 때만 켜진다 (키가 없으면 꺼져 있고 오류도 남기지 않는다). 0 이면 키가 있어도 끄고 1 이면 켠다.
+                          켜는 것은 profile 을 쓸 수 있게 할 뿐이다 — 노트 원문은 그 profile 을 요청했을 때(또는 기본 파이프라인이 그것일 때)만 OpenAI 로 나가고 호출마다 약 1초·토큰 비용이 든다.
+                          미리보기 API 라 모델은 AI_DECISIONS_MODEL, 기본 gpt-6-luna
+  AI_PIPELINE             profileVersion "extract-default" 가 가리킬 /extract profile id (선택). 없으면 자동: 준비된 것 중 DEFAULT_PIPELINE 의 첫 번째.
+                          실행 중에는 PUT /internal/v1/pipeline 으로 바꾼다 (이 프로세스에서만, 다시 시작하면 이 값으로 돌아온다)
   AI_EXTERNAL_LLM         1 이면 외부 지식(/external-knowledge, 웹 검색) 을 켠다 (기본 0 — 비용·한도 결정 뒤 배포에서 명시적으로 켠다). 모델은 AI_EXTERNAL_LLM_PROVIDER / _MODEL / _EFFORT (anthropic 만, 기본 effort medium)
   AI_CHAT_LLM             1 이면 챗봇(/chat) 을 켠다 (기본 0 — 관계 판정 LLM 처럼 배포에서 명시적으로 켠다). 모델은 AI_CHAT_LLM_PROVIDER / _MODEL / _EFFORT (기본 anthropic claude-sonnet-5-5, effort low)
   AI_EMBEDDING_PROFILES   켤 임베딩 profile id, 쉼표로 구분 (기본 없음)
@@ -85,13 +89,18 @@ EXTRACT_PROFILES = {p.id: p for p in (
     # 두 단계 흐름 (docs/be-integration.md): student 가 약 0.1초에 첫 결과를 주고, llm 이 몇 초 뒤 더 나은 결과로 바꿔 넣게 한다. 관계는 둘 다 규칙+구조
     ExtractProfile("extract-student-1", relations="rules+structure", student="extract-student-1"),
     ExtractProfile("extract-llm-1", relations="rules+structure", llm_concepts=True),
-    # 중간 단계 (기본 꺼짐): student 가 후보를 내고 Decisions API 가 약 1초에 판정해 섞는다. 정확도는 student 와 llm 사이 (docs/eval/concept-student.md)
+    # 중간 단계 (OPENAI_API_KEY 가 있으면 켜짐): student 가 후보를 내고 Decisions API 가 약 1초에 판정해 섞는다. 정확도는 student 와 llm 사이 (docs/eval/concept-student.md)
     ExtractProfile("extract-student-decisions-1", relations="rules+structure", student="extract-student-1", decisions=True),
-    # 빠른 관계 (기본 꺼짐, AI_DECISIONS_JUDGE=1): 관계를 후보 쌍마다 Decisions 로 판정해 학습한 분류기로 고른다 (규칙·구조 관계는 쓰지 않는다). 관계만 약 1초 더 든다 (docs/eval/relations.md)
+    # 빠른 관계 (OPENAI_API_KEY 가 있으면 켜짐, AI_DECISIONS_JUDGE=0 이면 끔): 관계를 후보 쌍마다 Decisions 로 판정해 학습한 분류기로 고른다 (규칙·구조 관계는 쓰지 않는다). 관계만 약 1초 더 든다 (docs/eval/relations.md)
     ExtractProfile("extract-student-pairs-1", relations="pairs", student="extract-student-1"),
     ExtractProfile("extract-student-decisions-pairs-1", relations="pairs", student="extract-student-1", decisions=True),
 )}
-EXTRACT_PROFILE = "extract-det-3"       # 권장 기본값 (완전 결정적)
+EXTRACT_PROFILE = "extract-det-3"       # 추출기 설정(IDF·개념 후보 규칙)과 playground·CLI 의 기준 profile. 완전 결정적이라 모델 없이 돈다. /extract 의 기본 파이프라인은 아래 DEFAULT_PIPELINE
+
+# /extract 의 기본 파이프라인 (profileVersion "extract-default"): 학생 + Decisions 개념, pairs-1 관계 (docs/eval/concept-student.md, docs/eval/relations.md).
+# 앞에서부터 처음 준비된 것을 쓴다. Decisions 를 쓸 수 없으면 (키 없음·AI_DECISIONS_JUDGE=0) 학생 + 규칙 관계(LLM·OpenAI 없음)로, 그것도 안 되면 결정적 규칙으로 물러난다.
+DEFAULT_ALIAS = "extract-default"
+DEFAULT_PIPELINE = ("extract-student-decisions-pairs-1", "extract-student-1", "extract-det-3")
 
 
 @dataclass(frozen=True)
@@ -131,6 +140,7 @@ class Settings:
     external_llm: bool = False
     concepts_llm: bool = False
     decisions_judge: bool = False
+    pipeline: str | None = None                # AI_PIPELINE: "extract-default" 가 가리킬 profile id (없으면 자동)
     explain_cache: Path | None = Path("data/private/cache/explanations")
     verify_llm: bool = False
     verify_cache: Path | None = Path("data/private/cache/verifications")
@@ -151,7 +161,8 @@ class Settings:
             chat_llm=env("AI_CHAT_LLM", "0") == "1",
             external_llm=env("AI_EXTERNAL_LLM", "0") == "1",
             concepts_llm=env("AI_CONCEPTS_LLM", "0") == "1",
-            decisions_judge=env("AI_DECISIONS_JUDGE", "0") == "1",
+            decisions_judge=(env("AI_DECISIONS_JUDGE") == "1") if env("AI_DECISIONS_JUDGE") in ("0", "1") else bool(env("OPENAI_API_KEY")),
+            pipeline=env("AI_PIPELINE") or None,
             explain_cache=Path(env("AI_EXPLAIN_CACHE", "data/private/cache/explanations")),
             verify_llm=env("AI_VERIFY_LLM", "1") == "1",
             verify_cache=Path(env("AI_VERIFY_CACHE", "data/private/cache/verifications")),

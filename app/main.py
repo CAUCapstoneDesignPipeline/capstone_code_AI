@@ -26,6 +26,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.v1 import chat as chat_api
 from app.api.v1 import external as external_api
+from app.api.v1 import pipeline as pipeline_api
 from app.api.v1 import derive, embeddings, extract, health, links, reasoning
 from app.api.v1.deps import UUID_RE
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES, Settings
@@ -265,6 +266,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.concept_llm = concept_llm
     app.state.student_judge = student_judge
     app.state.pair_relations = pair_relations
+    app.state.pipeline_override = None             # PUT /pipeline 로 정한 기본 (메모리에만)
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()
@@ -285,7 +287,7 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
         return response
 
     install_handlers(app)
-    for router in (extract.router, embeddings.router, reasoning.router, links.router, derive.router, chat_api.router, external_api.router, health.router):
+    for router in (extract.router, embeddings.router, reasoning.router, links.router, derive.router, chat_api.router, external_api.router, pipeline_api.router, health.router):
         app.include_router(router, prefix=API_PREFIX)
     if settings.dev_ui:                 # 개발용 playground. 로컬 노트를 읽으므로 배포에서는 켜지 않는다
         from pathlib import Path
