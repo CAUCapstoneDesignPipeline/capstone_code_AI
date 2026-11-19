@@ -2,16 +2,22 @@
 import os
 import re
 
+WORKFLOWS = "CAUCapstoneDesignPipeline/capstone_code_AI/.github/workflows/"
+# 수동 게시, 또는 자동 배포(gcp-cd.yml 이 gcp-publish-image.yml 을 부른다)의 develop push·dispatch.
+CALLERS = {("workflow_dispatch", WORKFLOWS + "gcp-publish-image.yml@refs/heads/develop"),
+           ("push", WORKFLOWS + "gcp-cd.yml@refs/heads/develop"),
+           ("workflow_dispatch", WORKFLOWS + "gcp-cd.yml@refs/heads/develop")}
+
 
 def validate(env):
     exact = {"GITHUB_REPOSITORY": "CAUCapstoneDesignPipeline/capstone_code_AI",
              "GITHUB_REPOSITORY_ID": "1397258740", "GITHUB_REPOSITORY_OWNER_ID": "324880339",
-             "GITHUB_REF": "refs/heads/develop", "GITHUB_EVENT_NAME": "workflow_dispatch",
-             "GITHUB_WORKFLOW_REF": "CAUCapstoneDesignPipeline/capstone_code_AI/.github/workflows/gcp-publish-image.yml@refs/heads/develop",
-             "AR_REPOSITORY": "capstone-ai"}
+             "GITHUB_REF": "refs/heads/develop", "AR_REPOSITORY": "capstone-ai"}
     for key, expected in exact.items():
         if env.get(key) != expected:
             raise ValueError(f"invalid {key}")
+    if (env.get("GITHUB_EVENT_NAME"), env.get("GITHUB_WORKFLOW_REF")) not in CALLERS:
+        raise ValueError("invalid GITHUB_WORKFLOW_REF")
     patterns = {"GITHUB_SHA": r"[0-9a-f]{40}", "GCP_PROJECT_ID": r"[a-z][a-z0-9-]{4,28}[a-z0-9]",
                 "GCP_REGION": r"asia-northeast3", "GCP_IMAGE_SERVICE_ACCOUNT": r"[a-z][a-z0-9-]+@" + re.escape(env.get("GCP_PROJECT_ID", "")) + r"\.iam\.gserviceaccount\.com",
                 "GCP_WIF_PROVIDER": r"projects/[0-9]+/locations/global/workloadIdentityPools/[a-z0-9-]+/providers/[a-z0-9-]+"}
