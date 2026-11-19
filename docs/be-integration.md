@@ -37,6 +37,20 @@ AI 쪽 구현이 정한 것(profile·판정 기준)을 적는다. 실행되는 �
 
 **챗봇** (이해가 안 됨 → 카드를 쉽게 풀어 주는 여러 턴 대화, 토큰 스트리밍) 은 [chat-api.md](chat-api.md) 에 있다.
 
+**개념 추출 두 단계 (빠른 첫 결과 → LLM 결과로 교체)** — 노트를 저장하자마자 개념을 보여 주려면 `POST /extract` 를 두 번 부른다.
+1. `profileVersion: "extract-student-1"` — 학습한 모델이 후보를 고른다. **LLM 없음, 노트 하나에 평균 수십 ms** (처리 자리 한 개를 그동안만 쓴다). 항상 켜져 있다.
+2. `profileVersion: "extract-llm-1"` — LLM 이 노트를 읽고 개념을 뽑는다. **몇 초** (기본 모델 Sonnet 5.5: 1천 자 노트 약 3초, 8천 자 노트 약 5.5초). **기본 꺼짐**(`AI_CONCEPTS_LLM=1`), 켜지 않으면 503.
+   - 첫 호출의 응답을 그 노트 리비전의 개념·관계로 바로 저장해 쓴다. 두 번째 호출은 BE 의 백그라운드 작업(큐)으로 보내고, 성공하면 **그 응답을 최종 결과로 바꿔 넣는다**.
+   - 바꿔 넣을 때는 표기(대소문자·공백·하이픈 무시)로 같은 개념을 맞춘다. 없어진 것은 지우고 새로 생긴 것은 더하고 남은 것은 그대로 둔다 (참조 구현 `app/client.py` 의 `swap_concepts`, `extract_progressive`).
+   - **LLM 호출이 실패해도 첫 결과를 그대로 둔다.** 실패는 계약 오류다 (거절·형식 위반 502 `INVALID_MODEL_OUTPUT`, 시간 초과 504, 한도 429 `AI_BUSY`, 인증 503). AI 는 자동 재시도·다른 모델 fallback 을 하지 않는다. 재시도와 간격은 BE 가 정한다.
+   - 두 호출은 서로 다른 `stageExecutionId`(= `Idempotency-Key`)와 `X-Attempt-Id` 를 쓴다. 응답의 `meta.profileVersion` 으로 어느 단계의 결과인지 안다. 개념 `ref` 는 응답마다 새로 매기므로 두 응답의 ref 를 섞지 않는다.
+   - 관계·근거는 두 profile 모두 같은 규칙(`rules+structure`)으로 만든다. LLM profile 이 개념을 더 정확히 골라 관계도 그 개념들 사이에서 다시 만들어진다.
+   - 노트 원문이 LLM 제공자로 나간다 (이 profile 만). 응답은 AI 가 저장하지 않는다. 호출 한 번이 처리 자리(`AI_MAX_INFLIGHT`)를 몇 초 쓰므로 큐에서 한 번에 하나씩 보내는 것이 안전하다.
+3. (선택) `profileVersion: "extract-student-decisions-1"` — 학생이 낸 후보를 OpenAI Decisions API 가 판정해 섞는다. **약 1초** (노트 59개 중앙값 0.8초, p90 1.3초, 최대 3.1초). **기본 꺼짐**(`AI_DECISIONS_JUDGE=1` 과 `OPENAI_API_KEY`), 켜지 않으면 503.
+   LLM 을 기다리지 않고 학생보다 낫게 하려는 중간 단계다 (F1 dev .90 · test .85 · 다른 분야 .78, 학생 .77 · .73 · .61, Sonnet LLM .95 · .92 · .92). 쓰는 법은 위 2번과 같아서 첫 결과(학생) → 이 결과 → (켠 경우) LLM 결과로 차례로 바꿔 넣어도 되고, 이 단계만 학생 다음에 둬도 된다.
+   실패는 LLM profile 과 같은 계약 오류다 (한도 429 `AI_BUSY`, 시간 초과 504, 제공자 오류 502). 노트 원문이 OpenAI 로 나가고, 한도(분당 토큰) 때문에 처리량이 제한된다 (노트 하나에 요청 두 개). 한계와 측정은 [eval/concept-student.md](eval/concept-student.md).
+   측정 (정답은 AI 초안, 재현율은 core): 학생 재현율 56~83% · 정밀도 65~76% (임계값 0.45 에서 dev 78/76, test 83/65, 다른 분야 56/68), LLM(Sonnet) 재현율 95% · 정밀도 89~95%. 한계는 [eval/concept-student.md](eval/concept-student.md).
+
 **외부 지식** (카드의 결론을 뒷받침하는 웹 자료의 한 문장 요약·출처 URL) 은 `POST /internal/v1/external-knowledge` (`findExternalKnowledge`, profile `external-knowledge-llm-1`) 이고 [external-knowledge.md](external-knowledge.md) 에 있다. 요청은 `context` · `profileVersion` · `claim{conclusion, evidence[A·B]}` · `maxSources`(기본 1, 최대 3), 헤더는 다른 추론 operation 과 같다(X-Attempt-Id·Idempotency-Key 필수). 응답은 `status: found | none`, `externalKnowledge[]`(`summary`, `sourceUrl`, `title`, `retrievedAt`, `support: yes | partly`, 강한 순), `usage`. **기본 꺼짐**이라 꺼져 있으면 503 이다. 한 번에 4~20초이고 처리 자리를 쓰므로 화면에 보일 카드에만 분석 뒤 따로 부르고 결과는 BE 가 저장한다. `none` 은 오류가 아니다.
 
 ## 2. 판정 결합 (계약 §5 표를 코드로 옮긴 것, `app/client.py` `decide`)
@@ -245,6 +259,9 @@ BE 가 할 일 (참조 구현 `app/client.py` `reconcile_cards`, 시험 `tests/s
 | operation | profileVersion | 방법 |
 | --- | --- | --- |
 | extractKnowledge | `extract-det-3` | Kiwi 명사구 + TF-IDF + 마크다운 구조. 관계는 한국어 문형 규칙 + 구조(제목·목록·정의·비교 표) |
+| extractKnowledge | `extract-student-1` | 토큰 n-gram 후보를 학습한 부스팅 트리(`student-1.json`, 노트 속 낱말이 들어 있지 않다)로 고른다. LLM 없음·결정적·노트당 수십 ms. 관계는 `rules+structure`. 빠른 첫 결과용 ([두 단계 흐름](#1-전체-흐름), [측정](eval/concept-student.md)) |
+| extractKnowledge | `extract-llm-1` | LLM 이 노트를 읽고 개념(표기·별칭)을 뽑고, 코드가 원문에 없는 것을 버리고 나온 자리를 모두 찾아 언급으로 돌려준다. 몇 초. **기본 꺼짐**(`AI_CONCEPTS_LLM`). `extract-student-1` 결과를 바꿔 넣는 용도 |
+| extractKnowledge | `extract-student-decisions-1` | 학생이 후보를 내고 OpenAI Decisions API 가 후보마다 개념 여부를 판정해 학생 확률과 섞는다(0.3 학생 + 0.7 판정, 임계값 0.70). 노트 하나에 약 1초(p90 1.3초). 정확도는 학생과 LLM 사이. **기본 꺼짐**(`AI_DECISIONS_JUDGE`), 켜지 않으면 503. 관계는 `rules+structure`. 미리보기 API |
 | extractKnowledge | **`extract-hybrid-3`** (권장) | `extract-det-3` 의 개념 후보를 LLM(관계 LLM, effort low)이 노트 원문과 함께 읽고 개념이 아닌 것(일반 낱말·문장 조각·예시 값·이름)을 **빼기만** 한다. 위치·표기는 결정적 추출 그대로. 관계는 `extract-hybrid-2` 와 같다. 노트 원문으로 캐시. 처음 보는 노트에서 정밀도 43% → 73%, 재현율 85% → 84% ([측정](eval/links-and-explanations.md)) |
 | decideConceptMerges | `merge-det-1` | 아래 동일성 규칙 (병합용, 덜 엄격) |
 | decideConceptMerges | `merge-hybrid-1` | `merge-det-1` + 규칙이 same 이라 하지 못한 쌍과 주제가 다른 same 쌍을 LLM(검증 LLM, effort low)이 두 표기와 근거 문장만 보고 판정. LLM same 은 확신 0.8 이상만 같음, 규칙 same 인데 LLM 이 아니라고 하면 애매. 쌍마다 캐시. 번역·음역(`Mutex ↔ 뮤텍스`)을 잇는다 ([측정](eval/alias-embeddings.md)) |

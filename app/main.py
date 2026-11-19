@@ -67,7 +67,7 @@ def explain_llm_config():
 def create_app(settings: Settings | None = None, extractor: ConceptExtractor | None = None,
                typer=None, embedders: dict | None = None, explainer=None, edge_judge=None,
                explanation_judge=None, merge_judge=None, concept_filter=None, fact_extractor=None,
-               soundness_judge=None, chat=None, external_finder=None) -> FastAPI:
+               soundness_judge=None, chat=None, external_finder=None, student=None, concept_llm=None, student_judge=None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -139,6 +139,44 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
                 log.info("챗봇 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
             except Exception as e:      # /chat 만 준비되지 않은 상태로 둔다
                 log.error("챗봇 LLM 을 만들지 못했다: %s", e)
+        if st.student is None:
+            try:
+                from app.services.concepts.student import Student
+                st.student = Student.load()
+            except Exception as e:      # extract-student-1 만 준비되지 않은 상태로 둔다
+                log.error("학생 개념 선택기를 읽지 못했다: %s", e)
+        if st.concept_llm is None and settings.concepts_llm:
+            try:
+                from app.services.concepts.llm_concepts import ConceptLLM
+                from app.services.llm import make_llm
+                cfg = role_llm_config("concepts", "medium")      # 노트 전체를 읽고 개념을 뽑는다 (정확도는 medium 에서 잰 값)
+                if cfg is None:
+                    raise ValueError("개념 LLM 제공자가 없다 (AI_CONCEPTS_LLM_PROVIDER, AI_LLM_PROVIDER 또는 ANTHROPIC_API_KEY)")
+                import os
+
+                from dataclasses import replace
+                if cfg.provider == "anthropic" and not any(os.environ.get(n) for n in ("AI_CONCEPTS_LLM_MODEL", "AI_LLM_MODEL")):
+                    cfg = replace(cfg, model="claude-sonnet-5-5")      # 모델을 따로 정하지 않았으면 Sonnet: 정확도는 Opus 와 같거나 낫고 더 빠르다 (docs/eval/concept-student.md)
+                st.concept_llm = ConceptLLM(make_llm(cfg))
+                log.info("개념 LLM: %s · %s · effort %s", cfg.provider, cfg.model, cfg.effort)
+            except Exception as e:      # extract-llm-1 만 준비되지 않은 상태로 둔다
+                log.error("개념 LLM 을 만들지 못했다: %s", e)
+        if st.student_judge is None and settings.decisions_judge:
+            try:
+                import os
+
+                import openai
+
+                from app.services.concepts.judge import DEFAULT_MODEL, DecisionsJudge, StudentJudge
+                if st.student is None:
+                    raise ValueError("학생 개념 선택기가 없다")
+                model = os.environ.get("AI_DECISIONS_MODEL", DEFAULT_MODEL)
+                # 요청 두 개가 동시에 나가고 전체 처리 제한(REQUEST_TIMEOUT_S) 안에 끝나야 한다: 시간 제한 30초, 재시도 1번
+                client = openai.OpenAI(max_retries=1, timeout=30.0)
+                st.student_judge = StudentJudge(st.student, DecisionsJudge(client, model))
+                log.info("Decisions 판정: %s", model)
+            except Exception as e:      # extract-student-decisions-1 만 준비되지 않은 상태로 둔다
+                log.error("Decisions 판정을 만들지 못했다: %s", e)
         if st.external_finder is None and settings.external_llm:
             try:
                 from app.services.links.external import ExternalKnowledgeFinder, SourceJudge
@@ -210,6 +248,9 @@ def create_app(settings: Settings | None = None, extractor: ConceptExtractor | N
     app.state.soundness_judge = soundness_judge
     app.state.chat = chat
     app.state.external_finder = external_finder
+    app.state.student = student
+    app.state.concept_llm = concept_llm
+    app.state.student_judge = student_judge
     app.state.embedders = dict(embedders or {})
     app.state.inflight = asyncio.Semaphore(settings.max_inflight)
     app.state.kiwi_lock = threading.Lock()

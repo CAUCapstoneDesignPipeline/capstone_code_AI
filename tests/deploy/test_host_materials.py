@@ -172,3 +172,15 @@ def test_external_knowledge_is_off_unless_the_manifest_turns_it_on(tmp_path, mon
     assert env["on"]["AI_EXTERNAL_LLM"] == "1" and env["on"]["AI_EXTERNAL_LLM_MODEL"] == "synthetic-ext-1" and env["on"]["AI_EXTERNAL_LLM_EFFORT"] == "medium"
     assert env["on"]["AI_CHAT_LLM"] == "0"
 
+
+def test_concepts_llm_is_off_unless_the_manifest_turns_it_on(tmp_path, monkeypatch, tls):
+    from test_release import with_role
+    env = {}
+    for name, edit in (("off", lambda m: m), ("on", lambda m: with_role(m, "concepts", model="synthetic-concepts-1", effort="medium"))):
+        driver, m = material_driver(tmp_path / name, monkeypatch, tls)
+        (tmp_path / name).mkdir(exist_ok=True)
+        driver.prepare(edit(m))
+        env[name] = json.loads((tmp_path / name / "releases/r2/compose.json").read_bytes())["services"]["ai"]["environment"]
+    assert env["off"]["AI_CONCEPTS_LLM"] == "0" and "AI_CONCEPTS_LLM_MODEL" not in env["off"]
+    assert env["on"]["AI_CONCEPTS_LLM"] == "1" and env["on"]["AI_CONCEPTS_LLM_MODEL"] == "synthetic-concepts-1" and env["on"]["AI_CONCEPTS_LLM_EFFORT"] == "medium"
+
