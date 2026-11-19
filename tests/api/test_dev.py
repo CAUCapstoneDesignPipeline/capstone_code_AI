@@ -887,3 +887,74 @@ def test_caller_can_pass_fingerprints_to_exclude_and_known_needs_two_different_n
     with TestClient(dev_app(), client=("10.0.0.5", 50000)) as remote:
         assert remote.post("/dev/proposals/known", json={"a": x["a"], "b": x["b"]}).status_code in (403, 404)
         assert remote.delete("/dev/knowledge/known/x").status_code in (403, 404)
+
+
+def test_candidates_carry_relation_scores_from_the_per_note_cache_and_report_how_many_notes_are_ready(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from app.dev import router as dev
+    from app.services.links.note_relations import NoteRelations
+
+    notes, cache = tmp_path / "notes", tmp_path / "rel"
+    notes.mkdir()
+    (notes / "DB-WAL.md").write_text("# WAL\n\n**WAL**은 **트랜잭션**이 커밋되기 전에 변경 내용을 로그로 디스크에 먼저 기록하는 방식이다. "
+                                     "**체크포인트**는 장애가 났을 때 복구 시간을 줄이려고 쓰는 기록 지점이다.\n", encoding="utf-8")
+    (notes / "ACID.md").write_text("# ACID\n\n**원자성**은 **트랜잭션**이 전부 반영되거나 전혀 반영되지 않는 성질이라는 뜻이다. "
+                                   "**복구**는 장애 뒤에 **트랜잭션** 로그를 다시 읽어 데이터를 되돌리는 일이다.\n", encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", notes)
+    monkeypatch.setattr(dev, "NOTE_RELATIONS_DIR", cache)
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    _no_embeddings(monkeypatch)
+    with TestClient(dev_app(), client=LOCAL) as c:
+        r = c.post("/dev/proposals/candidates", json={"noteId": "DB-WAL", "limit": 20}).json()
+        assert r["relations"] == {"ready": 0, "total": 2}                       # 캐시가 비었다: 점수 없이 후보 순서 그대로
+        assert r["candidates"] and all(x["relationScore"] is None and x["relationSignals"] is None for x in r["candidates"])
+        st = c.get("/dev/proposals/relations").json()
+        assert st["ready"] == 0 and st["total"] == 2 and st["running"] is False and st["canWarm"] is False
+
+        # 두 노트의 관계를 뽑아 둔 것으로 채운다: '트랜잭션' 을 말하는 두 문장이 한 개념으로 이어진다
+        store = NoteRelations(cache)
+        texts = {n: (notes / f"{n}.md").read_text(encoding="utf-8") for n in ("DB-WAL", "ACID")}
+        store.dir.mkdir(parents=True)
+        for n, t in texts.items():
+            at = t.index("트랜잭션")
+            body = {"note": n, "concepts": {"트랜잭션": {"surface": "트랜잭션", "mentions": [[at, at + 4]]}}, "relations": []}
+            store.path(n, t).write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+        r = c.post("/dev/proposals/candidates", json={"noteId": "DB-WAL", "limit": 20}).json()
+        assert r["relations"] == {"ready": 2, "total": 2}
+        assert all(0 < x["relationScore"] <= 1 and set(x["relationSignals"]) == {"direct", "nb_links", "shared_nb"} for x in r["candidates"])
+        assert c.get("/dev/proposals/relations").json()["ready"] == 2
+
+        # 채우기: 분류기가 없으면 503, 로컬이 아니면 403
+        assert c.post("/dev/proposals/relations/warm").status_code == 503
+    with TestClient(dev_app(), client=("203.0.113.9", 50000)) as remote:
+        assert remote.post("/dev/proposals/relations/warm").status_code == 403
+
+
+def test_relation_warm_starts_a_background_fill_for_the_missing_notes_only(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.dev import router as dev
+
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    for n in ("A", "B"):
+        (notes / f"{n}.md").write_text(f"# {n}\n\n**{n}** 는 **개념** 을 설명하는 충분히 긴 문장이다.\n", encoding="utf-8")
+    monkeypatch.setattr(dev, "NOTES_DIR", notes)
+    monkeypatch.setattr(dev, "NOTE_RELATIONS_DIR", tmp_path / "rel")
+    monkeypatch.delenv("AI_NOTES_DIR", raising=False)
+    _no_embeddings(monkeypatch)
+    seen = []
+    app = dev_app()
+    app.state.student = SimpleNamespace(select=lambda extractor, note_id, v, text: seen.append(note_id) or {})
+    app.state.pair_relations = SimpleNamespace(extract=lambda text, selected, policy, limits: ([], []))
+    with TestClient(app, client=LOCAL) as c:
+        r = c.post("/dev/proposals/relations/warm").json()
+        assert r["started"] is True and r["todo"] == 2
+        app.state.relation_warmup.thread.join(5)
+        st = c.get("/dev/proposals/relations").json()
+        assert sorted(seen) == ["A", "B"] and st["ready"] == 2 and st["running"] is False and st["canWarm"] is True
+        again = c.post("/dev/proposals/relations/warm").json()
+        assert again["started"] is False and again["todo"] == 0                  # 다 채웠으니 새로 부르지 않는다
+        assert len(seen) == 2

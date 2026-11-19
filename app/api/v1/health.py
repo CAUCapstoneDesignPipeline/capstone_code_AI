@@ -8,6 +8,7 @@ from app.core.errors import AiError
 from app.schemas.health import Liveness, Readiness
 
 from .deps import common_checks
+from .pipeline import profile_ready
 
 router = APIRouter(prefix="/health")
 
@@ -16,10 +17,7 @@ def ready_profiles(state) -> list[str]:
     """지금 요청을 받을 수 있는 profile."""
     out = []
     if state.extractor is not None:
-        out += [p.id for p in EXTRACT_PROFILES.values() if (not p.uses_llm or state.typer is not None)
-                and (not p.concept_filter or state.concept_filter is not None)
-                and (not p.student or state.student is not None) and (not p.llm_concepts or state.concept_llm is not None)
-                and (not p.decisions or state.student_judge is not None) and (not p.uses_pairs or state.pair_relations is not None)]
+        out += [p.id for p in EXTRACT_PROFILES.values() if profile_ready(state, p)]
     out += list(state.embedders)
     out += [p.id for p in REASONING_PROFILES.values() if p.ready(state)]
     return sorted(out)

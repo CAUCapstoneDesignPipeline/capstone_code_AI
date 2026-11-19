@@ -66,12 +66,15 @@ def test_relations_come_from_the_same_rules_as_the_other_two_phase_profiles():
         assert all(r["sourceRef"] in refs and r["targetRef"] in refs for r in d["relations"])
 
 
-def test_the_judge_is_built_from_the_environment_flag_only(monkeypatch):
+def test_the_judge_is_built_from_the_environment(monkeypatch):
     from app.core.config import Settings
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.delenv("AI_DECISIONS_JUDGE", raising=False)
     with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:
-        assert c.app.state.student_judge is None and PROFILE not in ready_profiles(c.app.state)       # 기본 꺼짐
+        assert c.app.state.student_judge is not None and PROFILE in ready_profiles(c.app.state)       # 키가 있으면 기본 켜짐
+    monkeypatch.setenv("AI_DECISIONS_JUDGE", "0")
+    with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:
+        assert c.app.state.student_judge is None and PROFILE not in ready_profiles(c.app.state)       # 0 이면 키가 있어도 꺼짐
     monkeypatch.setenv("AI_DECISIONS_JUDGE", "1")
     with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:
         assert c.app.state.student_judge.model == "gpt-6-luna" and PROFILE in ready_profiles(c.app.state)
@@ -79,5 +82,5 @@ def test_the_judge_is_built_from_the_environment_flag_only(monkeypatch):
     with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:
         assert c.app.state.student_judge.model == "pinned-model"
     monkeypatch.delenv("OPENAI_API_KEY")
-    with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:                                              # 키가 없으면 이 profile 만 준비되지 않는다
+    with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:                                              # 키가 없으면 이 profile 만 준비되지 않는다 (1 이어도)
         assert c.app.state.student_judge is None and "extract-student-1" in ready_profiles(c.app.state)
