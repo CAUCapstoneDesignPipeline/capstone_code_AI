@@ -70,14 +70,14 @@ def test_the_judge_is_built_from_the_environment_flag_only(monkeypatch):
     from app.core.config import Settings
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.delenv("AI_DECISIONS_JUDGE", raising=False)
-    with TestClient(create_app(Settings.from_env())) as c:
+    with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:
         assert c.app.state.student_judge is None and PROFILE not in ready_profiles(c.app.state)       # 기본 꺼짐
     monkeypatch.setenv("AI_DECISIONS_JUDGE", "1")
-    with TestClient(create_app(Settings.from_env())) as c:
+    with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:
         assert c.app.state.student_judge.model == "gpt-6-luna" and PROFILE in ready_profiles(c.app.state)
     monkeypatch.setenv("AI_DECISIONS_MODEL", "pinned-model")
-    with TestClient(create_app(Settings.from_env())) as c:
+    with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:
         assert c.app.state.student_judge.model == "pinned-model"
     monkeypatch.delenv("OPENAI_API_KEY")
-    with TestClient(create_app(Settings.from_env())) as c:                                              # 키가 없으면 이 profile 만 준비되지 않는다
+    with TestClient(create_app(Settings.from_env(), extractor=ConceptExtractor(ExtractConfig(), Idf({}, 10, "t")))) as c:                                              # 키가 없으면 이 profile 만 준비되지 않는다
         assert c.app.state.student_judge is None and "extract-student-1" in ready_profiles(c.app.state)
