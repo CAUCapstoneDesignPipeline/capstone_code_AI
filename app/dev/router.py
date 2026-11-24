@@ -36,7 +36,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.v1.pipeline import default_source as default_extract_source
 from app.core.config import API_PREFIX, EMBEDDING_PROFILES, EXTRACT_PROFILE, EXTRACT_PROFILES
@@ -1093,12 +1093,14 @@ def _share_note(a: "GenSide", b: "GenSide") -> bool:
 class GenerateQuery(BaseModel):
     a: GenSide
     b: GenSide
+    relationScore: float | None = Field(None, ge=0, le=1)     # 후보 목록에서 받은 그 쌍의 relationScore. 카드 점수(score)가 된다
 
 
 @router.post("/proposals/generate")
 async def proposal_generate(q: GenerateQuery, request: Request):
     """두 요소와 웹 검색으로 새 지식 하나를 만든다 (눌렀을 때만, 검색을 하므로 20~60초). 외부 출처는 검색 결과에 실제로 나온 URL 만 남긴다.
-    로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나가고 검색어에 섞일 수 있다)."""
+    로컬 접속만 받는다 (노트 내용이 LLM 제공자로 나가고 검색어에 섞일 수 있다).
+    응답의 `score` 는 카드 추천 점수다 (`relationScore` 를 보낸 후보 카드만, 아니면 null · `scoreVersion`, relation_rank.card_score)."""
     from app.client import uid
     from app.services.llm import LLMError
 
@@ -1112,7 +1114,7 @@ async def proposal_generate(q: GenerateQuery, request: Request):
         res = await run_in_threadpool(gen.generate, a, b, uid("generated", q.a.conceptId, q.b.conceptId))
     except LLMError as e:
         raise HTTPException(502, f"생성 LLM 오류: {e.kind}")
-    return {**res, **_card_ids(q.a, q.b)}
+    return {**res, **_card_ids(q.a, q.b), **_card_score(res, q)}
 
 
 def _card_ids(a: "GenSide", b: "GenSide") -> dict:
@@ -1120,6 +1122,13 @@ def _card_ids(a: "GenSide", b: "GenSide") -> dict:
     from app.services.links.pairing import pair_basis, pair_fingerprint
 
     return {"fingerprint": pair_fingerprint(a.conceptId, b.conceptId), "basisHash": pair_basis(a.conceptId, a.text, b.conceptId, b.text)}
+
+
+def _card_score(res: dict, q: "GenerateQuery") -> dict:
+    """카드 점수 (relation_rank.card_score). 저장한 생성 결과에는 넣지 않고 응답마다 붙인다 (후보 목록이 바뀌면 점수도 바뀐다)."""
+    from app.services.links.relation_rank import CARD_SCORE_VERSION, card_score
+
+    return {"score": card_score(res["status"], q.relationScore), "scoreVersion": CARD_SCORE_VERSION}
 
 
 class _Cancelled(Exception):
@@ -1191,7 +1200,12 @@ async def proposal_generate_stream(q: GenerateQuery, request: Request):
     a, b = ({**x.model_dump(), "text": x.text[:600]} for x in (q.a, q.b))
     cid = uid("generated", q.a.conceptId, q.b.conceptId)
     ids = _card_ids(q.a, q.b)
-    return _sse_job(request, lambda emit: emit({"type": "result", "result": {**gen.generate(a, b, cid, on_event=emit), **ids}}))
+
+    def work(emit):
+        res = gen.generate(a, b, cid, on_event=emit)
+        emit({"type": "result", "result": {**res, **ids, **_card_score(res, q)}})
+
+    return _sse_job(request, work)
 
 
 class AcceptQuery(BaseModel):

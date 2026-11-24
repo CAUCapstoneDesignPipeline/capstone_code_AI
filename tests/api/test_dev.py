@@ -465,6 +465,9 @@ def test_proposal_screen_and_generate_endpoints(tmp_path, monkeypatch):
         assert s["results"]["p1"]["label"] == "useful" and s["promptVersion"] == "pairscreen-llm-1"
         g = c.post("/dev/proposals/generate", json={"a": a, "b": b}).json()
         assert g["status"] == "candidate" and g["concept"]["origin"] == "generated" and g["external"][0]["url"] == "https://example.com/p"
+        assert g["score"] is None and g["scoreVersion"] == "card-score-1"                       # 관계 점수를 안 보내면 점수 없음
+        assert c.post("/dev/proposals/generate", json={"a": a, "b": b, "relationScore": 0.42}).json()["score"] == 0.42
+        assert c.post("/dev/proposals/generate", json={"a": a, "b": b, "relationScore": 1.5}).status_code == 400      # 0~1 밖은 요청 오류
         assert c.post("/dev/proposals/generate", json={"a": a, "b": {**b, "note": "DB-WAL"}}).status_code == 400
         assert c.post("/dev/proposals/screen", json={"pairs": []}).status_code == 400
     with TestClient(app, client=("10.0.0.5", 50000)) as c:                                 # 노트 내용이 밖으로 나가므로 로컬만
@@ -539,6 +542,9 @@ def test_proposal_generate_stream_reports_progress_then_the_result(tmp_path):
         assert evs[3]["query"] == "write ahead log os page cache" and evs[4]["results"][0]["url"] == "https://example.com/p"
         assert all("t" in e for e in evs) and evs[0]["model"] == "fake"
         assert evs[-1]["result"]["status"] == "candidate" and evs[-1]["result"]["concept"]["origin"] == "generated"
+        assert evs[-1]["result"]["score"] is None
+        scored = _sse(c.post("/dev/proposals/generate/stream", json={"a": a, "b": b, "relationScore": 0.7}).text)
+        assert scored[-1]["result"]["score"] == 0.7 and scored[-1]["result"]["scoreVersion"] == "card-score-1"
         again = _sse(c.post("/dev/proposals/generate/stream", json={"a": a, "b": b}).text)      # 저장된 결과는 바로 돌려준다
         assert [e["type"] for e in again] == ["cached", "result"] and again[-1]["result"]["cached"] is True
         assert c.post("/dev/proposals/generate/stream", json={"a": a, "b": {**b, "note": "DB-WAL"}}).status_code == 400

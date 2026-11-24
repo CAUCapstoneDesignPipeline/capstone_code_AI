@@ -120,3 +120,24 @@ def relation_scores(g: Graph, pairs: list[tuple]) -> list[dict | None]:
     for n, i in enumerate(live):
         out[i] = {"score": round(float(ranks[n]), 3), **{k: round(float(rows[i][k]), 3) for k in SCORE_SIGNALS}}
     return out
+
+
+CARD_SCORE_VERSION = "card-score-1"
+
+
+def card_score(status: str, relation_score: float | None) -> float | None:
+    """새 지식 카드의 추천 점수 0~1 (FE 는 높은 순으로 보인다). card-score-1 = 그 쌍의 관계 점수(`relation_scores` 의 score).
+
+    보이는 카드(status=candidate)에만 매긴다. 가설(held)·이미 아는 것(known)은 화면에 없으므로 None.
+    관계 점수가 없는 쌍(받아들인 새 지식이 낀 쌍, 관계를 아직 뽑지 않은 노트의 쌍)도 None 이고 점수가 있는 카드 뒤에 둔다 (`order_cards`).
+    관계 점수처럼 **그 후보 목록 안의 순위** 라서 다른 분석에서 나온 카드의 점수와 비교하지 않는다.
+    카드의 확인 결과(경고·reach·출처 수)는 넣지 않았다: 사람 라벨로 그것이 순서를 낫게 하는지 확인한 적이 없다 (docs/eval/proposals.md).
+    정의를 바꾸면 CARD_SCORE_VERSION 을 올린다."""
+    if status != "candidate" or relation_score is None:
+        return None
+    return round(min(max(float(relation_score), 0.0), 1.0), 3)
+
+
+def order_cards(cards: list[dict]) -> list[dict]:
+    """카드를 보일 순서로: score 높은 순, score 가 없는 카드는 뒤에. 같은 점수와 점수 없는 카드끼리는 받은 순서(후보 순서)를 지킨다."""
+    return sorted(cards, key=lambda c: (c.get("score") is None, -(c.get("score") or 0.0)))
