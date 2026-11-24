@@ -97,3 +97,13 @@ def test_warmup_does_not_start_a_second_run_while_one_is_running():
     gate.set()
     w.thread.join(5)
     assert w.start(["b"], lambda n: None) is True
+
+
+def test_card_score_is_the_relation_score_of_a_shown_card():
+    from app.services.links.relation_rank import CARD_SCORE_VERSION, card_score, order_cards
+    assert CARD_SCORE_VERSION == "card-score-1"
+    assert card_score("candidate", 0.4567) == 0.457
+    assert card_score("candidate", None) is None                      # 관계를 아직 뽑지 않은 노트 · 받아들인 지식이 낀 쌍
+    assert card_score("held", 0.9) is None and card_score("known", 0.9) is None      # 화면에 없는 카드
+    cards = [{"id": "a", "score": None}, {"id": "b", "score": 0.2}, {"id": "c", "score": 0.9}, {"id": "d", "score": 0.2}, {"id": "e", "score": None}]
+    assert [c["id"] for c in order_cards(cards)] == ["c", "b", "d", "a", "e"]       # 높은 순, 같은 점수·점수 없는 카드는 받은 순서

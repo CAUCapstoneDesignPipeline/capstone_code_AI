@@ -462,7 +462,7 @@ async function startGen(id, c, set) {
   set("loading"); render();
   const pick = (e) => Object.fromEntries(GEN_FIELDS.map((k) => [k, e[k]]));
   try {
-    await streamGenerate({ a: pick(c.a), b: pick(c.b) }, (ev) => {
+    await streamGenerate({ a: pick(c.a), b: pick(c.b), relationScore: c.relationScore ?? null }, (ev) => {      // 관계 점수가 카드 점수(score)가 된다
       if (ev.type === "result") set(ev.result);
       else if (ev.type === "error") set({ error: ev.message });
       else if (ev.type === "field") {                          // 모델이 쓰는 JSON 의 newKeyword·conclusion·reason 이 글자가 오는 대로
@@ -661,7 +661,8 @@ function genBlock(c, g) {
       <details><summary>그래프에 들어간 개념 (generated)</summary><pre class="json">${esc(JSON.stringify(g.concept, null, 2))}</pre></details>` : "")
     + (S.sg.acceptErr[c.id] ? `<p class="error">${esc(S.sg.acceptErr[c.id])}</p>` : "");
   const confused = react === "confused" ? chatBox(c, g) : "";
-  return `<div class="gen"><div class="cardHead"><span class="status ${ST[0]}">${ST[1]}</span><span class="path">${esc(g.model)} · 검색 ${g.searches}번${g.cached ? " · 저장된 결과" : ""}</span></div>
+  const score = g.score != null ? ` <span class="tag" title="${esc(`카드 점수 ${g.score} (${g.scoreVersion}: 이 쌍의 관계 점수, 후보 안에서의 순위 0~1). FE 는 높은 순으로 보인다`)}">점수 ${g.score.toFixed(2)}</span>` : "";
+  return `<div class="gen"><div class="cardHead"><span class="status ${ST[0]}">${ST[1]}</span>${score}<span class="path">${esc(g.model)} · 검색 ${g.searches}번${g.cached ? " · 저장된 결과" : ""}</span></div>
     ${why}${warn}${ext ? `<h4>외부 지식</h4><ul class="steps">${ext}</ul>` : ""}${dropped}${conclusion}${buttons}${ok}${confused}
     ${ck.model ? `<p class="path">확인 ${esc(ck.model)} · ${esc(ck.promptVersion)}${ck.error ? ` · 확인하지 못했다 (${esc(ck.error)})` : ""}${ck.reach ? ` · 노트와의 거리: <b title="${esc(REACH[ck.reach]?.[1] || "")}">${esc(REACH[ck.reach]?.[0] || ck.reach)}</b>` : ""}</p>` : ""}</div>`;
 }
