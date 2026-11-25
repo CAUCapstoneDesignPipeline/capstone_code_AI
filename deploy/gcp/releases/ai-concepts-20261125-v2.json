@@ -1,0 +1,84 @@
+{
+  "bootstrapRevision": "e2618ea044f80c12d700be12f7f92d549502e84e",
+  "cache": {
+    "modelScope": "pinned-revision",
+    "responses": "disabled"
+  },
+  "configRevision": "b66cc508427e78073cda35fe67b9dd2d06a716d19b7c7f897a4100eafd468465",
+  "flags": {
+    "explain": true,
+    "relation": true,
+    "verify": true,
+    "chat": true
+  },
+  "idf": {
+    "bucket": "capsnote-169516793433-ai-artifacts",
+    "generation": "1794345807761260",
+    "object": "idf/team-notes-20261110-v1.json",
+    "sha256": "ac23138b90e16a27fcd358eaac5e57a71a6f97f89bf3ffb057d2c1094332b9d0",
+    "sourceSha": "c932f4c0c248b9393ce050c5408f0b784cefe102"
+  },
+  "image": "asia-northeast3-docker.pkg.dev/capsnote/capstone-ai/ai@sha256:8dc54de0c1e875a330a48490367290708ab18d4c2d8dd363dbe26b7248a792c3",
+  "kind": "ai",
+  "model": {
+    "name": "BAAI/bge-m3",
+    "profile": "embeddings-bge-m3-1",
+    "revision": "5617a9f61b028005a4858fdac845db406aefb181"
+  },
+  "profiles": [
+    "extract-det-3",
+    "embeddings-bge-m3-1",
+    "extract-hybrid-1",
+    "extract-hybrid-2",
+    "extract-hybrid-3",
+    "links-hybrid-1",
+    "facts-llm-3",
+    "explain-llm-8",
+    "edges-llm-1",
+    "edges-llm-2",
+    "explanation-hybrid-2",
+    "merge-hybrid-1",
+    "derive-sound-1",
+    "bridges-det-1",
+    "derive-rules-1",
+    "edges-det-1",
+    "explanation-det-2",
+    "explanation-det-3",
+    "extract-concepts-det-1",
+    "extract-det-2",
+    "links-det-1",
+    "merge-det-1"
+  ],
+  "provider": {
+    "efforts": {
+      "explain": "medium",
+      "facts": "medium",
+      "relation": "low",
+      "sound": "medium",
+      "verify": "low",
+      "chat": "low"
+    },
+    "models": {
+      "explain": "claude-opus-5-5",
+      "facts": "claude-opus-5-5",
+      "relation": "claude-opus-5-5",
+      "sound": "claude-opus-5-5",
+      "verify": "claude-opus-5-5",
+      "chat": "claude-sonnet-5-5"
+    },
+    "name": "anthropic",
+    "timeoutSeconds": 90
+  },
+  "releaseId": "ai-concepts-20261125-v2",
+  "schemaVersion": 1,
+  "secrets": {
+    "providerKey": "projects/capsnote/secrets/capsnote-prod-ai-provider-key/versions/3",
+    "serviceToken": "projects/capsnote/secrets/capsnote-prod-ai-service-token/versions/1",
+    "tlsBundle": "projects/capsnote/secrets/capsnote-prod-ai-tls-bundle/versions/1"
+  },
+  "sourceSha": "c932f4c0c248b9393ce050c5408f0b784cefe102",
+  "tls": {
+    "caSha256": "6ce273baf0c57799a377654ae743c32ba6569f5fdc51b6eac61482aa56437729",
+    "serverName": "capsnote-prod-ai.asia-northeast3-a.c.capsnote.internal"
+  }
+}
